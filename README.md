@@ -16,6 +16,8 @@ cd BBDown
 makepkg -si
 ```
 
+> 如果你能将此项目上传至 [Arch Linux AUR](https://aur.archlinux.org/)，我将非常感谢你。
+
 ### 手动编译
 
 依赖：Go 1.21+、ffmpeg
