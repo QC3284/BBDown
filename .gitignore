@@ -36,3 +36,6 @@ BBDownApp.data
 bbdown-tasks.json
 qrcode.png
 debug_*.json
+*.m4a
+*.mp4
+*.jpg

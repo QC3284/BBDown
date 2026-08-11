@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	appAPI  = "https://app.biliapi.net/bilibili.video.gateway.playurl.v1.PlayURL/PlayView"
-	appAPI2 = "https://app.biliapi.net/bilibili.pgc.gateway.playurl.v1.PlayURL/PlayView"
+	appAPI  = "https://grpc.biliapi.net/bilibili.app.playurl.v1.PlayURL/PlayView"
+	appAPI2 = "https://app.bilibili.com/bilibili.pgc.gateway.player.v2.PlayURL/PlayView"
 
 	appKey    = "1d8b6e7d45233436"
 	appSecret = "560c52ccd288fed045859ed18bffd973"
