@@ -77,13 +77,13 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 	l.appendToFile(line)
 }
 
-// LogColorNoTime prints a colored line in cyan without timestamp.
+// LogColorNoTime prints a colored line in cyan without timestamp, indented to align.
 func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	l.mu.Lock()
-	fmt.Print("\033[36m" + msg + "\033[0m\n")
+	fmt.Print("                            \033[36m" + msg + "\033[0m\n")
 	l.mu.Unlock()
-	l.appendToFile(msg)
+	l.appendToFile("                             " + msg)
 }
 
 // LogColor prints a colored line in cyan.
