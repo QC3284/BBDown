@@ -72,7 +72,7 @@ func (p *Parser) ExtractTracks(ctx context.Context, aidOri, aid, cid, epid strin
 
 	result := &entity.ParsedResult{}
 
-	jsonStr, err := p.getPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, intlAPI, appAPI, wantDrm, qn)
+	jsonStr, err := p.getPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, intlAPI, &appAPI, wantDrm, qn)
 	if err != nil {
 		return nil, err
 	}
@@ -86,17 +86,17 @@ func (p *Parser) ExtractTracks(ctx context.Context, aidOri, aid, cid, epid strin
 	return p.parseDomesticStreams(ctx, result, aidOri, aid, cid, epid, tvAPI, appAPI, encoding, wantDrm)
 }
 
-func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, epid string, tvAPI, intlAPI, appAPI bool, wantDrm bool, qn string) (string, error) {
+func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, epid string, tvAPI, intlAPI bool, appAPI *bool, wantDrm bool, qn string) (string, error) {
 	if intlAPI {
 		return p.getIntlPlayJSON(ctx, aid, cid, epid, qn, "0")
 	}
 
-	if appAPI {
+	if *appAPI {
 		bangumi := strings.HasPrefix(aidOri, "ep:") || strings.HasPrefix(aidOri, "cheese:")
 		json, err := p.DoAppReq(ctx, aid, cid, epid, qn, bangumi, encoding)
 		if err != nil {
 			util.LogWarn("APP API 请求失败, 回退到 WEB API: %v", err)
-			appAPI = false // fallback: treat as WEB
+			*appAPI = false
 		} else {
 			return json, nil
 		}
