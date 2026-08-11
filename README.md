@@ -7,32 +7,50 @@
 
 ## 安装
 
-### Arch Linux (AUR)
+### Arch Linux
 
 ```bash
-# 从 GitHub 源码构建
 git clone https://github.com/QC3284/BBDown.git -b main
 cd BBDown
-go build -o BBDown ./cmd/bbdown/
-sudo cp BBDown /usr/bin/
+makepkg -si
 ```
 
 ### 手动编译
+
+依赖：Go 1.21+、ffmpeg
 
 ```bash
 git clone https://github.com/QC3284/BBDown.git -b main
 cd BBDown
 go build -ldflags="-s -w" -o BBDown ./cmd/bbdown/
+sudo cp BBDown /usr/bin/
 ```
 
 ## 使用
 
 ```bash
+# 基本下载
 BBDown https://www.bilibili.com/video/BV1xx411c7mD
-BBDown -i -e "avc,hevc" -q "1080P 高码率" BV1xx411c7mD
+
+# 指定编码和画质优先
+BBDown -e "avc,hevc" -q "1080P 高码率" BV1xx411c7mD
+
+# 仅下载音频
 BBDown --audio-only BV1xx411c7mD
+
+# 交互式选择
+BBDown -i BV1xx411c7mD
+
+# 仅查看信息
+BBDown -I BV1xx411c7mD
+
+# 登录
 BBDown login
+
+# API 服务器模式
 BBDown serve
+
+# 直播录制
 BBDown live 12345
 ```
 
@@ -40,51 +58,63 @@ BBDown live 12345
 
 | 命令 | 说明 |
 |---|---|
-| `login` | 通过 APP 扫描二维码登录 WEB 账号 |
-| `logintv` | 通过 APP 扫描二维码登录 TV 账号 |
-| `serve` | 以 HTTP API 服务器模式运行 |
-| `live` | 录制 B 站直播流 |
+| `login` | APP 扫描二维码登录 WEB 账号 |
+| `logintv` | APP 扫描二维码登录 TV 账号 |
+| `serve` | HTTP API 服务器模式 |
+| `live` | 录制直播流 |
 | `article` | 下载专栏文章为 Markdown |
 
 ### 主要选项
 
 | 选项 | 说明 |
 |---|---|
-| `-t, --use-tv-api` | 使用 TV 端解析 |
-| `-a, --use-app-api` | 使用 APP 端解析 |
-| `-e, --encoding-priority` | 编码优先级，例 `"hevc,av1,avc"` |
-| `-q, --dfn-priority` | 画质优先级，例 `"1080P 高码率,720P 高清"` |
+| `-t, --use-tv-api` | TV 端解析 |
+| `-a, --use-app-api` | APP 端解析 |
+| `--use-intl-api` | 国际版解析 |
+| `-e, --encoding-priority` | 编码优先级，逗号分隔 |
+| `-q, --dfn-priority` | 画质优先级，逗号分隔 |
 | `-i, --interactive` | 交互式选择清晰度 |
-| `-I, --only-show-info` | 仅解析不下载 |
-| `-p, --select-page` | 选择分 P，如 `-p 1,3,5` 或 `-p LAST` |
+| `-I, --only-show-info` | 仅解析信息，不下载 |
+| `-p, --select-page` | 选择分 P：`-p 1,3,5`、`-p 3-5`、`-p LAST` |
 | `-d, --download-danmaku` | 下载弹幕 |
+| `--danmaku-filter` | 弹幕关键词过滤 |
+| `-F, --file-pattern` | 单 P 文件名模板 |
+| `-M, --multi-file-pattern` | 多 P 文件名模板 |
 | `--audio-only` | 仅下载音频 |
 | `--video-only` | 仅下载视频 |
 | `--sub-only` | 仅下载字幕 |
 | `--cover-only` | 仅下载封面 |
+| `--danmaku-only` | 仅下载弹幕 |
+| `--skip-mux` | 跳过混流 |
 | `--use-aria2c` | 调用 aria2c 下载 |
 | `--multi-thread` | 多线程下载（默认开启） |
 | `--debug` | 输出调试日志 |
+| `-c, --cookie` | 设置 Cookie |
+| `--access-token` | 设置 Access Token |
 
-完整选项列表请运行 `BBDown --help`。
+完整选项见 `BBDown --help`。
 
 ## 功能
 
-- 支持普通视频、番剧、课程、合集、收藏夹、UP 主全部投稿
-- 最高支持 8K / HDR / 杜比视界 / 杜比全景声
-- 多线程下载，支持 aria2c
+- 普通视频、番剧、课程、合集、收藏夹、UP 主全部投稿
+- 最高 8K / HDR / 杜比视界 / 杜比全景声
+- 多线程下载 + aria2c
 - 自动合并音视频（需 ffmpeg 或 mp4box）
 - 弹幕下载与过滤（XML / ASS）
 - 字幕下载（多 API 回退）
 - 二维码登录（WEB / TV）
 - API 服务器模式
-- 直播录制
+- 直播录制（断流自动重连）
+- Widevine DRM 解密
 
 ## 与上游的关系
 
-本仓库 `main` 分支为 Go 语言重构，**功能与 [nilaoda/BBDown](https://github.com/nilaoda/BBDown) C# 原版完全一致**。
+| 分支 | 内容 |
+|---|---|
+| `main` | Go 重构（当前分支） |
+| `master` | C# 原版 |
 
-`master` 分支保留 C# 原版代码。
+上游：[nilaoda/BBDown](https://github.com/nilaoda/BBDown)
 
 ## License
 
