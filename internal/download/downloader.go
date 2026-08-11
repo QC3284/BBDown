@@ -22,17 +22,21 @@ import (
 
 // DownloadConfig holds download options.
 type DownloadConfig struct {
-	UseAria2c  bool
-	Aria2cArgs string
-	ForceHTTP  bool
+	UseAria2c   bool
+	Aria2cArgs  string
+	Aria2cPath  string
+	ForceHTTP   bool
 	MultiThread bool
 }
+
+// ThreadSegmentSize returns the segment size in MB.
+func (c DownloadConfig) ThreadSegmentSize() int { return 20 }
 
 // DownloadFile downloads a URL to a local file, with optional multi-threading.
 func DownloadFile(ctx context.Context, url, destPath string, cfg DownloadConfig) error {
 	_ = ctx
 	if cfg.UseAria2c {
-		return downloadWithAria2c(url, destPath, cfg.Aria2cArgs)
+		return downloadWithAria2c(url, destPath, cfg)
 	}
 	if cfg.MultiThread && !strings.Contains(url, "-cmcc-") {
 		size, _ := getFileSize(url)
@@ -218,18 +222,19 @@ func downloadRange(url, destPath string, clip clipRange) (int64, error) {
 }
 
 // ThreadSegmentSize returns the segment size in MB, with a minimum of 1.
-func (c DownloadConfig) ThreadSegmentSize() int {
-	return 20 // default
-}
 
-func downloadWithAria2c(url, destPath, aria2cArgs string) error {
+func downloadWithAria2c(url, destPath string, cfg DownloadConfig) error {
+	bin := "aria2c"
+	if cfg.Aria2cPath != "" {
+		bin = cfg.Aria2cPath
+	}
 	args := []string{"-x", "16", "-s", "16", "-o", filepath.Base(destPath), "-d", filepath.Dir(destPath)}
-	if aria2cArgs != "" {
-		args = append(args, strings.Fields(aria2cArgs)...)
+	if cfg.Aria2cArgs != "" {
+		args = append(args, strings.Fields(cfg.Aria2cArgs)...)
 	}
 	args = append(args, url)
 
-	cmd := exec.Command("aria2c", args...)
+	cmd := exec.Command(bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

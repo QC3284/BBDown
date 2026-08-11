@@ -172,6 +172,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 	dlCfg := download.DownloadConfig{
 		UseAria2c:   w.Cfg.UseAria2c,
 		Aria2cArgs:  w.Cfg.Aria2cArgs,
+		Aria2cPath:  w.Cfg.Aria2cPath,
 		ForceHTTP:   w.Cfg.ForceHTTP,
 		MultiThread: w.Cfg.MultiThread,
 	}
