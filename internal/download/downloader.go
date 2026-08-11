@@ -287,7 +287,6 @@ func SortAudioTracks(tracks []entity.Audio, encodingPriority map[string]int, asc
 // PrintAllTracks displays available video and audio tracks (matching C# format).
 func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool) {
 	if len(result.VideoTracks) > 0 {
-		fmt.Println()
 		util.Log("共计%d条视频流.", len(result.VideoTracks))
 		for i, v := range result.VideoTracks {
 			pDur := pageDur
@@ -305,7 +304,6 @@ func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool)
 		}
 	}
 	if len(result.AudioTracks) > 0 {
-		fmt.Println()
 		util.Log("共计%d条音频流.", len(result.AudioTracks))
 		for i, a := range result.AudioTracks {
 			pDur := pageDur
