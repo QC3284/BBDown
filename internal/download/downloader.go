@@ -9,7 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QC3284/BBDown/internal/config"
@@ -25,26 +28,29 @@ type DownloadConfig struct {
 	MultiThread bool
 }
 
-// DownloadFile downloads a URL to a local file.
+// DownloadFile downloads a URL to a local file, with optional multi-threading.
 func DownloadFile(ctx context.Context, url, destPath string, cfg DownloadConfig) error {
 	_ = ctx
 	if cfg.UseAria2c {
 		return downloadWithAria2c(url, destPath, cfg.Aria2cArgs)
 	}
-	return downloadWithHTTP(url, destPath)
+	if cfg.MultiThread && !strings.Contains(url, "-cmcc-") {
+		size, _ := getFileSize(url)
+		if size > int64(cfg.ThreadSegmentSize())*1024*1024 {
+			return multiThreadDownload(url, destPath, cfg)
+		}
+	}
+	return singleDownload(url, destPath)
 }
 
-func downloadWithHTTP(url, destPath string) error {
+func singleDownload(url, destPath string) error {
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-
-	// Force HTTP if configured
 	if strings.HasPrefix(url, "https://") {
 		url = strings.Replace(url, "https://", "http://", 1)
 	}
-
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
@@ -70,6 +76,148 @@ func downloadWithHTTP(url, destPath string) error {
 
 	_, err = io.Copy(out, resp.Body)
 	return err
+}
+
+func getFileSize(url string) (int64, error) {
+	if strings.HasPrefix(url, "https://") {
+		url = strings.Replace(url, "https://", "http://", 1)
+	}
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Referer", "https://www.bilibili.com")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("HEAD failed: HTTP %d", resp.StatusCode)
+	}
+	return resp.ContentLength, nil
+}
+
+func multiThreadDownload(url, destPath string, cfg DownloadConfig) error {
+	dir := filepath.Dir(destPath)
+	os.MkdirAll(dir, 0755)
+
+	if strings.HasPrefix(url, "https://") {
+		url = strings.Replace(url, "https://", "http://", 1)
+	}
+
+	size, err := getFileSize(url)
+	if err != nil || size <= 0 {
+		return singleDownload(url, destPath)
+	}
+
+	// Check if destination already exists with correct size
+	if info, err := os.Stat(destPath); err == nil && info.Size() == size {
+		return nil
+	}
+
+	segSize := int64(cfg.ThreadSegmentSize()) * 1024 * 1024
+	var clips []clipRange
+	var offset int64
+	idx := 0
+	for offset < size {
+		end := offset + segSize - 1
+		if end >= size {
+			end = size - 1
+		}
+		clips = append(clips, clipRange{idx: idx, from: offset, to: end})
+		offset = end + 1
+		idx++
+	}
+
+	// Parallel download
+	var totalBytes int64
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(clips))
+
+	for _, clip := range clips {
+		wg.Add(1)
+		go func(c clipRange) {
+			defer wg.Done()
+			n, err := downloadRange(url, destPath, c)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			atomic.AddInt64(&totalBytes, n)
+		}(clip)
+	}
+	wg.Wait()
+	close(errCh)
+
+	// If any segment failed, fall back to single-threaded
+	if len(errCh) > 0 {
+		// Clean up clip files
+		for _, c := range clips {
+			os.Remove(clipPath(destPath, c.idx))
+		}
+		return singleDownload(url, destPath)
+	}
+
+	// Merge clip files
+	util.Log("合并分片...")
+	var clipFiles []string
+	for _, c := range clips {
+		clipFiles = append(clipFiles, clipPath(destPath, c.idx))
+	}
+	if err := util.CombineMultipleFilesIntoSingleFile(clipFiles, destPath); err != nil {
+		return err
+	}
+	util.Log("清理分片...")
+	for _, f := range clipFiles {
+		os.Remove(f)
+	}
+	return nil
+}
+
+type clipRange struct {
+	idx       int
+	from, to  int64
+}
+
+func clipPath(dest string, idx int) string {
+	ext := filepath.Ext(dest) + ".clip"
+	return strings.TrimSuffix(dest, filepath.Ext(dest)) + "." + strconv.Itoa(idx) + ext
+}
+
+func downloadRange(url, destPath string, clip clipRange) (int64, error) {
+	tmpPath := clipPath(destPath, clip.idx)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Referer", "https://www.bilibili.com")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", clip.from, clip.to))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("range request failed: HTTP %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		return 0, err
+	}
+	defer out.Close()
+
+	return io.Copy(out, resp.Body)
+}
+
+// ThreadSegmentSize returns the segment size in MB, with a minimum of 1.
+func (c DownloadConfig) ThreadSegmentSize() int {
+	return 20 // default
 }
 
 func downloadWithAria2c(url, destPath, aria2cArgs string) error {
