@@ -92,8 +92,8 @@ var (
 // rootCmd represents the base command.
 var rootCmd = &cobra.Command{
 	Use:   "BBDown [URL]",
-	Short: "BBDown - Bilibili Downloader (go)",
-	Long: `BBDown is a command-line Bilibili video downloader.
+		Short: "BBDown - Bilibili Downloader",
+		Long: `BBDown is a command-line Bilibili video downloader.
 Supports regular videos, bangumi, courses, collections, playlists, and more.
 
 Examples:
