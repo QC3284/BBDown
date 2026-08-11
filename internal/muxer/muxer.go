@@ -12,6 +12,10 @@ import (
 	"github.com/QC3284/BBDown/internal/util"
 )
 
+// FFMPEG and MP4BOX are configurable external tool paths.
+var FFMPEG = "ffmpeg"
+var MP4BOX = "mp4box"
+
 // MuxAV merges audio and video tracks using ffmpeg or mp4box.
 func MuxAV(ctx context.Context, useMp4box bool, bvid, videoPath, audioPath, outPath, desc, title, author, episodeID, pic, lang string, subs []entity.Subtitle, audioOnly, videoOnly, simplyMux bool, points []entity.ViewPoint, pubTime int64, isHevc bool) error {
 	if audioOnly && audioPath != "" {
@@ -111,7 +115,7 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 	args = append(args, "-movflags", "faststart", "-strict", "unofficial", "-strict", "-2", "-f", "mp4", "--", outPath)
 
 	util.LogDebug("ffmpeg: %s %s", "ffmpeg", strings.Join(args, " "))
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, FFMPEG, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -150,7 +154,7 @@ func muxByMp4box(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 	args = append(args, "-new", "--", outPath)
 
 	util.LogDebug("mp4box: %s %s", "mp4box", strings.Join(args, " "))
-	cmd := exec.CommandContext(ctx, "mp4box", args...)
+	cmd := exec.CommandContext(ctx, MP4BOX, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -170,7 +174,7 @@ func MergeFLV(ctx context.Context, files []string, outPath string) error {
 		tsFile := strings.TrimSuffix(file, filepath.Ext(file)) + ".ts"
 		args := []string{"-loglevel", "warning", "-y", "-i", file, "-map", "0", "-c", "copy", "-f", "mpegts", "-bsf:v", "h264_mp4toannexb", tsFile}
 		util.LogDebug("ffmpeg: %s %s", "ffmpeg", strings.Join(args, " "))
-		cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+		cmd := exec.CommandContext(ctx, FFMPEG, args...)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("FLV segment conversion failed: %w", err)
 		}

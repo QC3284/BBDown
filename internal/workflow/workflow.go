@@ -194,6 +194,12 @@ func (w *Workflow) Run(ctx context.Context) error {
 		}
 		util.Log("开始解析P%d: %s... (%d of %d)", page.Index, page.Aid, idx, pagesCount)
 
+		// Archive skip
+		if w.checkAidArchived(page.Aid) {
+			util.Log("aid: %s 已下载过, 跳过下载...", page.Aid)
+			continue
+		}
+
 		success := w.downloadOnePage(ctx, parserInst, page, vInfo, pagesInfo, aidOri, savePathFormat, apiType,
 			encodingPriority, dfnPriority, firstEncoding, lang, dlCfg,
 			downloadDanmaku, danmakuFormats)
@@ -361,6 +367,44 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					}
 				}
 			}
+			if w.Cfg.DanmakuOnly {
+				os.RemoveAll(page.Aid)
+				return true
+			}
+		}
+
+		// Subtitle
+		if !w.Cfg.SkipSubtitle && !w.Cfg.DanmakuOnly && !w.Cfg.CoverOnly && !w.Cfg.OnlyShowInfo {
+			util.LogDebug("获取字幕...")
+			subs, _ := util.GetSubtitles(ctx, w.HTTPClient, page.Aid, page.Cid, page.Epid, page.Index, w.Cfg.UseIntlAPI, w.Cfg.Cookie)
+			if w.Cfg.SkipAi && len(subs) > 0 {
+				var filtered []entity.Subtitle
+				for _, s := range subs {
+					if !strings.HasPrefix(s.Lan, "ai-") {
+						filtered = append(filtered, s)
+					}
+				}
+				subs = filtered
+			}
+			for _, s := range subs {
+				util.Log("下载字幕 %s => %s...", s.Lan, strings.ReplaceAll(util.SubCode2(s.Lan), "_", ""))
+				util.LogDebug("下载：%s", s.URL)
+				if err := util.SaveSubtitle(w.HTTPClient, s.URL, s.Path); err != nil {
+					util.LogWarn("字幕下载失败: %v", err)
+				}
+			}
+			if w.Cfg.SubOnly {
+				for _, s := range subs {
+					if _, err := os.Stat(s.Path); err == nil {
+						outPath := download.FormatSavePath(savePathFormat, title, nil, nil, page, pagesCount, apiType, pubTime)
+						outPath = strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "." + s.Lan + ".srt"
+						os.MkdirAll(filepath.Dir(outPath), 0755)
+						os.Rename(s.Path, outPath)
+					}
+				}
+				os.RemoveAll(page.Aid)
+				return true
+			}
 		}
 
 		// Video
@@ -442,6 +486,8 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 
 		util.Log("下载P%d完毕", page.Index)
 
+		w.saveAidArchived(page.Aid)
+
 		return true
 	}
 	return false
@@ -449,6 +495,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 
 func (w *Workflow) loadCredentials() {
 	appDir := appDirFunc()
+	// Find binaries
+	w.findBinaries()
+
 	if w.Cfg.Cookie == "" {
 		data, err := os.ReadFile(filepath.Join(appDir, "BBDown.data"))
 		if err == nil {
@@ -666,4 +715,49 @@ func parsePageSelection(expr string) ([]string, error) {
 		return nil, fmt.Errorf("empty page selection")
 	}
 	return result, nil
+}
+
+// findBinaries locates external tools on PATH.
+func (w *Workflow) findBinaries() {
+	// Use user-specified paths if set
+	if w.Cfg.FFmpegPath != "" {
+		if _, err := os.Stat(w.Cfg.FFmpegPath); err == nil {
+			muxer.FFMPEG = w.Cfg.FFmpegPath
+		}
+	}
+	if w.Cfg.Mp4boxPath != "" {
+		if _, err := os.Stat(w.Cfg.Mp4boxPath); err == nil {
+			muxer.MP4BOX = w.Cfg.Mp4boxPath
+		}
+	}
+}
+
+// checkAidArchived checks if an aid has been downloaded before.
+func (w *Workflow) checkAidArchived(aid string) bool {
+	if !w.Cfg.SaveArchivesToFile {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(appDirFunc(), "BBDown_archives.txt"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == aid {
+			return true
+		}
+	}
+	return false
+}
+
+// saveAidArchived records an aid as downloaded.
+func (w *Workflow) saveAidArchived(aid string) {
+	if !w.Cfg.SaveArchivesToFile {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(appDirFunc(), "BBDown_archives.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintln(f, aid)
 }
