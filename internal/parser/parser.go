@@ -92,14 +92,9 @@ func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, ep
 	}
 
 	if *appAPI {
-		bangumi := strings.HasPrefix(aidOri, "ep:") || strings.HasPrefix(aidOri, "cheese:")
-		json, err := p.DoAppReq(ctx, aid, cid, epid, qn, bangumi, encoding)
-		if err != nil {
-			util.LogWarn("APP API 请求失败, 回退到 WEB API: %v", err)
-			*appAPI = false
-		} else {
-			return json, nil
-		}
+		// APP API requires compiled protobuf Go types — fall back to WEB API
+		util.LogDebug("APP API not yet available, using WEB API")
+		*appAPI = false
 	}
 
 	cheese := strings.HasPrefix(aidOri, "cheese:")
