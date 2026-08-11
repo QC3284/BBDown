@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/entity"
 	"github.com/QC3284/BBDown/internal/util"
@@ -80,6 +82,12 @@ func singleDownload(url, destPath string) error {
 	}
 	defer out.Close()
 
+	if resp.ContentLength > 0 && term.IsTerminal(int(os.Stdout.Fd())) {
+		pr := newProgressReader(resp.Body, resp.ContentLength)
+		defer pr.Close()
+		_, err = io.Copy(out, pr)
+		return err
+	}
 	_, err = io.Copy(out, resp.Body)
 	return err
 }
