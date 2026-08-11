@@ -131,18 +131,21 @@ func SortAudioTracks(tracks []entity.Audio, encodingPriority map[string]int, asc
 
 // PrintAllTracks displays available video and audio tracks.
 func PrintAllTracks(result *entity.ParsedResult, declaredDur int, onlyShowInfo bool) {
-	util.LogColor("%s", "视频流:")
+	util.LogColorNoTime("%s", "视频流:")
 	for i, v := range result.VideoTracks {
 		kbps := float64(0)
 		if v.Dur > 0 {
 			kbps = v.Size / 1024 / float64(v.Dur) * 8
 		}
-			util.LogColor("%s", fmt.Sprintf("  %d. [%s] [%s] [%s] [%s] [~%02.0f kbps] [%s]",
-				i, v.Dfn, v.Res, v.Codecs, v.FPS, kbps, util.FormatFileSize(v.Size)))
+		line := fmt.Sprintf("%d. [%s] [%s] [%s] [%s] [~%02.0f kbps] [%s]",
+			i, v.Dfn, v.Res, v.Codecs, v.FPS, kbps, util.FormatFileSize(v.Size))
+		line = strings.ReplaceAll(line, "[] ", "")
+		util.LogColorNoTime("%s", line)
 	}
-	util.LogColor("%s", "音频流:")
+	util.LogColorNoTime("%s", "音频流:")
 	for i, a := range result.AudioTracks {
-		util.LogColor("%s", fmt.Sprintf("  %d. [%s] [%s] [~%d kbps]", i, a.Dfn, a.Codecs, a.Bandwidth))
+		line := fmt.Sprintf("%d. [%s] [%s] [~%d kbps]", i, a.Dfn, a.Codecs, a.Bandwidth)
+		util.LogColorNoTime("%s", line)
 	}
 }
 

@@ -93,7 +93,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 
 	// Page summary
 	pagesInfo := vInfo.PagesInfo
-	util.Log("共计 %d 个分P", len(pagesInfo))
+	util.Log("共计 %d 个分P, 已选择：ALL", len(pagesInfo))
 	showPages := pagesInfo
 	if !w.Cfg.ShowAll && len(showPages) > 6 {
 		for _, p := range showPages[:5] {
@@ -226,14 +226,47 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			return true
 		}
 
-		// Select tracks
+		// Select tracks (interactive or default)
 		var selectedVideo *entity.Video
 		var selectedAudio *entity.Audio
-		if len(result.VideoTracks) > 0 && !w.Cfg.AudioOnly {
-			selectedVideo = &result.VideoTracks[0]
+		vIndex := 0
+		aIndex := 0
+
+		if w.Cfg.Interactive {
+			// 交互式选择视频流
+			for i, v := range result.VideoTracks {
+				kbps := float64(0)
+				if v.Dur > 0 && v.Size > 0 {
+					kbps = v.Size / 1024 / float64(v.Dur) * 8
+				}
+				line := fmt.Sprintf("%d. [%s] [%s] [%s] [%s] [~%02.0f kbps] [%s]",
+					i, v.Dfn, v.Res, v.Codecs, v.FPS, kbps, util.FormatFileSize(v.Size))
+				line = strings.ReplaceAll(line, "[] ", "")
+				util.LogColorNoTime("%s", line)
+			}
+			fmt.Print("请选择最想要的视频流(输入序号): ")
+			fmt.Scanf("%d", &vIndex)
+			if vIndex < 0 || vIndex >= len(result.VideoTracks) {
+				vIndex = 0
+			}
+
+			// 交互式选择音频流
+			for i, a := range result.AudioTracks {
+				line := fmt.Sprintf("%d. [%s] [%s] [~%d kbps]", i, a.Dfn, a.Codecs, a.Bandwidth)
+				util.LogColorNoTime("%s", line)
+			}
+			fmt.Print("请选择最想要的音频流(输入序号): ")
+			fmt.Scanf("%d", &aIndex)
+			if aIndex < 0 || aIndex >= len(result.AudioTracks) {
+				aIndex = 0
+			}
 		}
-		if len(result.AudioTracks) > 0 && !w.Cfg.VideoOnly {
-			selectedAudio = &result.AudioTracks[0]
+
+		if len(result.VideoTracks) > vIndex && !w.Cfg.AudioOnly {
+			selectedVideo = &result.VideoTracks[vIndex]
+		}
+		if len(result.AudioTracks) > aIndex && !w.Cfg.VideoOnly {
+			selectedAudio = &result.AudioTracks[aIndex]
 		}
 
 		// PCDN / host replace

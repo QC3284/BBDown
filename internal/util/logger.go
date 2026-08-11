@@ -77,6 +77,15 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 	l.appendToFile(line)
 }
 
+// LogColorNoTime prints a colored line in cyan without timestamp.
+func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	l.mu.Lock()
+	fmt.Print("\033[36m" + msg + "\033[0m\n")
+	l.mu.Unlock()
+	l.appendToFile(msg)
+}
+
 // LogColor prints a colored line in cyan.
 func (l *Logger) LogColor(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
@@ -133,6 +142,11 @@ func LogWarn(format string, args ...interface{}) {
 // LogColor is the package-level convenience function.
 func LogColor(format string, args ...interface{}) {
 	defaultLogger.LogColor(format, args...)
+}
+
+// LogColorNoTime prints colored text without timestamp prefix.
+func LogColorNoTime(format string, args ...interface{}) {
+	defaultLogger.LogColorNoTime(format, args...)
 }
 
 // LogDebug is the package-level convenience function.
