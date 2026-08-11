@@ -523,8 +523,10 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		}
 
 		// Mux or save directly
-		if !w.Cfg.SkipMux && videoPath != "" && audioPath != "" {
-			util.Log("开始合并音视频...")
+		if !w.Cfg.SkipMux && (videoPath != "" || audioPath != "") {
+			if videoPath != "" && audioPath != "" {
+				util.Log("开始合并音视频...")
+			}
 			isHevc := selectedVideo != nil && selectedVideo.Codecs == "HEVC"
 			desc := vInfo.Desc
 			if page.Desc != "" {
