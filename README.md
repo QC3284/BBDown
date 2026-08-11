@@ -2,9 +2,9 @@
 
 命令行式哔哩哔哩下载器。Bilibili Downloader.
 
-> **本分支为 Go 语言重构版本，与原 C# 版功能一致。**
+> **本分支为 Go 语言重写版本，与原 C# 版功能一致。**
 > 不会主动增加新功能，仅做行为对齐维护。
-> Go 重构由 AI 辅助完成。
+> Go 重写由 AI 辅助完成。
 
 ## 安装
 
@@ -110,11 +110,11 @@ BBDown live 12345
 
 ## 与上游的关系
 
-基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown) Go 语言重构，行为完全对齐。
+基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown) Go 语言重写，行为完全对齐。
 
 | 分支 | 内容 |
 |---|---|
-| `main` | Go 重构（当前分支） |
+| `main` | Go 重写（当前分支） |
 | `master` | C# 原版 |
 
 ## 注意事项及警告
@@ -130,4 +130,4 @@ BBDown live 12345
 
 MIT © 2020 [nilaoda](https://github.com/nilaoda), 2025 [AliverAnme](https://github.com/aliveranme), 2026 [QC3284](https://github.com/QC3284)
 
-Go 重构同样以 MIT 协议发布。
+Go 重写同样以 MIT 协议发布。
