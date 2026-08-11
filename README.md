@@ -127,6 +127,6 @@ BBDown live 12345
 
 ## License
 
-MIT © 2020 [nilaoda](https://github.com/nilaoda), 2025 [AliverAnme](https://github.com/aliveranme)
+MIT © 2020 [nilaoda](https://github.com/nilaoda), 2025 [AliverAnme](https://github.com/aliveranme), 2026 [QC3284](https://github.com/QC3284)
 
 Go 重构同样以 MIT 协议发布。
