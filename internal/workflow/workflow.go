@@ -55,6 +55,9 @@ func (w *Workflow) Run(ctx context.Context) error {
 	w.handleConflictingOptions()
 	w.validateNumericOptions()
 
+	// Apply config to HTTP client and working dir
+	w.applyConfig()
+
 	// Load credentials from data files
 	w.loadCredentials()
 
@@ -172,7 +175,17 @@ func (w *Workflow) Run(ctx context.Context) error {
 		MultiThread: w.Cfg.MultiThread,
 	}
 
-	parserInst := parser.NewParser(w.HTTPClient, config.Current(nil))
+	parserCfg := config.AppSettings{
+		Cookie:       w.Cfg.Cookie,
+		Token:        w.Cfg.AccessToken,
+		Host:         w.Cfg.Host,
+		EpHost:       w.Cfg.EpHost,
+		TvHost:       w.Cfg.TvHost,
+		Area:         w.Cfg.Area,
+		SkipSslCheck: w.Cfg.Insecure,
+		DebugLog:     w.Cfg.Debug,
+	}
+	parserInst := parser.NewParser(w.HTTPClient, parserCfg)
 
 	var failedPages []int
 	for _, page := range pagesInfo {
@@ -242,7 +255,14 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		title = "_" + title
 	}
 
-	maxRetries := 3
+	maxRetries := w.Cfg.RetryCount
+	if maxRetries < 1 {
+		maxRetries = 3
+	}
+	retryDelay := time.Duration(w.Cfg.RetryDelay) * time.Millisecond
+	if retryDelay <= 0 {
+		retryDelay = retryDelay
+	}
 	for retry := 0; retry < maxRetries; retry++ {
 		// Parse tracks
 		result, err := p.ExtractTracks(ctx, aidOri, page.Aid, page.Cid, page.Epid,
@@ -257,7 +277,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			select {
 			case <-ctx.Done():
 				return false
-			case <-time.After(3 * time.Second):
+			case <-time.After(retryDelay):
 			}
 			continue
 		}
@@ -423,7 +443,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					return false
 				}
 				util.LogWarn("下载异常, 3秒后重试...")
-				time.Sleep(3 * time.Second)
+				time.Sleep(retryDelay)
 				continue
 			}
 		}
@@ -439,7 +459,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					util.LogError("P%d 音频下载失败: %v", page.Index, err)
 					return false
 				}
-				time.Sleep(3 * time.Second)
+				time.Sleep(retryDelay)
 				continue
 			}
 		}
@@ -618,6 +638,16 @@ func parseDanmakuFormats(s string) []string {
 		return []string{"xml", "ass"}
 	}
 	return strings.Split(s, ",")
+}
+
+// applyConfig applies CLI settings to runtime.
+func (w *Workflow) applyConfig() {
+	if w.Cfg.WorkDir != "" {
+		os.Chdir(w.Cfg.WorkDir)
+	}
+	if w.Cfg.UserAgent != "" {
+		w.HTTPClient.SetUserAgent(w.Cfg.UserAgent)
+	}
 }
 
 // handleConflictingOptions resolves mutually exclusive CLI options.
