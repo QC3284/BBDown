@@ -91,6 +91,11 @@ func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, ep
 		return p.getIntlPlayJSON(ctx, aid, cid, epid, qn, "0")
 	}
 
+	if appAPI {
+		bangumi := strings.HasPrefix(aidOri, "ep:") || strings.HasPrefix(aidOri, "cheese:")
+		return p.DoAppReq(ctx, aid, cid, epid, qn, bangumi, encoding)
+	}
+
 	cheese := strings.HasPrefix(aidOri, "cheese:")
 	bangumi := cheese || strings.HasPrefix(aidOri, "ep:")
 
