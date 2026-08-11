@@ -109,13 +109,24 @@ BBDown live 12345
 
 ## 与上游的关系
 
+基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown) Go 语言重构，行为完全对齐。
+
 | 分支 | 内容 |
 |---|---|
 | `main` | Go 重构（当前分支） |
 | `master` | C# 原版 |
 
-基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown) Go 语言重构，行为完全对齐。
+## 注意事项及警告
+
+- 本软件仅供学习交流，**请勿用于商业用途或传播下载内容**。
+- 使用本软件下载视频时，请遵守哔哩哔哩 [用户协议](https://www.bilibili.com/protocal/licence.html) 及相关法律法规。
+- 下载受版权保护的内容可能构成侵权，请仅下载您拥有合法权限的内容。
+- **本分支不会主动增加新功能**，仅保持与原 C# 版行为一致。
+- 使用 `--cookie` 或 `--access-token` 时，凭据将以明文存储于本地文件，请注意保管。
+- **禁止将本软件用于任何违法用途**，使用者自行承担一切法律后果。
 
 ## License
 
-MIT
+MIT © 2020 [nilaoda](https://github.com/nilaoda), 2025 [AliverAnme](https://github.com/aliveranme)
+
+Go 重构同样以 MIT 协议发布。
