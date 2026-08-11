@@ -129,22 +129,62 @@ func SortAudioTracks(tracks []entity.Audio, encodingPriority map[string]int, asc
 	return sorted
 }
 
-// PrintAllTracks displays available video and audio tracks.
-func PrintAllTracks(result *entity.ParsedResult, declaredDur int, onlyShowInfo bool) {
-	util.LogColorNoTime("%s", "视频流:")
-	for i, v := range result.VideoTracks {
-		kbps := float64(0)
-		if v.Dur > 0 {
-			kbps = v.Size / 1024 / float64(v.Dur) * 8
+// PrintAllTracks displays available video and audio tracks (matching C# format).
+func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool) {
+	if len(result.VideoTracks) > 0 {
+		util.Log("共计%d条视频流.", len(result.VideoTracks))
+		for i, v := range result.VideoTracks {
+			pDur := pageDur
+			if pDur == 0 {
+				pDur = v.Dur
+			}
+			size := v.Size
+			if size <= 0 {
+				size = float64(pDur) * float64(v.Bandwidth) * 1024 / 8
+			}
+			line := fmt.Sprintf("%d. [%s] [%s] [%s] [%s] [%d kbps] [~%s]",
+				i, v.Dfn, v.Res, v.Codecs, v.FPS, v.Bandwidth, util.FormatFileSize(size))
+			line = strings.ReplaceAll(line, "[] ", "")
+			util.LogColorNoTime("%s", line)
 		}
-		line := fmt.Sprintf("%d. [%s] [%s] [%s] [%s] [~%02.0f kbps] [%s]",
-			i, v.Dfn, v.Res, v.Codecs, v.FPS, kbps, util.FormatFileSize(v.Size))
+	}
+	if len(result.AudioTracks) > 0 {
+		util.Log("共计%d条音频流.", len(result.AudioTracks))
+		for i, a := range result.AudioTracks {
+			pDur := pageDur
+			if pDur == 0 {
+				pDur = a.Dur
+			}
+			line := fmt.Sprintf("%d. [%s] [%d kbps] [~%s]",
+				i, a.Codecs, a.Bandwidth, util.FormatFileSize(float64(pDur)*float64(a.Bandwidth)*1024/8))
+			util.LogColorNoTime("%s", line)
+		}
+	}
+}
+
+// PrintSelectedTrack shows the chosen tracks (matching C# format).
+func PrintSelectedTrack(video *entity.Video, audio *entity.Audio, pageDur int) {
+	if video != nil {
+		pDur := pageDur
+		if pDur == 0 {
+			pDur = video.Dur
+		}
+		size := video.Size
+		if size <= 0 {
+			size = float64(pDur) * float64(video.Bandwidth) * 1024 / 8
+		}
+		line := fmt.Sprintf("[视频] [%s] [%s] [%s] [%s] [%d kbps] [~%s]",
+			video.Dfn, video.Res, video.Codecs, video.FPS, video.Bandwidth, util.FormatFileSize(size))
 		line = strings.ReplaceAll(line, "[] ", "")
 		util.LogColorNoTime("%s", line)
 	}
-	util.LogColorNoTime("%s", "音频流:")
-	for i, a := range result.AudioTracks {
-		line := fmt.Sprintf("%d. [%s] [%s] [~%d kbps]", i, a.Dfn, a.Codecs, a.Bandwidth)
+	if audio != nil {
+		pDur := pageDur
+		if pDur == 0 {
+			pDur = audio.Dur
+		}
+		line := fmt.Sprintf("[音频] [%s] [%d kbps] [~%s]",
+			audio.Codecs, audio.Bandwidth, util.FormatFileSize(float64(pDur)*float64(audio.Bandwidth)*1024/8))
 		util.LogColorNoTime("%s", line)
 	}
 }

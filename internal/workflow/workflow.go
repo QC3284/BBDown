@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -18,6 +19,12 @@ import (
 )
 
 const backupHost = "upos-sz-mirrorcoso1.bilivideo.com"
+
+var (
+	pcdnRegex = regexp.MustCompile(`://[^/]+:\d+/`)
+	akamRegex = regexp.MustCompile(`://[^/]*akamaized\.net/`)
+	uposRegex = regexp.MustCompile(`://[^/]+/`)
+)
 
 // Workflow orchestrates the BBDown download process.
 type Workflow struct {
@@ -233,32 +240,19 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		aIndex := 0
 
 		if w.Cfg.Interactive {
-			// 交互式选择视频流
-			for i, v := range result.VideoTracks {
-				kbps := float64(0)
-				if v.Dur > 0 && v.Size > 0 {
-					kbps = v.Size / 1024 / float64(v.Dur) * 8
+			if len(result.VideoTracks) > 0 {
+				fmt.Print("请选择一条视频流(输入序号): ")
+				fmt.Scanf("%d", &vIndex)
+				if vIndex < 0 || vIndex >= len(result.VideoTracks) {
+					vIndex = 0
 				}
-				line := fmt.Sprintf("%d. [%s] [%s] [%s] [%s] [~%02.0f kbps] [%s]",
-					i, v.Dfn, v.Res, v.Codecs, v.FPS, kbps, util.FormatFileSize(v.Size))
-				line = strings.ReplaceAll(line, "[] ", "")
-				util.LogColorNoTime("%s", line)
 			}
-			fmt.Print("请选择最想要的视频流(输入序号): ")
-			fmt.Scanf("%d", &vIndex)
-			if vIndex < 0 || vIndex >= len(result.VideoTracks) {
-				vIndex = 0
-			}
-
-			// 交互式选择音频流
-			for i, a := range result.AudioTracks {
-				line := fmt.Sprintf("%d. [%s] [%s] [~%d kbps]", i, a.Dfn, a.Codecs, a.Bandwidth)
-				util.LogColorNoTime("%s", line)
-			}
-			fmt.Print("请选择最想要的音频流(输入序号): ")
-			fmt.Scanf("%d", &aIndex)
-			if aIndex < 0 || aIndex >= len(result.AudioTracks) {
-				aIndex = 0
+			if len(result.AudioTracks) > 0 {
+				fmt.Print("请选择一条音频流(输入序号): ")
+				fmt.Scanf("%d", &aIndex)
+				if aIndex < 0 || aIndex >= len(result.AudioTracks) {
+					aIndex = 0
+				}
 			}
 		}
 
@@ -274,6 +268,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			w.Cfg.UposHost = backupHost
 		}
 		handlePcdn(&w.Cfg, selectedVideo, selectedAudio)
+
+		util.Log("已选择的流:")
+		download.PrintSelectedTrack(selectedVideo, selectedAudio, page.Dur)
 
 		// Save path
 		savePath := download.FormatSavePath(savePathFormat, title, selectedVideo, selectedAudio, page, pagesCount, apiType, pubTime)
@@ -427,27 +424,37 @@ func (w *Workflow) notifyCompletion(vInfo *entity.VInfo, success bool) {
 }
 
 func handlePcdn(cfg *config.MyOption, video *entity.Video, audio *entity.Audio) {
-	if cfg.AllowPcdn {
-		return
-	}
-	if cfg.UposHost != "" {
-		if video != nil && video.BaseURL != "" {
-			video.BaseURL = replaceHost(video.BaseURL, cfg.UposHost)
+	if cfg.UposHost == "" {
+		if !cfg.AllowPcdn {
+			if video != nil && pcdnRegex.MatchString(video.BaseURL) {
+				util.LogWarn("检测到视频流为PCDN, 尝试强制替换为%s……", backupHost)
+				video.BaseURL = pcdnRegex.ReplaceAllString(video.BaseURL, "://"+backupHost+"/")
+			}
+			if audio != nil && pcdnRegex.MatchString(audio.BaseURL) {
+				util.LogWarn("检测到音频流为PCDN, 尝试强制替换为%s……", backupHost)
+				audio.BaseURL = pcdnRegex.ReplaceAllString(audio.BaseURL, "://"+backupHost+"/")
+			}
 		}
-		if audio != nil && audio.BaseURL != "" {
-			audio.BaseURL = replaceHost(audio.BaseURL, cfg.UposHost)
+		if cfg.Area != "" {
+			if video != nil && strings.Contains(video.BaseURL, "akamaized.net") {
+				util.LogWarn("检测到视频流为外国源, 尝试强制替换为%s……", backupHost)
+				video.BaseURL = akamRegex.ReplaceAllString(video.BaseURL, "://"+backupHost+"/")
+			}
+			if audio != nil && strings.Contains(audio.BaseURL, "akamaized.net") {
+				util.LogWarn("检测到音频流为外国源, 尝试强制替换为%s……", backupHost)
+				audio.BaseURL = akamRegex.ReplaceAllString(audio.BaseURL, "://"+backupHost+"/")
+			}
+		}
+	} else {
+		if video != nil {
+			util.LogWarn("尝试将视频流强制替换为%s……", cfg.UposHost)
+			video.BaseURL = uposRegex.ReplaceAllString(video.BaseURL, "://"+cfg.UposHost+"/")
+		}
+		if audio != nil {
+			util.LogWarn("尝试将音频流强制替换为%s……", cfg.UposHost)
+			audio.BaseURL = uposRegex.ReplaceAllString(audio.BaseURL, "://"+cfg.UposHost+"/")
 		}
 	}
-}
-
-func replaceHost(urlStr, newHost string) string {
-	if idx := strings.Index(urlStr, "://"); idx >= 0 {
-		rest := urlStr[idx+3:]
-		if slash := strings.Index(rest, "/"); slash >= 0 {
-			return urlStr[:idx+3] + newHost + rest[slash:]
-		}
-	}
-	return urlStr
 }
 
 func appDirFunc() string {
