@@ -310,6 +310,16 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			util.LogWarn("========================================")
 		}
 
+		// Filter tracks based on --audio-only / --video-only BEFORE interactive selection
+		if w.Cfg.AudioOnly {
+			result.VideoTracks = nil
+		}
+		if w.Cfg.VideoOnly {
+			result.AudioTracks = nil
+			result.BackgroundAudioTracks = nil
+			result.RoleAudioList = nil
+		}
+
 		// Select tracks (interactive or default)
 		var selectedVideo *entity.Video
 		var selectedAudio *entity.Audio
@@ -319,7 +329,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		if w.Cfg.Interactive {
 			if len(result.VideoTracks) > 0 {
 				fmt.Print("请选择一条视频流(输入序号): ")
-				fmt.Print("\033[36m") // cyan
+				fmt.Print("\033[36m")
 				vIndex = readIntSafe(ctx)
 				fmt.Print("\033[0m")
 				if vIndex < 0 || vIndex >= len(result.VideoTracks) {
@@ -328,7 +338,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			}
 			if len(result.AudioTracks) > 0 {
 				fmt.Print("请选择一条音频流(输入序号): ")
-				fmt.Print("\033[36m") // cyan
+				fmt.Print("\033[36m")
 				aIndex = readIntSafe(ctx)
 				fmt.Print("\033[0m")
 				if aIndex < 0 || aIndex >= len(result.AudioTracks) {
@@ -337,10 +347,10 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			}
 		}
 
-		if len(result.VideoTracks) > vIndex && !w.Cfg.AudioOnly {
+		if len(result.VideoTracks) > vIndex {
 			selectedVideo = &result.VideoTracks[vIndex]
 		}
-		if len(result.AudioTracks) > aIndex && !w.Cfg.VideoOnly {
+		if len(result.AudioTracks) > aIndex {
 			selectedAudio = &result.AudioTracks[aIndex]
 		}
 
