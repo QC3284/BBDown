@@ -51,12 +51,18 @@ func (w *Workflow) Run(ctx context.Context) error {
 	}
 	util.Log("解析完成: %s", aidOri)
 
+	// Fix conflicting options
+	w.handleConflictingOptions()
+	w.validateNumericOptions()
+
 	// Load credentials from data files
 	w.loadCredentials()
 
 	// Parse priorities
 	encodingPriority, firstEncoding := parseEncodingPriority(w.Cfg.EncodingPriority)
 	dfnPriority := parseDfnPriority(w.Cfg.DfnPriority)
+	downloadDanmaku := w.Cfg.DownloadDanmaku || w.Cfg.DanmakuOnly
+	danmakuFormats := parseDanmakuFormats(w.Cfg.DownloadDanmakuFormats)
 	lang := w.Cfg.Language
 	delay := w.Cfg.DelayPerPage
 
@@ -98,10 +104,38 @@ func (w *Workflow) Run(ctx context.Context) error {
 		apiType = "INTL"
 	}
 
-	// Page summary
+	// Page summary & selection
 	pagesInfo := vInfo.PagesInfo
-	util.Log("共计 %d 个分P, 已选择：ALL", len(pagesInfo))
-	showPages := pagesInfo
+	selectedPages := getSelectedPages(&w.Cfg, vInfo, input)
+	selLabel := "ALL"
+	if selectedPages != nil {
+		parts := make([]string, len(selectedPages))
+		for i, s := range selectedPages {
+			parts[i] = s
+		}
+		selLabel = strings.Join(parts, ",")
+	}
+	util.Log("共计 %d 个分P, 已选择：%s", len(pagesInfo), selLabel)
+
+	// Filter pages if selection specified
+	if selectedPages != nil {
+		var filtered []entity.Page
+		for _, p := range pagesInfo {
+			idx := fmt.Sprintf("%d", p.Index)
+			for _, s := range selectedPages {
+				if s == idx {
+					filtered = append(filtered, p)
+					break
+				}
+			}
+		}
+		if len(filtered) == 0 {
+			return fmt.Errorf("所选分P不存在: %s，视频共有 %d 个分P", selLabel, len(pagesInfo))
+		}
+		pagesInfo = filtered
+	}
+
+	showPages := vInfo.PagesInfo
 	if !w.Cfg.ShowAll && len(showPages) > 6 {
 		for _, p := range showPages[:5] {
 			util.Log("  P%d: [%s] [%s] [%s]", p.Index, p.Cid, p.Title, util.FormatTime(p.Dur, true))
@@ -161,7 +195,8 @@ func (w *Workflow) Run(ctx context.Context) error {
 		util.Log("开始解析P%d: %s... (%d of %d)", page.Index, page.Aid, idx, pagesCount)
 
 		success := w.downloadOnePage(ctx, parserInst, page, vInfo, pagesInfo, aidOri, savePathFormat, apiType,
-			encodingPriority, dfnPriority, firstEncoding, lang, dlCfg)
+			encodingPriority, dfnPriority, firstEncoding, lang, dlCfg,
+			downloadDanmaku, danmakuFormats)
 		if !success {
 			failedPages = append(failedPages, page.Index)
 		}
@@ -186,7 +221,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page entity.Page, vInfo *entity.VInfo,
 	allPages []entity.Page, aidOri, savePathFormat, apiType string,
 	encodingPriority map[string]int, dfnPriority map[string]int, firstEncoding, lang string,
-	dlCfg download.DownloadConfig) bool {
+	dlCfg download.DownloadConfig, downloadDanmaku bool, danmakuFormats []string) bool {
 
 	title := vInfo.Title
 	pic := vInfo.Pic
@@ -300,6 +335,30 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				os.MkdirAll(page.Aid, 0755)
 				if err := download.DownloadFile(ctx, coverURL, coverPath, dlCfg); err != nil {
 					util.LogWarn("封面下载失败（已跳过）: %v", err)
+				}
+			}
+		}
+
+		// Danmaku
+		if downloadDanmaku && !w.Cfg.OnlyShowInfo {
+			danmakuURL := fmt.Sprintf("https://comment.bilibili.com/%s.xml", page.Cid)
+			xmlPath := strings.TrimSuffix(savePath, filepath.Ext(savePath)) + ".xml"
+			os.MkdirAll(filepath.Dir(xmlPath), 0755)
+			util.Log("正在下载弹幕Xml文件")
+			if err := download.DownloadFile(ctx, danmakuURL, xmlPath, dlCfg); err != nil {
+				util.LogWarn("弹幕下载失败: %v", err)
+			} else {
+				items, err := util.ParseDanmakuXML(xmlPath)
+				if err != nil || len(items) == 0 {
+					util.Log("当前视频没有弹幕, 删除Xml...")
+					os.Remove(xmlPath)
+				} else {
+					assPath := strings.TrimSuffix(savePath, filepath.Ext(savePath)) + ".ass"
+					filtered := util.FilterDanmaku(items, w.Cfg.DanmakuFilter, w.Cfg.DanmakuFilterUser)
+					if len(filtered) > 0 {
+						util.Log("正在保存弹幕Ass文件...")
+						util.SaveDanmakuAsASS(filtered, assPath)
+					}
 				}
 			}
 		}
@@ -503,4 +562,108 @@ func parseDanmakuFormats(s string) []string {
 		return []string{"xml", "ass"}
 	}
 	return strings.Split(s, ",")
+}
+
+// handleConflictingOptions resolves mutually exclusive CLI options.
+func (w *Workflow) handleConflictingOptions() {
+	if w.Cfg.Interactive {
+		w.Cfg.HideStreams = false
+	}
+	if w.Cfg.AudioOnly && w.Cfg.VideoOnly {
+		w.Cfg.AudioOnly = false
+		w.Cfg.VideoOnly = false
+	}
+	if w.Cfg.SkipSubtitle {
+		w.Cfg.SubOnly = false
+	}
+}
+
+// validateNumericOptions clamps or rejects invalid numeric values.
+func (w *Workflow) validateNumericOptions() {
+	if w.Cfg.MuxerTimeout < 1 || w.Cfg.MuxerTimeout > 35000 {
+		w.Cfg.MuxerTimeout = 30
+	}
+	if w.Cfg.RetryCount < 1 {
+		w.Cfg.RetryCount = 3
+	}
+	if w.Cfg.RetryDelay < 0 {
+		w.Cfg.RetryDelay = 3000
+	}
+	if w.Cfg.ThreadSegmentSize < 1 {
+		w.Cfg.ThreadSegmentSize = 20
+	}
+	if w.Cfg.DelayPerPage < 0 {
+		w.Cfg.DelayPerPage = 0
+	}
+}
+
+// getSelectedPages returns selected page indices, or nil for all.
+func getSelectedPages(cfg *config.MyOption, vInfo *entity.VInfo, input string) []string {
+	sel := cfg.SelectPage
+	if sel == "" {
+		// Auto-select from VInfo index or URL query param
+		if vInfo.Index != "" {
+			return []string{vInfo.Index}
+		}
+		if idx := strings.Index(input, "?p="); idx >= 0 {
+			p := input[idx+3:]
+			if end := strings.IndexAny(p, "& "); end >= 0 {
+				p = p[:end]
+			}
+			return []string{p}
+		}
+		return nil // ALL
+	}
+
+	upper := strings.ToUpper(strings.TrimSpace(sel))
+	if upper == "ALL" {
+		return nil
+	}
+
+	// Replace LAST/NEW/LATEST with last page
+	lastIdx := fmt.Sprintf("%d", vInfo.PagesInfo[len(vInfo.PagesInfo)-1].Index)
+	sel = strings.ReplaceAll(strings.ToUpper(sel), "LAST", lastIdx)
+	sel = strings.ReplaceAll(strings.ToUpper(sel), "NEW", lastIdx)
+	sel = strings.ReplaceAll(strings.ToUpper(sel), "LATEST", lastIdx)
+
+	result, err := parsePageSelection(sel)
+	if err != nil {
+		return nil
+	}
+	return result
+}
+
+// parsePageSelection parses expressions like "1,3,5", "1-10", "1-3,7,9-11".
+func parsePageSelection(expr string) ([]string, error) {
+	parts := strings.Split(expr, ",")
+	var result []string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if idx := strings.Index(part[1:], "-"); idx >= 0 { // range
+			idx++ // adjust for [1:] offset
+			start, err := fmt.Sscanf(part[:idx], "%d", new(int))
+			if err != nil {
+				continue
+			}
+			_ = start
+			var s, e int
+			if n, _ := fmt.Sscanf(part, "%d-%d", &s, &e); n == 2 {
+				if s > e {
+					return nil, fmt.Errorf("invalid range: %s", part)
+				}
+				for i := s; i <= e; i++ {
+					result = append(result, fmt.Sprintf("%d", i))
+				}
+			}
+		} else {
+			result = append(result, part)
+		}
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("empty page selection")
+	}
+	return result, nil
 }
