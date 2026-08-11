@@ -11,6 +11,7 @@ import (
 
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/download"
+	"github.com/QC3284/BBDown/internal/drm"
 	"github.com/QC3284/BBDown/internal/entity"
 	"github.com/QC3284/BBDown/internal/fetcher"
 	"github.com/QC3284/BBDown/internal/muxer"
@@ -294,6 +295,20 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			return true
 		}
 
+		// 充电专属视频试看检测
+		verdict := util.InspectUpower(vInfo.IsUpowerExclusive, vInfo.IsUpowerPlay, page.Dur, result.ActualDurationSec)
+		if verdict.IsPreview {
+			util.LogWarn("========================================")
+			util.LogWarn("  充电专属视频")
+			util.LogWarn("  %s", verdict.Reason)
+			if !w.Cfg.AllowPreview && !w.Cfg.OnlyShowInfo {
+				util.LogWarn("  已跳过。如需下载试看片段，请加 --allow-preview")
+				util.LogWarn("========================================")
+				return false
+			}
+			util.LogWarn("========================================")
+		}
+
 		// Select tracks (interactive or default)
 		var selectedVideo *entity.Video
 		var selectedAudio *entity.Audio
@@ -461,6 +476,27 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				}
 				time.Sleep(retryDelay)
 				continue
+			}
+		}
+
+		// DRM decryption
+		if w.Cfg.DecryptDrm && result.IsDrm && (result.KidHex != "" || result.PsshBase64 != "") {
+			util.Log("尝试DRM解密...")
+			pssh := result.PsshBase64
+			wvdPath := w.Cfg.WvdPath
+			if wvdPath == "" {
+				wvdPath = filepath.Join(appDirFunc(), "device.wvd")
+			}
+			if w.Cfg.DrmKeyHex != "" && w.Cfg.DrmKidHex != "" {
+				result.KidHex = w.Cfg.DrmKidHex
+				result.KeyHex = w.Cfg.DrmKeyHex
+			} else {
+				kp, _ := drm.GetKeyWidevine(pssh, wvdPath)
+				if kp != nil {
+					result.KidHex = kp.KidHex
+					result.KeyHex = kp.KeyHex
+					util.Log("DRM密钥获取成功")
+				}
 			}
 		}
 
