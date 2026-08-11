@@ -370,20 +370,41 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			return true
 		}
 
-		// Cover
-		if !w.Cfg.SkipCover && !w.Cfg.SubOnly && !w.Cfg.DanmakuOnly && !w.Cfg.CoverOnly {
-			coverURL := pic
-			if coverURL == "" {
-				coverURL = page.Cover
-			}
-			if coverURL != "" {
-				coverPath := filepath.Join(page.Aid, page.Aid+".jpg")
-				os.MkdirAll(page.Aid, 0755)
-				if err := download.DownloadFile(ctx, coverURL, coverPath, dlCfg); err != nil {
-					util.LogWarn("封面下载失败（已跳过）: %v", err)
+			// Cover (normal path — skipped when in "only" mode)
+			if !w.Cfg.SkipCover && !w.Cfg.SubOnly && !w.Cfg.DanmakuOnly && !w.Cfg.CoverOnly {
+				coverURL := pic
+				if coverURL == "" {
+					coverURL = page.Cover
+				}
+				if coverURL != "" {
+					coverPath := filepath.Join(page.Aid, page.Aid+".jpg")
+					os.MkdirAll(page.Aid, 0755)
+					if err := download.DownloadFile(ctx, coverURL, coverPath, dlCfg); err != nil {
+						util.LogWarn("封面下载失败（已跳过）: %v", err)
+					}
 				}
 			}
-		}
+
+			// Cover-only mode: download cover with output naming, then exit
+			if w.Cfg.CoverOnly {
+				coverURL := pic
+				if coverURL == "" {
+					coverURL = page.Cover
+				}
+				if coverURL != "" {
+					coverExt := filepath.Ext(coverURL)
+					if idx := strings.Index(coverExt, "?"); idx >= 0 {
+						coverExt = coverExt[:idx]
+					}
+					newCover := strings.TrimSuffix(savePath, filepath.Ext(savePath)) + coverExt
+					os.MkdirAll(filepath.Dir(newCover), 0755)
+					if err := download.DownloadFile(ctx, coverURL, newCover, dlCfg); err != nil {
+						util.LogWarn("封面下载失败: %v", err)
+					}
+				}
+				os.RemoveAll(page.Aid)
+				return true
+			}
 
 		// Danmaku
 		if downloadDanmaku && !w.Cfg.OnlyShowInfo {
