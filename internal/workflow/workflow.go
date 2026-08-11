@@ -582,6 +582,8 @@ func parseEncodingPriority(s string) (map[string]int, string) {
 	if s == "" {
 		return result, ""
 	}
+	// Handle Chinese comma
+	s = strings.ReplaceAll(s, "，", ",")
 	parts := strings.Split(s, ",")
 	for i, p := range parts {
 		p = strings.TrimSpace(strings.ReplaceAll(p, "-", ""))
@@ -600,6 +602,7 @@ func parseDfnPriority(s string) map[string]int {
 	if s == "" {
 		return result
 	}
+	s = strings.ReplaceAll(s, "，", ",") // Chinese comma
 	parts := strings.Split(s, ",")
 	for i, p := range parts {
 		p = strings.TrimSpace(p)

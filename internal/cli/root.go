@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 
 	"github.com/QC3284/BBDown/internal/workflow"
 	"github.com/spf13/cobra"
@@ -210,5 +212,9 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	// Run the workflow
 	client := buildHTTPClient(cfg)
 	wf := workflow.New(cfg, client)
-	return wf.Run(cmd.Context())
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	return wf.Run(ctx)
 }
