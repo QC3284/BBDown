@@ -114,7 +114,7 @@ BBDown live 12345
 | `main` | Go 重构（当前分支） |
 | `master` | C# 原版 |
 
-上游：[nilaoda/BBDown](https://github.com/nilaoda/BBDown)
+基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown) Go 语言重构，行为完全对齐。
 
 ## License
 
