@@ -263,7 +263,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 	}
 	retryDelay := time.Duration(w.Cfg.RetryDelay) * time.Millisecond
 	if retryDelay <= 0 {
-		retryDelay = retryDelay
+		retryDelay = 3 * time.Second
 	}
 	for retry := 0; retry < maxRetries; retry++ {
 		// Parse tracks
