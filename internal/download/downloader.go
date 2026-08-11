@@ -39,6 +39,8 @@ func DownloadFile(ctx context.Context, url, destPath string, cfg DownloadConfig)
 		if size > int64(cfg.ThreadSegmentSize())*1024*1024 {
 			return multiThreadDownload(url, destPath, cfg)
 		}
+	} else if cfg.MultiThread && strings.Contains(url, "-cmcc-") {
+		util.LogWarn("检测到cmcc域名cdn, 已经禁用多线程")
 	}
 	return singleDownload(url, destPath)
 }

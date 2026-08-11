@@ -49,7 +49,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("解析链接失败: %w", err)
 	}
-	util.Log("解析完成: %s", aidOri)
+	util.Log("获取aid结束: %s", aidOri)
 
 	// Fix conflicting options
 	w.handleConflictingOptions()
@@ -283,14 +283,18 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		if w.Cfg.Interactive {
 			if len(result.VideoTracks) > 0 {
 				fmt.Print("请选择一条视频流(输入序号): ")
+				fmt.Print("\033[36m") // cyan
 				fmt.Scanf("%d", &vIndex)
+				fmt.Print("\033[0m")
 				if vIndex < 0 || vIndex >= len(result.VideoTracks) {
 					vIndex = 0
 				}
 			}
 			if len(result.AudioTracks) > 0 {
 				fmt.Print("请选择一条音频流(输入序号): ")
+				fmt.Print("\033[36m") // cyan
 				fmt.Scanf("%d", &aIndex)
+				fmt.Print("\033[0m")
 				if aIndex < 0 || aIndex >= len(result.AudioTracks) {
 					aIndex = 0
 				}
