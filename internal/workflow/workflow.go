@@ -288,6 +288,16 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		result.VideoTracks = download.SortVideoTracks(result.VideoTracks, dfnPriority, encodingPriority, w.Cfg.VideoAscending)
 		result.AudioTracks = download.SortAudioTracks(result.AudioTracks, encodingPriority, w.Cfg.AudioAscending)
 
+		// Clear tracks for --audio-only / --video-only BEFORE display
+		if w.Cfg.AudioOnly {
+			result.VideoTracks = nil
+		}
+		if w.Cfg.VideoOnly {
+			result.AudioTracks = nil
+			result.BackgroundAudioTracks = nil
+			result.RoleAudioList = nil
+		}
+
 		if !w.Cfg.HideStreams {
 			download.PrintAllTracks(result, page.Dur, w.Cfg.OnlyShowInfo)
 		}
@@ -308,16 +318,6 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				return false
 			}
 			util.LogWarn("========================================")
-		}
-
-		// Filter tracks based on --audio-only / --video-only BEFORE interactive selection
-		if w.Cfg.AudioOnly {
-			result.VideoTracks = nil
-		}
-		if w.Cfg.VideoOnly {
-			result.AudioTracks = nil
-			result.BackgroundAudioTracks = nil
-			result.RoleAudioList = nil
 		}
 
 		// Select tracks (interactive or default)
@@ -395,26 +395,24 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				}
 			}
 
-			// Cover-only mode: download cover with output naming, then exit
-			if w.Cfg.CoverOnly {
-				coverURL := pic
-				if coverURL == "" {
-					coverURL = page.Cover
-				}
-				if coverURL != "" {
-					coverExt := filepath.Ext(coverURL)
-					if idx := strings.Index(coverExt, "?"); idx >= 0 {
-						coverExt = coverExt[:idx]
-					}
-					newCover := strings.TrimSuffix(savePath, filepath.Ext(savePath)) + coverExt
-					os.MkdirAll(filepath.Dir(newCover), 0755)
-					if err := download.DownloadFile(ctx, coverURL, newCover, dlCfg); err != nil {
-						util.LogWarn("封面下载失败: %v", err)
-					}
-				}
-				os.RemoveAll(page.Aid)
-				return true
+		// Cover-only: download cover with output naming (matching C#: no early return)
+		if w.Cfg.CoverOnly {
+			coverURL := pic
+			if coverURL == "" {
+				coverURL = page.Cover
 			}
+			if coverURL != "" {
+				coverExt := filepath.Ext(coverURL)
+				if idx := strings.Index(coverExt, "?"); idx >= 0 {
+					coverExt = coverExt[:idx]
+				}
+				newCover := strings.TrimSuffix(savePath, filepath.Ext(savePath)) + coverExt
+				os.MkdirAll(filepath.Dir(newCover), 0755)
+				if err := download.DownloadFile(ctx, coverURL, newCover, dlCfg); err != nil {
+					util.LogWarn("封面下载失败: %v", err)
+				}
+			}
+		}
 
 		// Danmaku
 		if downloadDanmaku && !w.Cfg.OnlyShowInfo {
