@@ -96,7 +96,7 @@ func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, ep
 		json, err := p.DoAppReq(ctx, aid, cid, epid, qn, bangumi, encoding)
 		if err != nil {
 			util.LogWarn("APP API 请求失败, 回退到 WEB API: %v", err)
-			// fall through to web API
+			appAPI = false // fallback: treat as WEB
 		} else {
 			return json, nil
 		}

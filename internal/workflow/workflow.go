@@ -284,7 +284,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if len(result.VideoTracks) > 0 {
 				fmt.Print("请选择一条视频流(输入序号): ")
 				fmt.Print("\033[36m") // cyan
-				fmt.Scanf("%d", &vIndex)
+				vIndex = readIntSafe(ctx)
 				fmt.Print("\033[0m")
 				if vIndex < 0 || vIndex >= len(result.VideoTracks) {
 					vIndex = 0
@@ -293,7 +293,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if len(result.AudioTracks) > 0 {
 				fmt.Print("请选择一条音频流(输入序号): ")
 				fmt.Print("\033[36m") // cyan
-				fmt.Scanf("%d", &aIndex)
+				aIndex = readIntSafe(ctx)
 				fmt.Print("\033[0m")
 				if aIndex < 0 || aIndex >= len(result.AudioTracks) {
 					aIndex = 0
@@ -767,4 +767,20 @@ func (w *Workflow) saveAidArchived(aid string) {
 	}
 	defer f.Close()
 	fmt.Fprintln(f, aid)
+}
+
+// readIntSafe reads an integer from stdin, respecting context cancellation.
+func readIntSafe(ctx context.Context) int {
+	ch := make(chan int, 1)
+	go func() {
+		var v int
+		fmt.Scanf("%d", &v)
+		ch <- v
+	}()
+	select {
+	case <-ctx.Done():
+		return 0
+	case v := <-ch:
+		return v
+	}
 }
