@@ -109,7 +109,9 @@ func (f *SpaceVideoFetcher) fetchAllEntries(ctx context.Context, mid, userName s
 		pageNumber++
 		more, _, err := f.fetchPage(ctx, pageNumber, mid)
 		if err != nil {
-			break
+			// Page fetch failure is a systemic error (rate limit / network),
+			// not an empty page; propagate it instead of silently truncating.
+			return nil, fmt.Errorf("获取第 %d 页投稿失败: %w", pageNumber, err)
 		}
 		if len(more) == 0 {
 			util.LogWarn("第 %d 页未返回任何投稿，停止翻页（已取到 %d/%d 个）", pageNumber, len(entries), totalCount)

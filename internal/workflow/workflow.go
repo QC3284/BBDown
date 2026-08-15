@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -803,6 +804,14 @@ func (w *Workflow) initRequestSession(ctx context.Context) {
 	// effective credentials (CLI flag or BBDown.data file).
 	w.HTTPClient.SetCookieFn(func() string { return w.Cfg.Cookie })
 
+	// Batch commands (watchlater / sub check) pre-fetch the WBI key once and
+	// preset it here, avoiding one nav request per item (upstream initializes
+	// the session once per command).
+	if w.Cfg.Wbi != "" {
+		w.sessionWbi = w.Cfg.Wbi
+		return
+	}
+
 	if w.Cfg.Area == "" {
 		util.Log("检测账号登录...")
 		isLoggedIn, cookieExpired, newWbi := parser.CheckLoginWithDetails(ctx, w.HTTPClient, w.Cfg.Cookie)
@@ -874,10 +883,19 @@ func (w *Workflow) notifyCompletion(vInfo *entity.VInfo, success bool) {
 	if !success {
 		msg = "completed-with-failures"
 	}
-	body := fmt.Sprintf(`{"title":"%s","page_count":%d,"message":"%s","completed_at":%d}`,
-		vInfo.Title, len(vInfo.PagesInfo), msg, time.Now().Unix())
+	// Serialize with json.Marshal so titles containing quotes/control chars
+	// cannot break the payload.
+	body, err := json.Marshal(map[string]interface{}{
+		"title":        vInfo.Title,
+		"page_count":   len(vInfo.PagesInfo),
+		"message":      msg,
+		"completed_at": time.Now().Unix(),
+	})
+	if err != nil {
+		return
+	}
 	util.LogDebug("通知回调: %s", w.Cfg.NotifyWebhook)
-	w.HTTPClient.PostResponse(context.Background(), w.Cfg.NotifyWebhook, []byte(body), map[string]string{
+	w.HTTPClient.PostResponse(context.Background(), w.Cfg.NotifyWebhook, body, map[string]string{
 		"Content-Type": "application/json",
 	})
 }
@@ -917,11 +935,7 @@ func handlePcdn(cfg *config.MyOption, video *entity.Video, audio *entity.Audio) 
 }
 
 func appDirFunc() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	return filepath.Dir(exe)
+	return util.ExecutableDir()
 }
 
 // parseEncodingPriority parses the user encoding priority (upstream: index++
@@ -1251,12 +1265,12 @@ func (w *Workflow) checkAidArchived(aid string) bool {
 	if !w.Cfg.SaveArchivesToFile {
 		return false
 	}
-	data, err := os.ReadFile(filepath.Join(appDirFunc(), "BBDown_archives.txt"))
+	data, err := os.ReadFile(filepath.Join(appDirFunc(), "BBDown.archives"))
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimSpace(line) == aid {
+	for _, item := range strings.Split(string(data), "|") {
+		if item == aid {
 			return true
 		}
 	}
@@ -1268,12 +1282,12 @@ func (w *Workflow) saveAidArchived(aid string) {
 	if !w.Cfg.SaveArchivesToFile {
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(appDirFunc(), "BBDown_archives.txt"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(filepath.Join(appDirFunc(), "BBDown.archives"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	fmt.Fprintln(f, aid)
+	fmt.Fprintf(f, "%s|", aid)
 }
 
 // readIntSafe reads an integer from stdin, respecting context cancellation.

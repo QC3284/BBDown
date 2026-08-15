@@ -124,6 +124,7 @@ type MyOption struct {
 	TvHost                 string `json:"tv_host" mapstructure:"tv_host"`
 	Area                   string `json:"area" mapstructure:"area"`
 	ConfigFile             string `json:"config_file" mapstructure:"config_file"`
+	Wbi                    string `json:"wbi" mapstructure:"wbi"`
 	ServeListenURL         string `json:"serve_listen_url" mapstructure:"serve_listen_url"`
 	ServeMaxConcurrent     int    `json:"serve_max_concurrent" mapstructure:"serve_max_concurrent"`
 	ServeToken             string `json:"serve_token" mapstructure:"serve_token"`

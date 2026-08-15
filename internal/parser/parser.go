@@ -51,16 +51,6 @@ func VideoCodec(code string) string {
 	}
 }
 
-func maxQn() string {
-	max := 0
-	for k := range config.QualityMap {
-		if v, err := strconv.Atoi(k); err == nil && v > max {
-			max = v
-		}
-	}
-	return strconv.Itoa(max)
-}
-
 func timeStamp() string {
 	return strconv.FormatInt(time.Now().Unix(), 10)
 }

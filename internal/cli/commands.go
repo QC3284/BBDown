@@ -23,6 +23,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Batch-command WBI presets: fetched once per command, reused per item to
+// avoid one nav request per video (upstream initializes the session once).
+var (
+	watchLaterWbi string
+	subCheckWbi   string
+)
+
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "通过APP扫描二维码以登录您的WEB账号",
@@ -66,6 +73,9 @@ var serveCmd = &cobra.Command{
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
+
+		// Fire-and-forget update check (upstream ServeCommand).
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v1.6.11")
 
 		return srv.Run(ctx)
 	},
@@ -228,9 +238,11 @@ func runWatchLater(cmd *cobra.Command, args []string) error {
 	cfg.WorkDir = optWorkDir
 
 	client := buildHTTPClient(cfg)
-	if _, err := workflow.InitSession(ctx, &cfg, client); err != nil {
+	wbi, err := workflow.InitSession(ctx, &cfg, client)
+	if err != nil {
 		return err
 	}
+	watchLaterWbi = wbi
 
 	util.Log("正在获取稍后再看列表...")
 	list, err := fetchWatchLater(ctx, client)
@@ -261,6 +273,7 @@ func runWatchLater(cmd *cobra.Command, args []string) error {
 		opt.UseTvAPI = cfg.UseTvAPI
 		opt.UseIntlAPI = cfg.UseIntlAPI
 		opt.WorkDir = cfg.WorkDir
+		opt.Wbi = watchLaterWbi
 		if err := workflow.New(opt, client).Run(ctx); err != nil {
 			failed++
 			util.LogWarn("av%s 下载失败（继续下一个）: %v", t.Aid, err)
@@ -334,6 +347,7 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	subCheckWbi = wbi
 
 	factory := fetcher.NewFactory(client, cfg.UseIntlAPI, wbi, cfg.Cookie, cfg.Host, cfg.EpHost, cfg.AccessToken)
 	for _, sub := range subs {
@@ -392,6 +406,7 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 			opt.UseTvAPI = cfg.UseTvAPI
 			opt.UseIntlAPI = cfg.UseIntlAPI
 			opt.WorkDir = cfg.WorkDir
+			opt.Wbi = subCheckWbi
 			if err := workflow.New(opt, client).Run(ctx); err != nil {
 				util.LogWarn("av%s 下载失败: %v", aid, err)
 				continue
@@ -511,9 +526,3 @@ func buildHTTPClient(cfg config.MyOption) *util.HTTPClient {
 	}
 	return client
 }
-
-// blank imports to ensure packages are compiled
-var _ = workflow.New
-var _ = live.DownloadToFile
-var _ = server.NewAPIServer
-var _ = login.LoginWeb

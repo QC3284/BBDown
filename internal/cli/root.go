@@ -14,8 +14,7 @@ import (
 )
 
 var (
-	cfgFile string
-	debug   bool
+	debug bool
 
 	// Global option flags (mapped to MyOption fields)
 	optCookie     string
@@ -312,6 +311,10 @@ func runDownload(cmd *cobra.Command, args []string) error {
 
 	// Run the workflow
 	client := buildHTTPClient(cfg)
+
+	// Fire-and-forget update check (upstream DefaultCommand).
+	util.CheckUpdateAsync(context.Background(), client, "v1.6.11")
+
 	wf := workflow.New(cfg, client)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

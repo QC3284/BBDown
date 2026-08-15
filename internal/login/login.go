@@ -280,11 +280,7 @@ func maskValue(s string) string {
 }
 
 func appDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	return filepath.Dir(exe)
+	return util.ExecutableDir()
 }
 
 var randomChars = []rune("ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789")

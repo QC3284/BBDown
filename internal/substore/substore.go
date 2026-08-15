@@ -32,11 +32,7 @@ var StoreRoot = exeDir()
 var ioLock sync.Mutex
 
 func exeDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	return filepath.Dir(exe)
+	return util.ExecutableDir()
 }
 
 func subFile() string     { return filepath.Join(StoreRoot, "BBDownSubscriptions.json") }

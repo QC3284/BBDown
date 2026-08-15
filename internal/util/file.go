@@ -1,6 +1,8 @@
 package util
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,6 +19,16 @@ var reservedNames = map[string]bool{
 	"COM5": true, "COM6": true, "COM7": true, "COM8": true, "COM9": true,
 	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true,
 	"LPT5": true, "LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
+// ExecutableDir returns the directory containing the running executable
+// (shared by credential/config/subscription file resolution).
+func ExecutableDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(exe)
 }
 
 // GetValidFileName replaces invalid filename characters and handles reserved names.

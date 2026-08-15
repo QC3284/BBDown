@@ -531,7 +531,10 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 		sb.WriteString("  header=Referer: https://www.bilibili.com\n")
 		sb.WriteString("  header=User-Agent: Mozilla/5.0\n")
 		if cfg.Cookie != "" {
-			sb.WriteString("  header=Cookie: " + cfg.Cookie + "\n")
+			// aria2c input-file lines cannot contain newlines: sanitize so a
+			// malicious --cookie value cannot inject extra options.
+			cookie := strings.NewReplacer("\r", "", "\n", "").Replace(cfg.Cookie)
+			sb.WriteString("  header=Cookie: " + cookie + "\n")
 		}
 		sb.WriteString("  dir=" + filepath.Dir(destPath) + "\n")
 		sb.WriteString("  out=" + filepath.Base(destPath) + "\n")

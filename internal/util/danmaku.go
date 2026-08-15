@@ -3,6 +3,7 @@ package util
 import (
 	"encoding/xml"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -312,7 +313,9 @@ func FormatTime(seconds int, absolute bool) string {
 	return fmt.Sprintf("%02dm%02ds", m, s)
 }
 
-// CombineMultipleFilesIntoSingleFile concatenates files into one.
+// CombineMultipleFilesIntoSingleFile concatenates files into one. Streams
+// each input with a fixed buffer instead of loading whole files into memory
+// (video clips and live segments can be hundreds of MB each).
 func CombineMultipleFilesIntoSingleFile(files []string, output string) error {
 	out, err := os.Create(output)
 	if err != nil {
@@ -320,13 +323,19 @@ func CombineMultipleFilesIntoSingleFile(files []string, output string) error {
 	}
 	defer out.Close()
 
+	buf := make([]byte, 1<<20) // 1MB copy buffer
 	for _, f := range files {
-		data, err := os.ReadFile(f)
+		in, err := os.Open(f)
 		if err != nil {
 			return err
 		}
-		if _, err := out.Write(data); err != nil {
-			return err
+		_, copyErr := io.CopyBuffer(out, in, buf)
+		closeErr := in.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
 	return nil

@@ -148,7 +148,9 @@ func (c *HTTPClient) GetWebLocation(ctx context.Context, url string) (string, er
 		resp, err := c.client.Do(req)
 		if err != nil {
 			if method == http.MethodHead {
-				c.debugFn("HEAD request failed, trying GET")
+				if c.debugFn != nil {
+					c.debugFn("HEAD request failed, trying GET")
+				}
 				continue
 			}
 			return url, err

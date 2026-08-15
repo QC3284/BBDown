@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/QC3284/BBDown/internal/util"
 )
 
 // SubCommandNames are the registered subcommands: their flags do not support
@@ -150,9 +152,5 @@ func isKnownOption(token string, aliasMap map[string]string) bool {
 
 // appDir returns the executable directory (config default location).
 func appDir() string {
-	exe, err := os.Executable()
-	if err != nil {
-		return "."
-	}
-	return filepath.Dir(exe)
+	return util.ExecutableDir()
 }

@@ -226,6 +226,7 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 		return true, err
 	}
 
+	// Segment merging reuses the muxer timeout ceiling (default 30 minutes).
 	mergeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(mergeCtx, muxer.FFMPEG, "-loglevel", "warning", "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", path)

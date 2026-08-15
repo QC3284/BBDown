@@ -1,7 +1,6 @@
 package login
 
 import (
-	"net/url"
 	"strings"
 )
 
@@ -64,26 +63,20 @@ func MergeLoginCookies(cookieQuery string, setCookies []string) string {
 	// would randomize); rebuild from the query first, then append the rest.
 	var ordered []string
 	seen := make(map[string]bool)
-	if cookieQuery != "" {
-		parsed, err := url.ParseQuery(cookieQuery)
-		if err == nil {
-			for _, kv := range strings.Split(cookieQuery, "&") {
-				if kv == "" {
-					continue
-				}
-				name, _, found := strings.Cut(kv, "=")
-				if !found {
-					continue
-				}
-				lname := strings.ToLower(name)
-				if seen[lname] {
-					continue
-				}
-				seen[lname] = true
-				ordered = append(ordered, name+"="+fields[lname])
-				_ = parsed
-			}
+	for _, kv := range strings.Split(cookieQuery, "&") {
+		if kv == "" {
+			continue
 		}
+		name, _, found := strings.Cut(kv, "=")
+		if !found {
+			continue
+		}
+		lname := strings.ToLower(name)
+		if seen[lname] {
+			continue
+		}
+		seen[lname] = true
+		ordered = append(ordered, name+"="+fields[lname])
 	}
 	for name, value := range fields {
 		if !seen[name] {

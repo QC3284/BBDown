@@ -3,9 +3,7 @@ package util
 import (
 	"crypto/md5"
 	"encoding/hex"
-	"fmt"
 	"strings"
-	"time"
 )
 
 // WbiSign generates a Wbi-signed API URL by appending w_rid parameter.
@@ -27,14 +25,6 @@ func GetSign(parameters string, isBiliPlus bool) string {
 func md5Hex(s string) string {
 	h := md5.Sum([]byte(s))
 	return hex.EncodeToString(h[:])
-}
-
-// GetTimeStamp returns the current Unix timestamp (seconds or milliseconds).
-func GetTimeStamp(seconds bool) string {
-	if seconds {
-		return fmt.Sprintf("%d", time.Now().Unix())
-	}
-	return fmt.Sprintf("%d", time.Now().UnixMilli())
 }
 
 // mixinKeyEncTab is Bilibili's WBI mixin key index table (upstream BBDownUtil.GetMixinKey).
