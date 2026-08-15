@@ -19,6 +19,41 @@ var cookieAttributeNames = map[string]bool{
 	"size":        true,
 }
 
+// canonicalCookieNames maps lowercase cookie names to bilibili's canonical
+// casing. The passport callback URL / Set-Cookie headers can deliver lowercase
+// names (e.g. "sessdata"), which bilibili's nav API rejects case-sensitively:
+// the cookie must be stored in canonical case or the login check reports the
+// cookie as expired.
+var canonicalCookieNames = map[string]string{
+	"sessdata":          "SESSDATA",
+	"dedeuserid":        "DedeUserID",
+	"dedeuserid__ckmd5": "DedeUserID__ckMd5",
+}
+
+func canonicalName(name string) string {
+	if n, ok := canonicalCookieNames[strings.ToLower(name)]; ok {
+		return n
+	}
+	return name
+}
+
+// NormalizeCookieNames rewrites cookie field names to bilibili's canonical
+// casing (case-insensitive). Used when loading BBDown.data so cookies saved
+// with non-canonical case (older builds, hand-edited files) still work.
+func NormalizeCookieNames(cookieStr string) string {
+	parts := strings.Split(cookieStr, ";")
+	for i, p := range parts {
+		n, v, ok := strings.Cut(strings.TrimSpace(p), "=")
+		if !ok || n == "" {
+			continue
+		}
+		if cn, found := canonicalCookieNames[strings.ToLower(n)]; found {
+			parts[i] = cn + "=" + v
+		}
+	}
+	return strings.Join(parts, ";")
+}
+
 // MergeLoginCookies merges cookies from a callback URL query string with
 // Set-Cookie header values (upstream MergeLoginCookies): query k=v pairs and
 // Set-Cookie fields are combined case-insensitively (later wins), cookie
@@ -76,11 +111,11 @@ func MergeLoginCookies(cookieQuery string, setCookies []string) string {
 			continue
 		}
 		seen[lname] = true
-		ordered = append(ordered, name+"="+fields[lname])
+		ordered = append(ordered, canonicalName(name)+"="+fields[lname])
 	}
 	for name, value := range fields {
 		if !seen[name] {
-			ordered = append(ordered, name+"="+value)
+			ordered = append(ordered, canonicalName(name)+"="+value)
 		}
 	}
 	return strings.Join(ordered, ";")

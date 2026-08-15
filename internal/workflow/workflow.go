@@ -19,6 +19,7 @@ import (
 	"github.com/QC3284/BBDown/internal/drm"
 	"github.com/QC3284/BBDown/internal/entity"
 	"github.com/QC3284/BBDown/internal/fetcher"
+	"github.com/QC3284/BBDown/internal/login"
 	"github.com/QC3284/BBDown/internal/muxer"
 	"github.com/QC3284/BBDown/internal/parser"
 	"github.com/QC3284/BBDown/internal/util"
@@ -1039,7 +1040,9 @@ func (w *Workflow) loadCredentials() error {
 		if err == nil {
 			util.Log("加载本地cookie...")
 			util.LogDebug("文件路径：%s", filepath.Join(appDir, "BBDown.data"))
-			w.Cfg.Cookie = strings.TrimSpace(string(data))
+			// 归一化字段名大小写：护照回调可能给出小写 sessdata 等字段，
+			// bilibili nav 接口对大小写敏感，小写会被误判为 Cookie 已过期。
+			w.Cfg.Cookie = login.NormalizeCookieNames(strings.TrimSpace(string(data)))
 		}
 	}
 	if w.Cfg.AccessToken == "" && w.Cfg.UseTvAPI {
