@@ -568,24 +568,40 @@ func renderAggregateProgress(counter *atomic.Int64, total int64, done chan struc
 	defer ticker.Stop()
 	chars := "|/-\\"
 	animIdx := 0
-	for {
-		select {
-		case <-done:
-			return
-		case <-ticker.C:
-		}
+	lastBytes := int64(0)
+	lastTime := time.Now()
+	speed := ""
+	render := func() {
 		cur := counter.Load()
+		now := time.Now()
+		if elapsed := now.Sub(lastTime).Seconds(); elapsed >= 1.0 {
+			delta := cur - lastBytes
+			if delta > 0 {
+				speed = " " + formatSpeed(float64(delta)) + "/s"
+			}
+			lastBytes = cur
+			lastTime = now
+		}
 		pct := float64(cur) / float64(total)
 		if pct > 1 {
 			pct = 1
 		}
 		blocks := int(pct * 40)
 		bar := strings.Repeat("#", blocks) + strings.Repeat("-", 40-blocks)
-		fmt.Printf("                            [%s] %6.2f%% %c\r", bar, pct*100, chars[animIdx%len(chars)])
+		fmt.Printf("                            [%s] %6.2f%% %c%s\r", bar, pct*100, chars[animIdx%len(chars)], speed)
 		animIdx++
-		if cur >= total && total > 0 {
+	}
+
+	// 立即绘制首帧；结束时补一帧最终状态(100%)并换行（与单线程进度条一致）。
+	render()
+	for {
+		select {
+		case <-done:
+			render()
 			fmt.Print("\n")
 			return
+		case <-ticker.C:
+			render()
 		}
 	}
 }

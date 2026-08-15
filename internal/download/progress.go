@@ -59,13 +59,7 @@ func (pr *progressReader) renderLoop() {
 	defer ticker.Stop()
 	animIdx := 0
 
-	for {
-		select {
-		case <-pr.done:
-			return
-		case <-ticker.C:
-		}
-
+	render := func() {
 		current := atomic.LoadInt64(&pr.current)
 		now := time.Now()
 		elapsed := now.Sub(pr.lastTime).Seconds()
@@ -100,10 +94,19 @@ func (pr *progressReader) renderLoop() {
 
 		fmt.Fprintf(os.Stdout, "                            [%s] %6.2f%% %c%s\r",
 			string(bar), pct*100, anim, pr.speed)
+	}
 
-		if current >= pr.total && pr.total > 0 {
+	// 立即绘制首帧：下载若在首个 tick(125ms) 前完成，进度条也不至于完全不可见。
+	render()
+	for {
+		select {
+		case <-pr.done:
+			// 结束前补一帧最终状态(100%)并换行，快速下载也能看到完整进度条。
+			render()
 			fmt.Fprint(os.Stdout, "\n")
 			return
+		case <-ticker.C:
+			render()
 		}
 	}
 }
