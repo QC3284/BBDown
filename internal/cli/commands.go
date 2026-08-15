@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -77,7 +79,12 @@ var serveCmd = &cobra.Command{
 		// Fire-and-forget update check (upstream ServeCommand).
 		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v1.6.11")
 
-		return srv.Run(ctx)
+		err := srv.Run(ctx)
+		if errors.Is(err, http.ErrServerClosed) {
+			// Ctrl+C 正常关停，不算错误。
+			return nil
+		}
+		return err
 	},
 }
 
@@ -118,7 +125,7 @@ var liveCmd = &cobra.Command{
 
 		recorded, err := live.DownloadToFile(ctx, roomID, outPath, client)
 		if err != nil {
-			return err
+			return silenceOnCancel(cmd, err)
 		}
 		if !recorded {
 			util.Log("未录制到任何内容")
@@ -147,7 +154,7 @@ var articleCmd = &cobra.Command{
 		client := buildHTTPClient(config.MyOption{})
 		a, err := article.Fetch(ctx, client, cvID)
 		if err != nil {
-			return err
+			return silenceOnCancel(cmd, err)
 		}
 		path := optArticleOutput
 		if path == "" {
@@ -275,6 +282,9 @@ func runWatchLater(cmd *cobra.Command, args []string) error {
 		opt.WorkDir = cfg.WorkDir
 		opt.Wbi = watchLaterWbi
 		if err := workflow.New(opt, client).Run(ctx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return silenceOnCancel(cmd, err)
+			}
 			failed++
 			util.LogWarn("av%s 下载失败（继续下一个）: %v", t.Aid, err)
 			continue
@@ -351,6 +361,9 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 
 	factory := fetcher.NewFactory(client, cfg.UseIntlAPI, wbi, cfg.Cookie, cfg.Host, cfg.EpHost, cfg.AccessToken)
 	for _, sub := range subs {
+		if ctx.Err() != nil {
+			return silenceOnCancel(cmd, ctx.Err())
+		}
 		util.Log("检查订阅: %s (%s)", sub.Name, sub.Target)
 		resolved, err := workflow.ResolveURL(ctx, client, sub.Target)
 		if err != nil {

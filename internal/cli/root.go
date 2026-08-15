@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -132,9 +133,25 @@ func Execute() {
 	}
 
 	if err := rootCmd.Execute(); err != nil {
+		// Ctrl+C 取消：对齐上游 Console_CancelKeyPress —— 提示后正常退出(0)，
+		// 不打印 usage。
+		if errors.Is(err, context.Canceled) {
+			util.LogWarn("Force Exit...")
+			os.Exit(0)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// silenceOnCancel 在错误是用户 Ctrl+C 取消时，屏蔽 cobra 自带的 "Error: ..."
+// 与 usage 输出；由 Execute 统一打印 "Force Exit..." 并以 0 退出。
+func silenceOnCancel(cmd *cobra.Command, err error) error {
+	if errors.Is(err, context.Canceled) {
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+	}
+	return err
 }
 
 // normalizeCliArgs maps "-help"/"-?" to "--help" and "-version" to "--version"
@@ -320,5 +337,11 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	return wf.Run(ctx)
+	err := wf.Run(ctx)
+	// Ctrl+C 取消：静默 cobra 的 "Error:" 与 usage 输出，由 Execute 统一提示。
+	if errors.Is(err, context.Canceled) {
+		cmd.SilenceErrors = true
+		cmd.SilenceUsage = true
+	}
+	return err
 }
