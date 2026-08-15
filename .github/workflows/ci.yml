@@ -24,7 +24,13 @@ jobs:
           cache: true
 
       - name: gofmt check
-        run: test -z "$(gofmt -l cmd internal)"
+        run: |
+          files="$(gofmt -l cmd internal)"
+          if [ -n "$files" ]; then
+            echo "以下文件未通过 gofmt:"
+            echo "$files"
+            exit 1
+          fi
         shell: bash
 
       - name: go vet
