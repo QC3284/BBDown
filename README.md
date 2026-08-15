@@ -220,6 +220,11 @@ CLI 选项、默认值、API 端点、解析/下载/混流行为均已对齐；�
 
 ## License
 
-MIT © 2020 [nilaoda](https://github.com/nilaoda), 2025 [AliverAnme](https://github.com/aliveranme), 2026 [QC3284](https://github.com/QC3284)
+本项目（Go 重写）以 MIT 协议发布，完整文本见 [LICENSE](LICENSE)。版权声明：
 
-Go 重写同样以 MIT 协议发布。第三方依赖的许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+- © 2020 [nilaoda](https://github.com/nilaoda)（原作者）
+- © 2025 [AliverAnme](https://github.com/aliveranme)（上游维护者）
+- © 2026 [QC3284](https://github.com/QC3284)（Go 重写）
+
+所链接的第三方库均采用宽松许可证（MIT / Apache-2.0 / BSD-3-Clause），无 GPL 系依赖；
+其完整许可证文本汇总于 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
