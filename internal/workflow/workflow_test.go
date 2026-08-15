@@ -18,7 +18,7 @@ func TestParsePageSelection(t *testing.T) {
 		{"10-1", nil, true}, // start > end must abort (upstream)
 		{"1-3-5", nil, true},
 		{"abc", nil, true},
-		{"-5", []string{"-5"}, false}, // upstream: parses as a token
+		{"-5", nil, true}, // invalid: clear error instead of upstream token quirk
 		{"1,,2", []string{"1", "2"}, false},
 	}
 	for _, c := range cases {

@@ -319,25 +319,28 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		title = "_" + title
 	}
 
-	maxRetries := w.Cfg.RetryCount
-	if maxRetries < 1 {
-		maxRetries = 3
-	}
+	// Page-level retry is fixed at 3 (upstream); per-request retries live in the
+	// downloader and honor --retry-count/--retry-delay.
+	const pageRetryLimit = 3
 	retryDelay := time.Duration(w.Cfg.RetryDelay) * time.Millisecond
 	if retryDelay <= 0 {
 		retryDelay = 3 * time.Second
 	}
-	for retry := 0; retry < maxRetries; retry++ {
+	for retry := 0; retry < pageRetryLimit; retry++ {
+		// Fetch chapter/view points (upstream FetchPointsAsync; failure degrades
+		// to a warning and an empty chapter list).
+		page.Points = fetchPoints(ctx, w.HTTPClient, page.Cid, page.Aid)
+
 		// Parse tracks
 		result, err := p.ExtractTracks(ctx, aidOri, page.Aid, page.Cid, page.Epid,
 			w.Cfg.UseTvAPI, w.Cfg.UseIntlAPI, w.Cfg.UseAppAPI, firstEncoding, w.Cfg.DecryptDrm, "")
 		if err != nil {
-			retry := retry + 1
-			if retry >= maxRetries {
-				util.LogError("P%d 解析失败（重试%d次后）: %v", page.Index, retry, err)
+			attempt := retry + 1
+			if attempt >= pageRetryLimit {
+				util.LogError("P%d 解析失败（重试%d次后）: %v", page.Index, attempt, err)
 				return false
 			}
-			util.LogWarn("解析异常, 3秒后重试... (%d/%d)", retry, maxRetries)
+			util.LogWarn("解析异常, %v 后重试... (%d/%d)", retryDelay, attempt, pageRetryLimit)
 			select {
 			case <-ctx.Done():
 				return false
@@ -591,35 +594,105 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			}
 		}
 
-		// Video
+		// Media output paths (dash downloads or FLV merge fill these).
 		videoPath := ""
+		audioPath := ""
+
+		// FLV 分段流 (upstream flv branch): 视频轨道没有 base_url 时使用 durl 分段。
+		if selectedVideo != nil && selectedVideo.BaseURL == "" && len(result.Clips) > 0 && len(result.Dfns) > 0 {
+			if w.Cfg.DecryptDrm {
+				util.LogError("此视频需要大会员登录才能获取完整DRM内容。")
+				util.LogError("请先运行: BBDown login  或使用 --cookie 参数")
+				return false
+			}
+			if w.Cfg.Interactive {
+				for i, q := range result.Dfns {
+					util.LogColorNoTime("%d.%s", i, config.QualityMap[q])
+				}
+				fmt.Print("请选择最想要的清晰度(输入序号): ")
+				fmt.Print("\033[36m")
+				qi := readIntSafe(ctx)
+				fmt.Print("\033[0m")
+				if qi >= len(result.Dfns) || qi < 0 {
+					qi = 0
+				}
+				reResult, err := p.ExtractTracks(ctx, aidOri, page.Aid, page.Cid, page.Epid,
+					w.Cfg.UseTvAPI, w.Cfg.UseIntlAPI, w.Cfg.UseAppAPI, firstEncoding, w.Cfg.DecryptDrm, result.Dfns[qi])
+				if err != nil {
+					util.LogError("P%d 重新解析失败: %v", page.Index, err)
+					return false
+				}
+				result = reResult
+			}
+
+			// 下载各分段并合并 (upstream: {aid}/{aid}.P{n}.{cid}.{i:pad}.mp4)
+			width := len(strconv.Itoa(len(result.Clips)))
+			var segFiles []string
+			for i, link := range result.Clips {
+				segPath := filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.%s.mp4", page.Aid, page.Index, page.Cid, fmt.Sprintf("%0*d", width, i)))
+				util.Log("开始下载P%d视频, 片段(%d/%d)...", page.Index, i+1, len(result.Clips))
+				if err := download.DownloadFile(ctx, link, segPath, dlCfg); err != nil {
+					util.LogError("P%d 片段下载失败: %v", page.Index, err)
+					return false
+				}
+				segFiles = append(segFiles, segPath)
+			}
+			util.Log("下载P%d完毕", page.Index)
+			util.Log("开始合并分段...")
+			videoPath = filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.mp4", page.Aid, page.Index, page.Cid))
+			if err := muxer.MergeFLV(ctx, segFiles, videoPath); err != nil {
+				util.LogError("P%d 合并分段失败: %v", page.Index, err)
+				return false
+			}
+			if w.Cfg.SkipMux {
+				if w.OnSaved != nil {
+					w.OnSaved(videoPath)
+				}
+				return true
+			}
+			audioPath = "" // FLV 已包含音轨
+			// 跳过下方的 dash 视频/音频下载块
+			selectedVideo = nil
+			selectedAudio = nil
+		}
+
+		// Video
 		if selectedVideo != nil {
 			videoPath = filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.mp4", page.Aid, page.Index, page.Cid))
 			os.MkdirAll(page.Aid, 0755)
 			util.Log("开始下载P%d视频...", page.Index)
 			if err := download.DownloadFile(ctx, selectedVideo.BaseURL, videoPath, dlCfg); err != nil {
-				if retry++; retry >= maxRetries {
+				// Per-request retries already happened inside the downloader;
+				// the remaining page-level retry re-parses playurl and retries
+				// the whole page (upstream retries the page body up to 3 times).
+				attempt := retry + 1
+				if attempt >= pageRetryLimit {
 					util.LogError("P%d 视频下载失败: %v", page.Index, err)
 					return false
 				}
-				util.LogWarn("下载异常, 3秒后重试...")
-				time.Sleep(retryDelay)
+				util.LogWarn("下载异常, %v 后重试... (%d/%d)", retryDelay, attempt, pageRetryLimit)
+				if !sleepCtxLocal(ctx, retryDelay) {
+					return false
+				}
 				continue
 			}
 		}
 
 		// Audio
-		audioPath := ""
 		if selectedAudio != nil {
 			audioPath = filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.m4a", page.Aid, page.Index, page.Cid))
 			os.MkdirAll(page.Aid, 0755)
 			util.Log("开始下载P%d音频...", page.Index)
 			if err := download.DownloadFile(ctx, selectedAudio.BaseURL, audioPath, dlCfg); err != nil {
-				if retry++; retry >= maxRetries {
+				attempt := retry + 1
+				if attempt >= pageRetryLimit {
 					util.LogError("P%d 音频下载失败: %v", page.Index, err)
 					return false
 				}
-				time.Sleep(retryDelay)
+				util.LogWarn("下载异常, %v 后重试... (%d/%d)", retryDelay, attempt, pageRetryLimit)
+				if !sleepCtxLocal(ctx, retryDelay) {
+					return false
+				}
 				continue
 			}
 		}
@@ -644,6 +717,12 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				util.LogError("P%d DRM解密失败: %v", page.Index, err)
 				return false
 			}
+		}
+
+		// Dolby Vision with ffmpeg < 5.0: switch to mp4box (upstream).
+		if selectedVideo != nil && selectedVideo.Dfn == config.QualityMap["126"] && !w.Cfg.UseMP4box && !muxer.CheckFFmpegDOVI() {
+			util.LogWarn("检测到杜比视界清晰度且您的ffmpeg版本小于5.0,将使用mp4box混流...")
+			w.Cfg.UseMP4box = true
 		}
 
 		// Mux or save directly
@@ -675,14 +754,23 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			os.Rename(audioPath, savePath)
 		}
 
-		// Cleanup temp files
+		// Cleanup temp files (skip-mux keeps the raw streams as products, upstream).
 		util.Log("清理临时文件...")
 		time.Sleep(200 * time.Millisecond)
-		if videoPath != "" {
-			os.Remove(videoPath)
-		}
-		if audioPath != "" {
-			os.Remove(audioPath)
+		if !w.Cfg.SkipMux {
+			if videoPath != "" {
+				os.Remove(videoPath)
+			}
+			if audioPath != "" {
+				os.Remove(audioPath)
+			}
+		} else if w.OnSaved != nil {
+			if videoPath != "" {
+				w.OnSaved(videoPath)
+			}
+			if audioPath != "" {
+				w.OnSaved(audioPath)
+			}
 		}
 		for _, m := range backgroundMaterial {
 			os.Remove(m.Path)
@@ -780,6 +868,70 @@ func (w *Workflow) decryptDrm(ctx context.Context, result *entity.ParsedResult, 
 		util.Log("音频解密完成")
 	}
 	return nil
+}
+
+// fetchPoints fetches chapter/view points for a page (upstream FetchPointsAsync).
+// Failures degrade to a warning and an empty list.
+func fetchPoints(ctx context.Context, client *util.HTTPClient, cid, aid string) []entity.ViewPoint {
+	var points []entity.ViewPoint
+	api := fmt.Sprintf("https://api.bilibili.com/x/player/wbi/v2?cid=%s&aid=%s", cid, aid)
+	resp, err := client.GetWebSource(ctx, api)
+	if err != nil {
+		return points
+	}
+	var root map[string]interface{}
+	if err := json.Unmarshal([]byte(resp), &root); err != nil {
+		util.LogWarn("获取章节信息失败 (cid=%s, aid=%s): %v", cid, aid, err)
+		return points
+	}
+	data, ok := root["data"].(map[string]interface{})
+	if !ok {
+		return points
+	}
+	viewPoints, ok := data["view_points"].([]interface{})
+	if !ok {
+		return points
+	}
+	for _, vp := range viewPoints {
+		vm, ok := vp.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		points = append(points, entity.ViewPoint{
+			Title: getStr(vm, "content"),
+			Start: getInt(vm, "from"),
+			End:   getInt(vm, "to"),
+		})
+	}
+	return points
+}
+
+// sleepCtxLocal sleeps with context awareness (workflow-local variant).
+func sleepCtxLocal(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+// getStr / getInt are small JSON helpers for map[string]interface{} data.
+func getStr(m map[string]interface{}, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
+func getInt(m map[string]interface{}, key string) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case string:
+		var n int
+		fmt.Sscanf(v, "%d", &n)
+		return n
+	}
+	return 0
 }
 
 // maskSecret shows only the first 8 characters of a secret value.
@@ -1135,7 +1287,11 @@ func parsePageSelection(expr string) ([]string, error) {
 		// (invalid) token instead of a range (upstream IndexOf('-', 1)).
 		dashIdx := strings.Index(part[1:], "-")
 		if dashIdx < 0 {
-			if _, err := strconv.Atoi(part); err != nil {
+			n, err := strconv.Atoi(part)
+			// Reject negatives/non-numeric ("-5" upstream parsed as a token and
+			// only failed later with a confusing error; a clear message is the
+			// same effect for invalid input).
+			if err != nil || n < 1 {
 				return nil, fmt.Errorf("无法识别的分P范围 %q", part)
 			}
 			result = append(result, part)
@@ -1143,6 +1299,9 @@ func parsePageSelection(expr string) ([]string, error) {
 		}
 		var s, e int
 		if _, err := fmt.Sscanf(part, "%d-%d", &s, &e); err != nil || fmt.Sprintf("%d-%d", s, e) != part {
+			return nil, fmt.Errorf("无法识别的分P范围 %q", part)
+		}
+		if s < 1 || e < 1 {
 			return nil, fmt.Errorf("无法识别的分P范围 %q", part)
 		}
 		if s > e {

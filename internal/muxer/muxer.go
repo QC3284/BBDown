@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -184,6 +186,26 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 	}
 	return err
 }
+
+// CheckFFmpegDOVI reports whether ffmpeg supports Dolby Vision muxing
+// (libavutil major >= 5, upstream CheckFFmpegDOVI).
+func CheckFFmpegDOVI() bool {
+	out, err := exec.Command(FFMPEG, "-version").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	m := doviVersionRegex.FindStringSubmatch(string(out))
+	if m == nil {
+		return false
+	}
+	major, err := strconv.Atoi(m[1])
+	if err != nil {
+		return false
+	}
+	return major >= 5
+}
+
+var doviVersionRegex = regexp.MustCompile(`libavutils+(d+). +(d+).`)
 
 // ffmpegMetaString builds an FFMETADATA chapters file (upstream GetFFmpegMetaString).
 func ffmpegMetaString(points []entity.ViewPoint) string {

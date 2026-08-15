@@ -2,6 +2,7 @@ package download
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,6 +73,24 @@ func (c DownloadConfig) retryDelay() time.Duration {
 // the caller falls back to single-threaded download (upstream NotSupportedException).
 var ErrRangeNotSupported = fmt.Errorf("服务器不支持 Range 请求")
 
+// probeResult is the outcome of a HEAD probe of a download URL.
+type probeResult struct {
+	size         int64
+	ranges       bool
+	etag         string
+	lastModified string
+}
+
+// resumeManifest identifies a remote resource so a partial .tmp file can be
+// resumed safely (an untrusted/stale prefix is discarded instead of producing
+// a corrupted file). Stored next to the .tmp file.
+type resumeManifest struct {
+	URL          string `json:"url"`
+	Size         int64  `json:"size"`
+	ETag         string `json:"etag,omitempty"`
+	LastModified string `json:"last_modified,omitempty"`
+}
+
 // DownloadFile downloads a URL to a local file, with optional multi-threading,
 // resume support and retries (mirrors upstream BBDownDownloadUtil).
 func DownloadFile(ctx context.Context, url, destPath string, cfg DownloadConfig) error {
@@ -88,23 +107,23 @@ func DownloadFile(ctx context.Context, url, destPath string, cfg DownloadConfig)
 		multi = false
 	}
 
-	size, ranges, err := probeFile(ctx, url, cfg)
-	if err == nil && size > 0 {
-		if info, statErr := os.Stat(destPath); statErr == nil && info.Size() == size {
+	pr, err := probeFile(ctx, url, cfg)
+	if err == nil && pr.size > 0 {
+		if info, statErr := os.Stat(destPath); statErr == nil && info.Size() == pr.size {
 			util.Log("%s 已存在, 跳过下载...", destPath)
 			return nil
 		}
 	}
 
-	if multi && ranges && size > int64(cfg.segmentSize())*1024*1024 {
-		err := multiThreadDownload(ctx, url, destPath, size, cfg)
+	if multi && pr.ranges && pr.size > int64(cfg.segmentSize())*1024*1024 {
+		err := multiThreadDownload(ctx, url, destPath, pr.size, cfg)
 		if err == ErrRangeNotSupported {
 			util.LogWarn("服务器可能并不支持多线程下载, 请使用 --multi-thread false")
-			return singleDownload(ctx, url, destPath, size, cfg)
+			return singleDownload(ctx, url, destPath, pr, cfg)
 		}
 		return err
 	}
-	return singleDownload(ctx, url, destPath, size, cfg)
+	return singleDownload(ctx, url, destPath, pr, cfg)
 }
 
 // forceHTTPIfNeeded downgrades https to http only when the option is enabled
@@ -119,37 +138,77 @@ func forceHTTPIfNeeded(url string, force bool) string {
 	return strings.Replace(url, "https:", "http:", 1)
 }
 
-// probeFile issues a HEAD request and returns content length and whether the
-// server advertises byte-range support.
-func probeFile(ctx context.Context, url string, cfg DownloadConfig) (int64, bool, error) {
+// probeFile issues a HEAD request and returns content length, whether the
+// server advertises byte-range support, and validator headers for resume.
+func probeFile(ctx context.Context, url string, cfg DownloadConfig) (probeResult, error) {
+	pr := probeResult{}
 	client := cfg.Client.DownloadClient()
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
-		return 0, false, err
+		return pr, err
 	}
 	req.Header.Set("Referer", "https://www.bilibili.com")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, false, err
+		return pr, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return 0, false, fmt.Errorf("HEAD failed: HTTP %d", resp.StatusCode)
+		return pr, fmt.Errorf("HEAD failed: HTTP %d", resp.StatusCode)
 	}
-	ranges := strings.Contains(strings.ToLower(resp.Header.Get("Accept-Ranges")), "bytes")
-	return resp.ContentLength, ranges, nil
+	pr.size = resp.ContentLength
+	pr.ranges = strings.Contains(strings.ToLower(resp.Header.Get("Accept-Ranges")), "bytes")
+	pr.etag = resp.Header.Get("ETag")
+	pr.lastModified = resp.Header.Get("Last-Modified")
+	return pr, nil
 }
 
 // singleDownload downloads with resume support: partial data goes to dest+".tmp"
-// and is renamed on success; an existing .tmp is resumed via Range when the
-// server supports it (upstream resume semantics).
-func singleDownload(ctx context.Context, url, destPath string, size int64, cfg DownloadConfig) error {
+// and is renamed on success. An existing .tmp is resumed via Range only when a
+// sidecar manifest proves the remote resource identity matches, otherwise the
+// stale prefix is discarded (upstream resume-manifest semantics).
+func singleDownload(ctx context.Context, url, destPath string, pr probeResult, cfg DownloadConfig) error {
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	tmp := destPath + ".tmp"
+	metaPath := tmp + ".meta"
+
+	readManifest := func() (resumeManifest, bool) {
+		var m resumeManifest
+		data, err := os.ReadFile(metaPath)
+		if err != nil || json.Unmarshal(data, &m) != nil {
+			return m, false
+		}
+		return m, true
+	}
+
+	// identityMatches reports whether the recorded resource identity matches the
+	// current probe: the URL must match, and any validator the server provides
+	// must equal the recorded one.
+	identityMatches := func(m resumeManifest) bool {
+		if m.URL != url {
+			return false
+		}
+		if pr.etag != "" && m.ETag != pr.etag {
+			return false
+		}
+		if pr.lastModified != "" && m.LastModified != pr.lastModified {
+			return false
+		}
+		return true
+	}
+
+	// Write the manifest BEFORE the first byte: an interrupted .tmp must carry a
+	// manifest or the next run cannot trust it and has to redownload.
+	if pr.size > 0 {
+		m := resumeManifest{URL: url, Size: pr.size, ETag: pr.etag, LastModified: pr.lastModified}
+		if data, err := json.Marshal(m); err == nil {
+			os.WriteFile(metaPath, data, 0o644)
+		}
+	}
 
 	lastErr := fmt.Errorf("download failed")
 	for attempt := 0; attempt < cfg.retryCount(); attempt++ {
@@ -162,17 +221,33 @@ func singleDownload(ctx context.Context, url, destPath string, size int64, cfg D
 		}
 
 		var offset int64
-		if size > 0 {
+		var ifRange string
+		if pr.size > 0 {
 			if info, err := os.Stat(tmp); err == nil {
-				if info.Size() == size {
-					// Already fully downloaded previously.
+				m, ok := readManifest()
+				trusted := ok && identityMatches(m)
+				switch {
+				case info.Size() == pr.size && trusted:
+					// Complete temp file with matching identity: adopt it.
+					util.LogDebug("断点续传: 检测到已完整下载的临时文件且资源身份一致, 直接移动")
 					if err := os.Rename(tmp, destPath); err != nil {
 						return err
 					}
+					os.Remove(metaPath)
 					return nil
-				}
-				if info.Size() > 0 && info.Size() < size {
+				case info.Size() > 0 && info.Size() < pr.size && trusted:
 					offset = info.Size()
+					if m.ETag != "" {
+						ifRange = m.ETag
+					} else if m.LastModified != "" {
+						ifRange = m.LastModified
+					}
+					util.LogDebug("断点续传: 从现有临时文件 %d 字节处继续（资源身份一致）", offset)
+				case !trusted || info.Size() > pr.size:
+					// Stale prefix / changed resource / oversized tmp: discard.
+					util.LogDebug("断点续传: 临时文件资源身份不可信, 删除后完整重下")
+					os.Remove(tmp)
+					os.Remove(metaPath)
 				}
 			}
 		}
@@ -190,6 +265,11 @@ func singleDownload(ctx context.Context, url, destPath string, size int64, cfg D
 			}
 			if offset > 0 {
 				req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+				if ifRange != "" {
+					// Let the server confirm the local prefix still belongs to this
+					// resource; a 200/412 response makes us restart/rewrite below.
+					req.Header.Set("If-Range", ifRange)
+				}
 			}
 
 			resp, err := client.Do(req)
@@ -210,7 +290,7 @@ func singleDownload(ctx context.Context, url, destPath string, size int64, cfg D
 					}
 				}
 			case resp.StatusCode >= 200 && resp.StatusCode < 300:
-				// Server sent the full body: truncate any partial data.
+				// Full body (no range support or If-Range mismatch): restart.
 				offset = 0
 				if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
 					return err
@@ -229,9 +309,9 @@ func singleDownload(ctx context.Context, url, destPath string, size int64, cfg D
 			}
 
 			if isTerminalOut() && resp.ContentLength > 0 {
-				pr := newProgressReader(resp.Body, resp.ContentLength+offset)
-				defer pr.Close()
-				_, err = io.Copy(out, pr)
+				pr2 := newProgressReader(resp.Body, resp.ContentLength+offset)
+				defer pr2.Close()
+				_, err = io.Copy(out, pr2)
 			} else {
 				_, err = io.Copy(out, resp.Body)
 			}
@@ -245,12 +325,30 @@ func singleDownload(ctx context.Context, url, destPath string, size int64, cfg D
 			continue
 		}
 
+		// Verify the final length before adopting the file.
+		if pr.size > 0 {
+			if info, statErr := os.Stat(tmp); statErr != nil || info.Size() != pr.size {
+				lastErr = fmt.Errorf("下载产物长度(%d)与服务器声明(%d)不符", fileSizeOrZero(tmp), pr.size)
+				continue
+			}
+		}
+
 		if err := os.Rename(tmp, destPath); err != nil {
 			return err
 		}
+		os.Remove(metaPath)
 		return nil
 	}
 	return lastErr
+}
+
+// fileSizeOrZero returns the size of a file, or 0 on error.
+func fileSizeOrZero(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }
 
 // rangeStart parses the start offset from a Content-Range header ("bytes N-M/S").
