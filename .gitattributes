@@ -1,0 +1,11 @@
+# Go 源码强制 LF 行尾：Windows CI 运行器 checkout 默认 autocrlf=true 会把
+# 文件检出为 CRLF，导致 gofmt -l 报"未格式化"而误判 CI 失败。
+*.go text eol=lf
+
+# 其余文本文件保持 Git 默认行为
+*.md text
+*.yml text
+*.yaml text
+*.json text
+*.mod text
+*.sum text
