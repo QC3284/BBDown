@@ -326,6 +326,9 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	// Build MyOption from flags
 	cfg := buildMyOption()
 
+	// APP 接口不识别 WEB 登录 Cookie：登录用户加 -a 看不到高清时给出提示。
+	warnAppAPIWithoutToken(cfg.UseAppAPI, cfg.AccessToken)
+
 	// Run the workflow
 	client := buildHTTPClient(cfg)
 

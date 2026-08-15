@@ -32,6 +32,14 @@ var (
 	subCheckWbi   string
 )
 
+// warnAppAPIWithoutToken 提示 APP 接口不识别 WEB 登录 Cookie（与上游行为一致）：
+// 登录用户加 -a 看不到高清属于预期行为，需要 APP token 或改用默认 WEB 接口。
+func warnAppAPIWithoutToken(useAppAPI bool, token string) {
+	if useAppAPI && strings.TrimSpace(token) == "" {
+		util.LogWarn("提示: APP 接口(-a)不识别 WEB 登录 Cookie，登录后也不会解锁更高画质；如需高清请使用默认 WEB 接口，或通过 --access-token 传入 APP token")
+	}
+}
+
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "通过APP扫描二维码以登录您的WEB账号",
@@ -247,6 +255,7 @@ func runWatchLater(cmd *cobra.Command, args []string) error {
 	cfg.UseAppAPI = optUseAppAPI
 	cfg.UseIntlAPI = optUseIntlAPI
 	cfg.WorkDir = optWorkDir
+	warnAppAPIWithoutToken(cfg.UseAppAPI, cfg.AccessToken)
 
 	client := buildHTTPClient(cfg)
 	wbi, err := workflow.InitSession(ctx, &cfg, client)
@@ -356,6 +365,7 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 	cfg.UseAppAPI = optUseAppAPI
 	cfg.UseIntlAPI = optUseIntlAPI
 	cfg.WorkDir = optWorkDir
+	warnAppAPIWithoutToken(cfg.UseAppAPI, cfg.AccessToken)
 	client := buildHTTPClient(cfg)
 	wbi, err := workflow.InitSession(ctx, &cfg, client)
 	if err != nil {
