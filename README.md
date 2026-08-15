@@ -226,5 +226,6 @@ CLI 选项、默认值、API 端点、解析/下载/混流行为均已对齐；�
 - © 2025 [AliverAnme](https://github.com/aliveranme)（上游维护者）
 - © 2026 [QC3284](https://github.com/QC3284)（Go 重写）
 
-所链接的第三方库均采用宽松许可证（MIT / Apache-2.0 / BSD-3-Clause），无 GPL 系依赖；
-其完整许可证文本汇总于 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+所链接的第三方库均采用宽松许可证（SPDX：MIT / Apache-2.0 / BSD-3-Clause），无 GPL 系依赖。
+依赖清单与再分发要求见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，
+各许可证逐字原文见 [LICENSES/](LICENSES/) 目录。
