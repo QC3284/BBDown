@@ -1,5 +1,4 @@
 # Maintainer: QC3284 <qc3284@github>
-# Go 重写版 BBDown — 从 GitHub 源码构建 (-git 包)
 pkgname=bbdown-go-git
 pkgver=1.6.11
 pkgrel=1
@@ -9,9 +8,9 @@ url="https://github.com/QC3284/BBDown"
 license=('MIT')
 depends=("ffmpeg")
 makedepends=("git" "go")
+options=(!debug)
 provides=("bbdown")
-# 与所有其他 bbdown 版本冲突
-conflicts=("bbdown" "bbdown-bin" "bbdown-git")
+conflicts=("bbdown" "bbdown-bin" "bbdown-git" "bbdown-debug" "bbdown-bin-debug" "bbdown-git-debug")
 source=("git+https://github.com/QC3284/BBDown.git#branch=main")
 sha256sums=('SKIP')
 
@@ -22,7 +21,7 @@ pkgver() {
 
 build() {
     cd "$srcdir/BBDown"
-    go build -ldflags="-s -w" -o BBDown ./cmd/bbdown/
+    go build -trimpath -ldflags="-s -w" -o BBDown ./cmd/bbdown/
 }
 
 package() {
