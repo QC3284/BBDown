@@ -1,6 +1,7 @@
 package login
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -24,11 +25,11 @@ const (
 )
 
 // LoginWeb performs WEB account login via QR code scanning.
-func LoginWeb(client *util.HTTPClient) error {
+func LoginWeb(ctx context.Context, client *util.HTTPClient) error {
 	util.Log("获取登录地址...")
 
 	// Step 1: Generate QR code
-	resp, err := client.GetWebSource(nil, webGenerateURL)
+	resp, err := client.GetWebSource(ctx, webGenerateURL)
 	if err != nil {
 		return fmt.Errorf("获取二维码失败: %w", err)
 	}
@@ -65,8 +66,11 @@ func LoginWeb(client *util.HTTPClient) error {
 	for {
 		time.Sleep(1 * time.Second)
 
-		pollResp, setCk, err := client.GetWebSourceWithSetCookies(nil, fmt.Sprintf(webPollURL, qrcodeKey))
+		pollResp, setCk, err := client.GetWebSourceWithSetCookies(ctx, fmt.Sprintf(webPollURL, qrcodeKey))
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			util.LogWarn("轮询失败: %v", err)
 			continue
 		}
@@ -131,7 +135,7 @@ func LoginWeb(client *util.HTTPClient) error {
 }
 
 // LoginTV performs TV account login via QR code scanning.
-func LoginTV(client *util.HTTPClient) error {
+func LoginTV(ctx context.Context, client *util.HTTPClient) error {
 	util.Log("获取TV登录地址...")
 
 	// Step 1: Build TV login parameters
@@ -142,7 +146,7 @@ func LoginTV(client *util.HTTPClient) error {
 	}
 
 	// Send auth_code request
-	respBytes, err := client.PostForm(nil, tvAuthURL, form)
+	respBytes, err := client.PostForm(ctx, tvAuthURL, form)
 	if err != nil {
 		return fmt.Errorf("获取TV认证码失败: %w", err)
 	}
@@ -184,8 +188,11 @@ func LoginTV(client *util.HTTPClient) error {
 			form.Set(k, v)
 		}
 
-		respBytes, err := client.PostForm(nil, tvPollURL, form)
+		respBytes, err := client.PostForm(ctx, tvPollURL, form)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			util.LogWarn("轮询失败: %v", err)
 			continue
 		}

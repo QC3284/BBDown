@@ -36,8 +36,10 @@ var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "通过APP扫描二维码以登录您的WEB账号",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
 		client := buildHTTPClient(config.MyOption{})
-		if err := login.LoginWeb(client); err != nil {
+		if err := login.LoginWeb(ctx, client); err != nil {
 			return err
 		}
 		util.Log("WEB 登录成功！")
@@ -49,8 +51,10 @@ var loginTVCmd = &cobra.Command{
 	Use:   "logintv",
 	Short: "通过APP扫描二维码以登录您的TV账号",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
 		client := buildHTTPClient(config.MyOption{})
-		if err := login.LoginTV(client); err != nil {
+		if err := login.LoginTV(ctx, client); err != nil {
 			return err
 		}
 		util.Log("TV 登录成功！")
