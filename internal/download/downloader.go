@@ -138,6 +138,13 @@ func forceHTTPIfNeeded(url string, force bool) string {
 	return strings.Replace(url, "https:", "http:", 1)
 }
 
+// needsBilibiliReferer mirrors upstream BBDownDownloadUtil: app/TV 平台
+// (platform=android*) 的下载 URL 不能携带 Referer，否则 CDN 返回 403；
+// web (pc) URL 则必须携带。
+func needsBilibiliReferer(url string) bool {
+	return !strings.Contains(url, "platform=android_tv_yst") && !strings.Contains(url, "platform=android")
+}
+
 // probeFile issues a HEAD request and returns content length, whether the
 // server advertises byte-range support, and validator headers for resume.
 func probeFile(ctx context.Context, url string, cfg DownloadConfig) (probeResult, error) {
@@ -147,7 +154,9 @@ func probeFile(ctx context.Context, url string, cfg DownloadConfig) (probeResult
 	if err != nil {
 		return pr, err
 	}
-	req.Header.Set("Referer", "https://www.bilibili.com")
+	if needsBilibiliReferer(url) {
+		req.Header.Set("Referer", "https://www.bilibili.com")
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -258,7 +267,9 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 			if err != nil {
 				return err
 			}
-			req.Header.Set("Referer", "https://www.bilibili.com")
+			if needsBilibiliReferer(url) {
+				req.Header.Set("Referer", "https://www.bilibili.com")
+			}
 			req.Header.Set("User-Agent", "Mozilla/5.0")
 			if cfg.Cookie != "" {
 				req.Header.Set("Cookie", cfg.Cookie)
@@ -502,7 +513,9 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 			if err != nil {
 				return 0, err
 			}
-			req.Header.Set("Referer", "https://www.bilibili.com")
+			if needsBilibiliReferer(url) {
+				req.Header.Set("Referer", "https://www.bilibili.com")
+			}
 			req.Header.Set("User-Agent", "Mozilla/5.0")
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", clip.from, clip.to))
 			if cfg.Cookie != "" {
@@ -626,7 +639,9 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 		defer stdin.Close()
 		var sb strings.Builder
 		sb.WriteString(url + "\n")
-		sb.WriteString("  header=Referer: https://www.bilibili.com\n")
+		if needsBilibiliReferer(url) {
+			sb.WriteString("  header=Referer: https://www.bilibili.com\n")
+		}
 		sb.WriteString("  header=User-Agent: Mozilla/5.0\n")
 		if cfg.Cookie != "" {
 			// aria2c input-file lines cannot contain newlines: sanitize so a
