@@ -2,8 +2,9 @@
 
 命令行式哔哩哔哩下载器。Bilibili Downloader.
 
-> **本分支为 Go 语言重写版本，与原 C# 版功能一致。**
-> 不会主动增加新功能，仅做行为对齐维护。
+> **本分支为 Go 语言重写版本，与上游 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.11）功能一致。**
+> 不主动增加新功能，仅做行为对齐维护；对齐以**效果一致**为准，
+> 上游明显不合理的小问题会以等价方式修正（详见下文"与上游的关系"）。
 > Go 重写由 AI 辅助完成。
 
 ## 安装
@@ -106,6 +107,8 @@ BBDown sub check
 | `--force-http` | 强制 HTTP 协议（默认关闭，mcdn 域名除外） |
 | `--comments` | 下载评论区（导出 .comments.json） |
 | `--thread-segment-size` | 多线程分片大小(MB，默认 20) |
+| `--save-archives-to-file` | 记录已下载 aid（`BBDown.archives`，`aid|` 格式） |
+| `--retry-count` / `--retry-delay` | 下载请求重试次数/间隔（默认 3 次 / 3000ms） |
 | `--config-file` | 指定配置文件（逐行参数文本，默认 `BBDown.config`） |
 | `--debug` | 输出调试日志 |
 | `-c, --cookie` | 设置 Cookie |
@@ -162,34 +165,45 @@ make test        # go test ./...
 
 ## 功能
 
-- 普通视频、番剧、课程、合集、收藏夹、UP 主全部投稿
-- 最高 8K / HDR / 杜比视界 / 杜比全景声
-- 多线程下载 + aria2c
-- 自动合并音视频（需 ffmpeg 或 mp4box）
-- 弹幕下载与过滤（XML / ASS）
-- 字幕下载（多 API 回退）
-- 二维码登录（WEB / TV，含 qrcode.png）
-- API 服务器模式（任务持久化、认证、限流、内网回调防护）
-- 直播录制（分段录制 + 断流自动重连 + ffmpeg 合成）
-- 专栏下载为 Markdown、评论区导出、稍后再看、订阅管理
-- 逐行参数配置文件（BBDown.config）
-- Widevine DRM 解密（含 mp4decrypt 执行）
+- 普通视频、番剧、课程、合集、收藏夹、UP 主全部投稿（合集/系列/收藏夹完整分页）
+- 最高 8K / HDR / 杜比视界 / 杜比全景声（杜比视界在 ffmpeg<5.0 时自动切换 mp4box 混流）
+- 三种解析模式：WEB（WBI 签名）/ APP（gRPC protobuf）/ TV / 国际版
+- 多线程下载（并发上限 8、Range 校验、分片重试）+ aria2c
+- 断点续传（`.tmp` + 资源身份清单，ETag/Last-Modified 校验，中断可安全续传）
+- 低画质 FLV 流分段下载与合并
+- 自动合并音视频（ffmpeg / mp4box，含章节、封面、多音轨、`creation_time` 元数据）
+- 弹幕下载与过滤（XML / ASS）、字幕下载（多 API 回退、145 项语言表）
+- 章节信息写入（`view_points`）
+- 二维码登录（WEB / TV，含 qrcode.png）、凭据脱敏日志
+- API 服务器模式（任务持久化、认证、限流、SSRF 回调防护）
+- 直播录制（分段录制 + 断流自动重连 + 指数退避 + ffmpeg 合成）
+- 专栏下载为 Markdown、评论区导出（.comments.json）、稍后再看、订阅管理
+- 逐行参数配置文件（`BBDown.config`）
+- Widevine DRM 解密（取钥 + mp4decrypt 执行 + 失败传播）
+- 启动时检查新版本（GitHub Releases）
 
 ## 与上游的关系
 
-基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown) Go 语言重写，行为完全对齐。
+基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.11）Go 语言重写。
+CLI 选项、默认值、API 端点、解析/下载/混流行为均已逐项对齐；对齐以**效果一致**为准，
+以下上游明显不合理之处以等价方式修正：
+
+- `-p -5` / `-p 0` 等非法分P直接报错（上游将其当作 token 拖延到"所选分P不存在"才失败）。
+- 番剧/国际版分P保留 API 返回的真实时长（上游硬编码 0，依赖 playurl 兜底）。
+- 更新检查失败仅输出 debug 日志（上游打 warning 打扰普通用户）。
+- 断点续传身份校验更保守（URL+ETag/Last-Modified 任一不符即重下，宁可不续传也不拼出损坏文件）。
 
 | 分支 | 内容 |
 |---|---|
 | `main` | Go 重写（当前分支） |
-| `master` | C# 原版 |
+| `master` | C# 原版快照 |
 
 ## 注意事项及警告
 
 - 本软件仅供学习交流，**请勿用于商业用途或传播下载内容**。
 - 使用本软件下载视频时，请遵守哔哩哔哩 [用户协议](https://www.bilibili.com/protocal/licence.html) 及相关法律法规。
 - 下载受版权保护的内容可能构成侵权，请仅下载您拥有合法权限的内容。
-- **本分支不会主动增加新功能**，仅保持与原 C# 版行为一致。
+- **本分支不会主动增加新功能**，仅保持与上游 C# 版功能一致（效果一致，见"与上游的关系"）。
 - 使用 `--cookie` 或 `--access-token` 时，凭据将以明文存储于本地文件，请注意保管。
 - **禁止将本软件用于任何违法用途**，使用者自行承担一切法律后果。
 
