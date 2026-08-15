@@ -31,6 +31,20 @@ func TestRSubString(t *testing.T) {
 	}
 }
 
+func TestNormalizeSubtitleLangKey(t *testing.T) {
+	cases := map[string]string{
+		"zh-hans": "zh-Hans",
+		"zh-CN":   "zh-CN",
+		"en-us":   "en-Us", // only the char after "-" is uppercased (upstream)
+		"ja":      "ja",
+	}
+	for in, want := range cases {
+		if got := normalizeSubtitleLangKey(in); got != want {
+			t.Errorf("normalizeSubtitleLangKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestMaskValue(t *testing.T) {
 	if MaskValue("") != "" {
 		t.Error("empty should stay empty")

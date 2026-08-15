@@ -113,6 +113,53 @@ BBDown sub check
 
 完整选项见 `BBDown --help`。
 
+### 配置文件
+
+默认位置为可执行文件同目录下的 `BBDown.config`（可用 `--config-file` 指定），
+逐行参数文本，与命令行参数同语法：
+
+```text
+# 注释以 # 开头
+--encoding-priority
+hevc,avc
+--skip-cover
+https://www.bilibili.com/video/BV1xx411c7mD
+```
+
+- 命令行显式给出的选项优先于配置文件；配置中的 URL 仅在命令行未提供目标时生效。
+- 子命令（login/serve/live/article/watchlater/sub）不读取配置文件。
+
+### API 服务器
+
+`BBDown serve` 启动 HTTP API（默认 `http://127.0.0.1:23333`）；监听非回环地址
+（`0.0.0.0`/`::`/网卡 IP）时必须配置 `--serve-token`，此时所有 API 需携带
+`X-Serve-Token` 请求头。
+
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/get-tasks` | GET | 全部任务（`Running` / `Finished`） |
+| `/get-tasks/running` | GET | 进行中任务 |
+| `/get-tasks/finished` | GET | 已完成任务 |
+| `/get-tasks/{id}` | GET | 按 JobId / Aid / URL 查询单个任务 |
+| `/add-task` | POST | 提交下载任务，请求体 `{"Url": "..."}`，返回 202 + `{"TaskId": "..."}` |
+| `/cancel/{id}` | POST | 取消排队中/进行中的任务 |
+| `/remove-finished` | DELETE | 清空已完成任务 |
+| `/remove-finished/failed` | DELETE | 只清除失败任务 |
+| `/remove-finished/{id}` | DELETE | 清除单个已完成任务 |
+| `/health` | GET | 健康检查（无需 token） |
+
+任务 JSON 为 PascalCase 契约（`JobId/Aid/Url/Status/Progress/SavePaths/...`），
+完成列表持久化到 `bbdown-tasks.json`（保留 30 天 / 最近 1000 条）。回调
+`--notify-webhook` 仅接受公网地址（内网/回环/云元数据地址会被拒绝）。
+
+### 测试与 CI
+
+```bash
+make test        # go test ./...
+```
+
+推送与 PR 会触发 GitHub Actions（build/vet/test/gofmt，覆盖 linux/windows/macos）。
+
 ## 功能
 
 - 普通视频、番剧、课程、合集、收藏夹、UP 主全部投稿
