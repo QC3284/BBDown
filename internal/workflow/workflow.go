@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -281,6 +282,10 @@ func (w *Workflow) Run(ctx context.Context) error {
 			encodingPriority, dfnPriority, firstEncoding, lang, dlCfg,
 			downloadDanmaku, danmakuFormats)
 		if !success {
+			// Ctrl+C 等取消：立即退出，不再继续下一个分P。
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			failedPages = append(failedPages, page.Index)
 		}
 	}
@@ -419,8 +424,13 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if len(result.VideoTracks) > 0 {
 				fmt.Print("请选择一条视频流(输入序号): ")
 				fmt.Print("\033[36m")
-				vIndex = readIntSafe(ctx)
+				var ok bool
+				vIndex, ok = readIntSafe(ctx)
 				fmt.Print("\033[0m")
+				if !ok {
+					// Ctrl+C 中断：直接取消，不把取消当作"选择 0"继续下载。
+					return false
+				}
 				if vIndex < 0 || vIndex >= len(result.VideoTracks) {
 					vIndex = 0
 				}
@@ -428,8 +438,12 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if len(result.AudioTracks) > 0 {
 				fmt.Print("请选择一条音频流(输入序号): ")
 				fmt.Print("\033[36m")
-				aIndex = readIntSafe(ctx)
+				var ok bool
+				aIndex, ok = readIntSafe(ctx)
 				fmt.Print("\033[0m")
+				if !ok {
+					return false
+				}
 				if aIndex < 0 || aIndex >= len(result.AudioTracks) {
 					aIndex = 0
 				}
@@ -611,8 +625,11 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				}
 				fmt.Print("请选择最想要的清晰度(输入序号): ")
 				fmt.Print("\033[36m")
-				qi := readIntSafe(ctx)
+				qi, ok := readIntSafe(ctx)
 				fmt.Print("\033[0m")
+				if !ok {
+					return false
+				}
 				if qi >= len(result.Dfns) || qi < 0 {
 					qi = 0
 				}
@@ -1449,18 +1466,23 @@ func (w *Workflow) saveAidArchived(aid string) {
 	fmt.Fprintf(f, "%s|", aid)
 }
 
-// readIntSafe reads an integer from stdin, respecting context cancellation.
-func readIntSafe(ctx context.Context) int {
+// stdinReader is os.Stdin in production; tests can swap it.
+var stdinReader io.Reader = os.Stdin
+
+// readIntSafe reads an integer from stdin. Returns ok=false when the context
+// is cancelled (e.g. Ctrl+C): the caller must abort instead of silently
+// defaulting to 0 and continuing the download.
+func readIntSafe(ctx context.Context) (int, bool) {
 	ch := make(chan int, 1)
 	go func() {
 		var v int
-		fmt.Scanf("%d", &v)
+		fmt.Fscanf(stdinReader, "%d", &v)
 		ch <- v
 	}()
 	select {
 	case <-ctx.Done():
-		return 0
+		return 0, false
 	case v := <-ch:
-		return v
+		return v, true
 	}
 }
