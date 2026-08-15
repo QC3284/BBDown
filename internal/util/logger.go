@@ -124,6 +124,11 @@ func SetDefaultDebugFn(fn func() bool) {
 	defaultLogger.debugMode = fn
 }
 
+// DebugLogEnabled reports whether debug logging is currently enabled.
+func DebugLogEnabled() bool {
+	return defaultLogger.debugMode != nil && defaultLogger.debugMode()
+}
+
 // Log is the package-level convenience function.
 func Log(format string, args ...interface{}) {
 	defaultLogger.Log(format, args...)

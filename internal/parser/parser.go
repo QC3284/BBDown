@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QC3284/BBDown/internal/appapi"
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/entity"
 	"github.com/QC3284/BBDown/internal/util"
@@ -91,14 +92,18 @@ func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, ep
 		return p.getIntlPlayJSON(ctx, aid, cid, epid, qn, "0")
 	}
 
-	if *appAPI {
-		// APP API requires compiled protobuf Go types — fall back to WEB API
-		util.LogDebug("APP API not yet available, using WEB API")
-		*appAPI = false
-	}
-
 	cheese := strings.HasPrefix(aidOri, "cheese:")
 	bangumi := cheese || strings.HasPrefix(aidOri, "ep:")
+
+	if *appAPI {
+		// APP gRPC playurl (upstream AppHelper.DoReqAsync).
+		jsonStr, err := appapi.DoReq(ctx, p.HTTPClient, aid, cid, epid, qn, bangumi, encoding, p.Cfg.Token)
+		if err != nil {
+			return "", err
+		}
+		util.LogDebug("APP API 响应已获取")
+		return jsonStr, nil
+	}
 
 	var api string
 	prefix := ""
@@ -477,11 +482,11 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 
 		result.ActualDurationSec = int(length) / 1000
 		video := entity.Video{
-			ID:      quality,
-			Dfn:     config.QualityMap[quality],
-			Codecs:  VideoCodec(videoCodecid),
-			Dur:     int(length) / 1000,
-			Size:    size,
+			ID:     quality,
+			Dfn:    config.QualityMap[quality],
+			Codecs: VideoCodec(videoCodecid),
+			Dur:    int(length) / 1000,
+			Size:   size,
 		}
 		result.VideoTracks = appendUniqueVideo(result.VideoTracks, video)
 	}

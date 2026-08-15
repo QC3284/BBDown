@@ -278,25 +278,4 @@ func SanitizeSRT(content string) string {
 	return strings.Join(kept, "\n")
 }
 
-// GetSubtitleCode returns (ISO639-2 code, display name) for a subtitle language key.
-func GetSubtitleCode(key string) (string, string) {
-	return SubCode2(key), key
-}
-
-// SubCode2 returns a short code for a subtitle language key.
-func SubCode2(key string) string {
-	m := map[string]string{
-		"zh-CN": "chi", "zh-HK": "chi", "zh-TW": "chi", "zh-Hans": "chi", "zh-Hant": "chi",
-		"en-US": "eng", "en": "eng", "en-CA": "eng", "en-GB": "eng", "en-IE": "eng",
-		"ja": "jpn", "ko": "kor", "fr": "fre", "de": "ger", "es": "spa",
-		"it": "ita", "pt": "por", "ru": "rus", "th": "tha", "vi": "vie",
-		"id": "ind", "tr": "tur", "ar": "ara",
-	}
-	if v, ok := m[key]; ok {
-		return v
-	}
-	if len(key) >= 2 {
-		return key[:3]
-	}
-	return key
-}
+// GetSubtitleCode / SubCode2 now live in sublang.go (full upstream table).

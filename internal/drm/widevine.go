@@ -7,14 +7,18 @@ import (
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
+	"time"
 
 	drmproto "github.com/QC3284/BBDown/internal/drm/proto"
+	"github.com/QC3284/BBDown/internal/util"
 )
 
 // Widevine CDM constants.
@@ -77,13 +81,10 @@ func (c *WidevineCdm) getKeysInternal(psshB64 string) ([]KeyPair, error) {
 // ---- PSSH parser ----
 
 func parsePsshBox(psshB64 string) (payload []byte, keyIDs [][]byte) {
-	raw, err := hex.DecodeString(psshB64)
+	// Bilibili's widevine_pssh is base64-encoded (matching upstream).
+	raw, err := base64.StdEncoding.DecodeString(psshB64)
 	if err != nil {
-		// Try base64
-		raw, err = base64Decode(psshB64)
-		if err != nil {
-			return nil, nil
-		}
+		return nil, nil
 	}
 
 	if len(raw) < 28 {
@@ -120,12 +121,10 @@ func parsePsshBox(psshB64 string) (payload []byte, keyIDs [][]byte) {
 			payload = make([]byte, dataSize)
 			copy(payload, raw[pos:pos+dataSize])
 
-			// If no key IDs extracted from PSSH box, try parsing from WidevineCencHeader
+			// If no key IDs extracted from PSSH box, parse them from the
+			// WidevineCencHeader protobuf payload (key_ids = field 2, repeated bytes).
 			if len(keyIDs) == 0 {
-				header := &drmproto.WidevineCencHeader{}
-				// Simple protobuf parse for key_ids field (field number 2, wire type 2)
-				// We extract key_ids directly from the proto bytes
-				for _, kid := range header.KeyIds {
+				for _, kid := range parseWidevineCencKeyIDs(payload) {
 					keyIDs = append(keyIDs, kid)
 				}
 			}
@@ -135,9 +134,43 @@ func parsePsshBox(psshB64 string) (payload []byte, keyIDs [][]byte) {
 	return
 }
 
-func base64Decode(s string) ([]byte, error) {
-	// Use standard library base64
-	return hex.DecodeString(s) // placeholder; real implementation uses encoding/base64
+// parseWidevineCencKeyIDs extracts key_ids (field 2, repeated bytes) from a
+// WidevineCencHeader protobuf message using a minimal wire-format walk.
+func parseWidevineCencKeyIDs(payload []byte) [][]byte {
+	var keyIDs [][]byte
+	for pos := 0; pos < len(payload); {
+		fieldKey, n := decodeVarint(payload[pos:])
+		if n == 0 {
+			break
+		}
+		pos += n
+		fieldNum := int(fieldKey >> 3)
+		wireType := int(fieldKey & 0x7)
+		switch wireType {
+		case 0: // varint
+			_, n := decodeVarint(payload[pos:])
+			pos += n
+		case 1: // 64-bit
+			pos += 8
+		case 2: // length-delimited
+			length, n := decodeVarint(payload[pos:])
+			if n == 0 || pos+n+int(length) > len(payload) {
+				return keyIDs
+			}
+			pos += n
+			if fieldNum == 2 {
+				kid := make([]byte, length)
+				copy(kid, payload[pos:pos+int(length)])
+				keyIDs = append(keyIDs, kid)
+			}
+			pos += int(length)
+		case 5: // 32-bit
+			pos += 4
+		default:
+			return keyIDs
+		}
+	}
+	return keyIDs
 }
 
 // ---- Challenge builder ----
@@ -156,7 +189,7 @@ func (c *WidevineCdm) buildChallenge(keyIDs [][]byte, psshPayload []byte) (chall
 	// Build WidevinePsshData protobuf message manually
 	wid := []byte{}
 
-	// Encode pssh_data (field 1, wire type 2)  
+	// Encode pssh_data (field 1, wire type 2)
 	if len(psshPayload) > 0 {
 		wid = append(wid, encodeBytesField(1, psshPayload)...)
 	}
@@ -176,14 +209,15 @@ func (c *WidevineCdm) buildChallenge(keyIDs [][]byte, psshPayload []byte) (chall
 	req = append(req, encodeBytesField(2, contentID)...)
 	// type = NEW (field 3, wire type 0)
 	req = append(req, encodeVarintField(3, drmproto.LicenseRequest_NEW)...)
-	// request_time (field 4, wire type 0) - current unix timestamp
-	req = append(req, encodeVarintField(4, uint64(nowUnix()))...)
+	// request_time (field 4, wire type 0) - current unix timestamp (seconds)
+	req = append(req, encodeVarintField(4, uint64(time.Now().Unix()))...)
 	// protocol_version (field 6, wire type 0)
 	req = append(req, encodeVarintField(6, drmproto.ProtocolVersion_V2_1)...)
-	// key_control_nonce (field 7, wire type 0) - random
+	// key_control_nonce (field 7, wire type 0) - random in [1, 2147483646]
+	// (upstream: RandomNumberGenerator.GetInt32(1, int.MaxValue))
 	nonce := make([]byte, 4)
 	rand.Read(nonce)
-	nonceVal := binary.BigEndian.Uint32(nonce) % 2147483647 + 1
+	nonceVal := 1 + binary.BigEndian.Uint32(nonce)%(math.MaxInt32-1)
 	req = append(req, encodeVarintField(7, uint64(nonceVal))...)
 
 	requestBytes = req
@@ -215,7 +249,7 @@ func (c *WidevineCdm) sendRequest(body []byte) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-protobuf")
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("User-Agent", util.RandomUserAgent())
 	req.Header.Set("Referer", "https://www.bilibili.com")
 	req.Header.Set("Accept", "*/*")
 
@@ -279,7 +313,12 @@ func (c *WidevineCdm) parseResponse(data, challenge []byte) ([]KeyPair, error) {
 
 	var result []KeyPair
 	for _, kc := range keys {
-		if kc.Type != nil && *kc.Type != drmproto.License_KeyContainer_CONTENT {
+		// Upstream skips any container whose type is not CONTENT (unset included).
+		if kc.Type == nil || *kc.Type != drmproto.License_KeyContainer_CONTENT {
+			continue
+		}
+		// Skip containers without a usable kid or encrypted key.
+		if len(kc.Id) == 0 || len(kc.Key) == 0 {
 			continue
 		}
 
@@ -308,7 +347,8 @@ func (c *WidevineCdm) parseResponse(data, challenge []byte) ([]KeyPair, error) {
 		if isZeroIv {
 			contentKey, err = AesEcbDecrypt(encContentKey, encKey)
 		} else {
-			dec, err := AesCbcDecrypt(encContentKey, encKey, keyIv)
+			var dec []byte
+			dec, err = AesCbcDecrypt(encContentKey, encKey, keyIv)
 			if err == nil {
 				contentKey, err = Pkcs7Unpad(dec)
 			}
@@ -477,8 +517,4 @@ func parseKeyContainer(data []byte) *drmproto.License_KeyContainer {
 		}
 	}
 	return kc
-}
-
-func nowUnix() uint64 {
-	return 0 // placeholder — use time.Now().Unix() at runtime
 }

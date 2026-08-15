@@ -3,43 +3,42 @@ package entity
 import (
 	"fmt"
 	"strconv"
-	"strings"
 )
 
 // Page represents a video page/part.
 type Page struct {
-	Index     int    `json:"index"`
-	Aid       string `json:"aid"`
-	Cid       string `json:"cid"`
-	Epid      string `json:"epid"`
-	Title     string `json:"title"`
-	Dur       int    `json:"dur"`
-	Res       string `json:"res"`
-	PubTime   int64  `json:"pub_time"`
-	Cover     string `json:"cover,omitempty"`
-	Desc      string `json:"desc,omitempty"`
-	OwnerName string `json:"owner_name,omitempty"`
-	OwnerMid  string `json:"owner_mid,omitempty"`
+	Index     int         `json:"index"`
+	Aid       string      `json:"aid"`
+	Cid       string      `json:"cid"`
+	Epid      string      `json:"epid"`
+	Title     string      `json:"title"`
+	Dur       int         `json:"dur"`
+	Res       string      `json:"res"`
+	PubTime   int64       `json:"pub_time"`
+	Cover     string      `json:"cover,omitempty"`
+	Desc      string      `json:"desc,omitempty"`
+	OwnerName string      `json:"owner_name,omitempty"`
+	OwnerMid  string      `json:"owner_mid,omitempty"`
 	Points    []ViewPoint `json:"points,omitempty"`
 }
 
 // Bvid returns the BV string for this page's aid.
 func (p Page) Bvid() string {
 	if aid, err := strconv.ParseInt(p.Aid, 10, 64); err == nil {
-		if bv, err := avToBv(aid); err == nil {
+		if bv, err := AvToBv(aid); err == nil {
 			return bv
 		}
 	}
 	return p.Aid
 }
 
-// ---- BV ↔ AV conversion (inline to avoid circular import) ----
+// ---- BV ↔ AV conversion (canonical implementation; util/bv.go delegates here) ----
 
 const (
 	bvXor  int64 = 23442827791579
 	bvMask int64 = (1 << 51) - 1
 	bvBase int64 = 58
-	bvLen2      = 9
+	bvLen2       = 9
 )
 
 var bvAlphabet = []byte("FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf")
@@ -51,7 +50,8 @@ func init() {
 	}
 }
 
-func avToBv(aid int64) (string, error) {
+// AvToBv converts an AV number (aid) to a BV string.
+func AvToBv(aid int64) (string, error) {
 	if aid < 1 || aid >= bvMask+1 {
 		return "", fmt.Errorf("av out of range")
 	}
@@ -88,15 +88,12 @@ func BvToAv(bvSuffix string) (int64, error) {
 // AvToBvStr converts aid string to BV, or returns as-is.
 func AvToBvStr(aidStr string) string {
 	if aid, err := strconv.ParseInt(aidStr, 10, 64); err == nil {
-		if bv, err := avToBv(aid); err == nil {
+		if bv, err := AvToBv(aid); err == nil {
 			return bv
 		}
 	}
 	return aidStr
 }
-
-// Ensure unused import is used.
-var _ = strings.TrimSpace
 
 // ViewPoint represents a chapter/section marker.
 type ViewPoint struct {
@@ -107,14 +104,14 @@ type ViewPoint struct {
 
 // Video represents a video track.
 type Video struct {
-	ID        string `json:"id"`
-	Dfn       string `json:"dfn"` // quality display name
-	BaseURL   string `json:"base_url"`
-	Res       string `json:"res,omitempty"`
-	FPS       string `json:"fps,omitempty"`
-	Codecs    string `json:"codecs"`
-	Bandwidth int64  `json:"bandwidth"`
-	Dur       int    `json:"dur"`
+	ID        string  `json:"id"`
+	Dfn       string  `json:"dfn"` // quality display name
+	BaseURL   string  `json:"base_url"`
+	Res       string  `json:"res,omitempty"`
+	FPS       string  `json:"fps,omitempty"`
+	Codecs    string  `json:"codecs"`
+	Bandwidth int64   `json:"bandwidth"`
+	Dur       int     `json:"dur"`
 	Size      float64 `json:"size"`
 }
 

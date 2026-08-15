@@ -13,12 +13,12 @@ type WidevineCencHeader struct {
 
 // ClientIdentification embedded in .wvd file.
 type ClientIdentification struct {
-	Type                *int32  `protobuf:"varint,1,opt,name=type" json:"type,omitempty"`
-	Token               []byte  `protobuf:"bytes,2,opt,name=token" json:"token,omitempty"`
+	Type                *int32                            `protobuf:"varint,1,opt,name=type" json:"type,omitempty"`
+	Token               []byte                            `protobuf:"bytes,2,opt,name=token" json:"token,omitempty"`
 	ClientInfo          []*ClientIdentification_NameValue `protobuf:"bytes,3,rep,name=client_info" json:"client_info,omitempty"`
-	ProviderClientToken []byte  `protobuf:"bytes,4,opt,name=provider_client_token" json:"provider_client_token,omitempty"`
-	LicenseCounter      *uint32 `protobuf:"varint,5,opt,name=license_counter" json:"license_counter,omitempty"`
-	VmpData             []byte  `protobuf:"bytes,7,opt,name=vmp_data" json:"vmp_data,omitempty"`
+	ProviderClientToken []byte                            `protobuf:"bytes,4,opt,name=provider_client_token" json:"provider_client_token,omitempty"`
+	LicenseCounter      *uint32                           `protobuf:"varint,5,opt,name=license_counter" json:"license_counter,omitempty"`
+	VmpData             []byte                            `protobuf:"bytes,7,opt,name=vmp_data" json:"vmp_data,omitempty"`
 }
 
 type ClientIdentification_NameValue struct {
@@ -46,10 +46,10 @@ const (
 
 // LicenseRequest for Widevine license acquisition.
 type LicenseRequest struct {
-	ClientId       *ClientIdentification                 `protobuf:"bytes,1,opt,name=client_id" json:"client_id,omitempty"`
-	ContentId      *LicenseRequest_ContentIdentification `protobuf:"bytes,2,opt,name=content_id" json:"content_id,omitempty"`
-	Type           *int32                                 `protobuf:"varint,3,opt,name=type" json:"type,omitempty"`
-	RequestTime    *int64                                 `protobuf:"varint,4,opt,name=request_time" json:"request_time,omitempty"`
+	ClientId        *ClientIdentification                 `protobuf:"bytes,1,opt,name=client_id" json:"client_id,omitempty"`
+	ContentId       *LicenseRequest_ContentIdentification `protobuf:"bytes,2,opt,name=content_id" json:"content_id,omitempty"`
+	Type            *int32                                `protobuf:"varint,3,opt,name=type" json:"type,omitempty"`
+	RequestTime     *int64                                `protobuf:"varint,4,opt,name=request_time" json:"request_time,omitempty"`
 	ProtocolVersion *int32                                `protobuf:"varint,6,opt,name=protocol_version" json:"protocol_version,omitempty"`
 	KeyControlNonce *uint32                               `protobuf:"varint,7,opt,name=key_control_nonce" json:"key_control_nonce,omitempty"`
 }
@@ -66,9 +66,9 @@ type LicenseRequest_ContentIdentification_WidevinePsshData struct {
 
 // LicenseRequest type constants.
 const (
-	LicenseRequest_NEW      = 1
-	LicenseRequest_RENEWAL  = 2
-	LicenseRequest_RELEASE  = 3
+	LicenseRequest_NEW     = 1
+	LicenseRequest_RENEWAL = 2
+	LicenseRequest_RELEASE = 3
 )
 
 // Protocol version constants.
@@ -90,18 +90,18 @@ type License struct {
 }
 
 type License_KeyContainer struct {
-	Id  []byte `protobuf:"bytes,1,opt,name=id" json:"id,omitempty"`
-	Iv  []byte `protobuf:"bytes,2,opt,name=iv" json:"iv,omitempty"`
-	Key []byte `protobuf:"bytes,3,opt,name=key" json:"key,omitempty"`
+	Id   []byte `protobuf:"bytes,1,opt,name=id" json:"id,omitempty"`
+	Iv   []byte `protobuf:"bytes,2,opt,name=iv" json:"iv,omitempty"`
+	Key  []byte `protobuf:"bytes,3,opt,name=key" json:"key,omitempty"`
 	Type *int32 `protobuf:"varint,4,opt,name=type" json:"type,omitempty"`
 }
 
 // License_KeyContainer key type constants.
 const (
-	License_KeyContainer_SIGNING           = 1
-	License_KeyContainer_CONTENT           = 2
-	License_KeyContainer_KEY_CONTROL       = 3
-	License_KeyContainer_OPERATOR_SESSION  = 4
-	License_KeyContainer_ENTITLEMENT       = 5
-	License_KeyContainer_OEM_CONTENT       = 6
+	License_KeyContainer_SIGNING          = 1
+	License_KeyContainer_CONTENT          = 2
+	License_KeyContainer_KEY_CONTROL      = 3
+	License_KeyContainer_OPERATOR_SESSION = 4
+	License_KeyContainer_ENTITLEMENT      = 5
+	License_KeyContainer_OEM_CONTENT      = 6
 )

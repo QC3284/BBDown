@@ -20,7 +20,7 @@ makepkg -si
 
 ### 手动编译
 
-依赖：Go 1.21+、ffmpeg
+依赖：Go 1.26+、ffmpeg（直播分段合成/混流需要 ffmpeg；也可用 mp4box 混流）
 
 ```bash
 git clone https://github.com/QC3284/BBDown.git -b main
@@ -55,6 +55,16 @@ BBDown serve
 
 # 直播录制
 BBDown live 12345
+
+# 下载专栏为 Markdown
+BBDown article cv123
+
+# 下载稍后再看列表（需登录）
+BBDown watchlater
+
+# 订阅管理（add/list/remove/check）
+BBDown sub add mid:123456
+BBDown sub check
 ```
 
 ### 子命令
@@ -63,9 +73,11 @@ BBDown live 12345
 |---|---|
 | `login` | APP 扫描二维码登录 WEB 账号 |
 | `logintv` | APP 扫描二维码登录 TV 账号 |
-| `serve` | HTTP API 服务器模式 |
-| `live` | 录制直播流 |
-| `article` | 下载专栏文章为 Markdown |
+| `serve` | HTTP API 服务器模式（非回环监听必须配 `--serve-token`） |
+| `live` | 录制直播流（断流自动重连，分段合成，支持 `-o`） |
+| `article` | 下载专栏文章为 Markdown（支持 `-o`） |
+| `watchlater` | 下载稍后再看列表（`--limit`，需登录） |
+| `sub` | 订阅管理：`add/list/remove/check` |
 
 ### 主要选项
 
@@ -91,6 +103,10 @@ BBDown live 12345
 | `--skip-mux` | 跳过混流 |
 | `--use-aria2c` | 调用 aria2c 下载 |
 | `--multi-thread` | 多线程下载（默认开启） |
+| `--force-http` | 强制 HTTP 协议（默认关闭，mcdn 域名除外） |
+| `--comments` | 下载评论区（导出 .comments.json） |
+| `--thread-segment-size` | 多线程分片大小(MB，默认 20) |
+| `--config-file` | 指定配置文件（逐行参数文本，默认 `BBDown.config`） |
 | `--debug` | 输出调试日志 |
 | `-c, --cookie` | 设置 Cookie |
 | `--access-token` | 设置 Access Token |
@@ -105,10 +121,12 @@ BBDown live 12345
 - 自动合并音视频（需 ffmpeg 或 mp4box）
 - 弹幕下载与过滤（XML / ASS）
 - 字幕下载（多 API 回退）
-- 二维码登录（WEB / TV）
-- API 服务器模式
-- 直播录制（断流自动重连）
-- Widevine DRM 解密
+- 二维码登录（WEB / TV，含 qrcode.png）
+- API 服务器模式（任务持久化、认证、限流、内网回调防护）
+- 直播录制（分段录制 + 断流自动重连 + ffmpeg 合成）
+- 专栏下载为 Markdown、评论区导出、稍后再看、订阅管理
+- 逐行参数配置文件（BBDown.config）
+- Widevine DRM 解密（含 mp4decrypt 执行）
 
 ## 与上游的关系
 

@@ -3,69 +3,156 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
-
-	"github.com/spf13/viper"
 )
 
-// MergeWithConfig reads BBDown config files and merges with CLI args.
-// Priority: CLI args > config file > defaults.
-func MergeWithConfig(args []string) ([]string, error) {
-	// Try to find a config file from --config-file arg or default locations
-	configPath := findConfigPath(args)
-	if configPath == "" {
-		return args, nil
+// SubCommandNames are the registered subcommands: their flags do not support
+// the full download option set, so config merging is skipped for them.
+var SubCommandNames = []string{"login", "logintv", "serve", "live", "article", "watchlater", "sub"}
+
+var urlLikeToken = regexp.MustCompile(`(?i)^(https?://|av\d+|bv[0-9A-Za-z]+|av:|bv:|ep\d+|ep:|ss\d+|ss:|md\d+|md:|cheese[:/]|mid:|favId:|listBizId:|seriesBizId:)`)
+
+// IsSubCommandInvocation reports whether the first positional token is a
+// subcommand name (value-consuming options are skipped while scanning).
+func IsSubCommandInvocation(args []string, aliasMap map[string]string, boolFlags map[string]bool) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			for _, name := range SubCommandNames {
+				if strings.EqualFold(arg, name) {
+					return true
+				}
+			}
+			return false
+		}
+		if strings.Contains(arg, "=") {
+			continue // value embedded in the token
+		}
+		if canonical, ok := aliasMap[arg]; ok && !boolFlags[canonical] {
+			i++ // this option consumes the next token as its value
+		}
 	}
-
-	v := viper.New()
-	v.SetConfigFile(configPath)
-	v.SetConfigType("yaml") // also supports json, toml
-
-	if err := v.ReadInConfig(); err != nil {
-		// Config file not found or unreadable is not fatal
-		return args, nil
-	}
-
-	// Config file values become defaults; CLI args override via viper binding
-	// For now, we merge the config into a MyOption and convert back
-	// This is a simplified approach - full implementation would use viper + pflags
-	_ = v
-
-	return args, nil
+	return false
 }
 
-// findConfigPath looks for BBDown config in the following order:
-// 1. --config-file CLI arg
-// 2. ./BBDown.config
-// 3. $HOME/.config/BBDown/BBDown.config
-func findConfigPath(args []string) string {
-	// Check --config-file in args
-	for i, a := range args {
-		if a == "--config-file" && i+1 < len(args) {
-			return args[i+1]
+// MergeWithConfig merges a line-based BBDown.config file into the CLI args
+// (upstream BBDownConfigParser): config options act as defaults, explicit CLI
+// options win, and the config URL is dropped when the CLI already has one.
+func MergeWithConfig(cliArgs []string, aliasMap map[string]string, boolFlags map[string]bool) ([]string, error) {
+	result := append([]string(nil), cliArgs...)
+
+	if IsSubCommandInvocation(cliArgs, aliasMap, boolFlags) {
+		return result, nil
+	}
+
+	configPath := ""
+	for i := 0; i < len(cliArgs); i++ {
+		if cliArgs[i] == "--config-file" && i+1 < len(cliArgs) {
+			configPath = cliArgs[i+1]
+			break
 		}
-		if strings.HasPrefix(a, "--config-file=") {
-			return strings.TrimPrefix(a, "--config-file=")
+		if strings.HasPrefix(cliArgs[i], "--config-file=") {
+			configPath = strings.TrimPrefix(cliArgs[i], "--config-file=")
+			break
+		}
+	}
+	if configPath == "" {
+		configPath = filepath.Join(appDir(), "BBDown.config")
+	}
+
+	if _, err := os.Stat(configPath); err != nil {
+		return result, nil
+	}
+
+	lines, err := os.ReadFile(configPath)
+	if err != nil {
+		return result, nil
+	}
+	var configArgs []string
+	for _, line := range strings.Split(string(lines), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "-") && strings.Contains(line, " ") {
+			idx := strings.Index(line, " ")
+			configArgs = append(configArgs, line[:idx], strings.Trim(strings.TrimSpace(line[idx:]), "\""))
+		} else {
+			configArgs = append(configArgs, strings.Trim(line, "\""))
 		}
 	}
 
-	// Check current directory
-	cwd, err := os.Getwd()
-	if err == nil {
-		p := filepath.Join(cwd, "BBDown.config")
-		if _, err := os.Stat(p); err == nil {
-			return p
+	cliHasURL := false
+	for _, a := range cliArgs {
+		if urlLikeToken.MatchString(a) {
+			cliHasURL = true
+			break
 		}
 	}
 
-	// Check user config directory
-	home, err := os.UserHomeDir()
-	if err == nil {
-		p := filepath.Join(home, ".config", "BBDown", "BBDown.config")
-		if _, err := os.Stat(p); err == nil {
-			return p
+	explicitOptions := make(map[string]bool)
+	for _, a := range cliArgs {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		token := a
+		if idx := strings.Index(a, "="); idx > 0 {
+			token = a[:idx]
+		}
+		if canonical, ok := aliasMap[token]; ok {
+			explicitOptions[canonical] = true
 		}
 	}
 
-	return ""
+	for i := 0; i < len(configArgs); {
+		name := configArgs[i]
+		if !strings.HasPrefix(name, "-") {
+			if !cliHasURL {
+				result = append(result, name)
+			}
+			i++
+			continue
+		}
+
+		canonical, known := aliasMap[name]
+		if !known {
+			result = append(result, name)
+			i++
+			continue
+		}
+
+		if explicitOptions[canonical] {
+			i++
+			// Skip the config value(s) for this option: collect tokens until the
+			// next known option name.
+			for i < len(configArgs) && (!strings.HasPrefix(configArgs[i], "-") || !isKnownOption(configArgs[i], aliasMap)) {
+				i++
+			}
+			continue
+		}
+
+		result = append(result, name)
+		i++
+		for i < len(configArgs) && (!strings.HasPrefix(configArgs[i], "-") || !isKnownOption(configArgs[i], aliasMap)) {
+			result = append(result, configArgs[i])
+			i++
+		}
+	}
+
+	return result, nil
+}
+
+func isKnownOption(token string, aliasMap map[string]string) bool {
+	_, ok := aliasMap[token]
+	return ok
+}
+
+// appDir returns the executable directory (config default location).
+func appDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(exe)
 }

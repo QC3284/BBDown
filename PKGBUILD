@@ -1,7 +1,7 @@
 # Maintainer: QC3284 <qc3284@github>
 # Go 重写 of BBDown — builds from GitHub source
 pkgname=bbdown
-pkgver=1.6.10
+pkgver=1.6.11
 pkgrel=1
 pkgdesc="一款命令行式哔哩哔哩下载器. Bilibili Downloader. (Go 重写)"
 arch=("x86_64" "aarch64")

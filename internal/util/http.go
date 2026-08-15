@@ -27,9 +27,9 @@ func NewHTTPClient(skipSSL func() bool, cookieFn func() string, debugFn func(str
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: false, // will be overridden per-request via callback
 		},
-		MaxIdleConns:        100,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
+		MaxIdleConns:       100,
+		IdleConnTimeout:    90 * time.Second,
+		DisableCompression: false,
 	}
 
 	c := &HTTPClient{
@@ -71,9 +71,17 @@ func randomUserAgent() string {
 
 // GetWebSource fetches the content from a URL as a string.
 func (c *HTTPClient) GetWebSource(ctx context.Context, url string) (string, error) {
+	body, _, err := c.GetWebSourceWithSetCookies(ctx, url)
+	return body, err
+}
+
+// GetWebSourceWithSetCookies fetches content and also returns the Set-Cookie
+// header values from the response (needed by QR login, where SESSDATA arrives
+// via HttpOnly Set-Cookie rather than the callback URL query).
+func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string) (string, []string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	req.Header.Set("User-Agent", c.userAgent)
@@ -92,27 +100,28 @@ func (c *HTTPClient) GetWebSource(ctx context.Context, url string) (string, erro
 		req.Header.Set("Referer", "https://www.bilibili.com/")
 	}
 	if strings.Contains(url, "api.bilibili.tv") {
-		req.Header.Set("sec-ch-ua", `"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"`)
+		req.Header.Set("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
 	}
 	req.Header.Set("Cache-Control", "no-cache")
 
 	if c.debugFn != nil {
-		c.debugFn("GET %s", url)
+		c.debugFn("GET %s", MaskUrl(url))
 	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, url)
+	// Upstream accepts any 2xx (EnsureSuccessStatusCode).
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, MaskUrl(url))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	result := string(body)
@@ -123,7 +132,7 @@ func (c *HTTPClient) GetWebSource(ctx context.Context, url string) (string, erro
 		}
 		c.debugFn("Response: %s", truncated)
 	}
-	return result, nil
+	return result, resp.Header.Values("Set-Cookie"), nil
 }
 
 // GetWebLocation follows redirects and returns the final URL.
@@ -185,11 +194,17 @@ func (c *HTTPClient) PostResponse(ctx context.Context, url string, body []byte, 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, MaskUrl(url))
 	}
 
 	return io.ReadAll(resp.Body)
+}
+
+// RandomUserAgent returns a freshly generated random user agent string,
+// shared by all components that need one (downloads, DRM license requests, …).
+func RandomUserAgent() string {
+	return randomUserAgent()
 }
 
 // UserAgent returns the current user agent string.
@@ -202,6 +217,23 @@ func (c *HTTPClient) SetUserAgent(ua string) {
 	if ua != "" {
 		c.userAgent = ua
 	}
+}
+
+// SetCookieFn overrides the cookie provider (e.g. after loading credentials
+// from BBDown.data files in the workflow).
+func (c *HTTPClient) SetCookieFn(fn func() string) {
+	c.cookieFn = fn
+}
+
+// DownloadClient returns an http.Client sharing this client's transport (TLS
+// config, proxy, connection pool) but WITHOUT the overall request timeout:
+// media downloads can legitimately take much longer than the 2-minute API
+// timeout, and cancellation is driven by context instead.
+func (c *HTTPClient) DownloadClient() *http.Client {
+	if tr, ok := c.client.Transport.(*http.Transport); ok {
+		return &http.Client{Transport: tr.Clone()}
+	}
+	return &http.Client{Transport: c.client.Transport}
 }
 
 // PostForm posts form-encoded data and returns the response body.
@@ -220,8 +252,8 @@ func (c *HTTPClient) PostForm(ctx context.Context, urlStr string, form url.Value
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, urlStr)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, MaskUrl(urlStr))
 	}
 	return io.ReadAll(resp.Body)
 }

@@ -6,8 +6,11 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/QC3284/BBDown/internal/config"
+	"github.com/QC3284/BBDown/internal/util"
 	"github.com/QC3284/BBDown/internal/workflow"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -30,87 +33,155 @@ var (
 	optInsecure   bool
 
 	// Download options
-	optURL              string
-	optUseTvAPI         bool
-	optUseAppAPI        bool
-	optUseIntlAPI       bool
-	optUseMP4box        bool
-	optEncodingPriority string
-	optDfnPriority      string
-	optOnlyShowInfo     bool
-	optShowAll          bool
-	optUseAria2c        bool
-	optInteractive      bool
-	optHideStreams      bool
-	optMultiThread      bool
-	optSimplyMux        bool
-	optVideoOnly        bool
-	optAudioOnly        bool
-	optDanmakuOnly      bool
-	optCoverOnly        bool
-	optSubOnly          bool
-	optSkipMux          bool
-	optDecryptDrm       bool
-	optAllowPreview     bool
-	optDrmKeyHex        string
-	optDrmKidHex        string
-	optMp4decryptPath   string
-	optWvdPath          string
-	optSkipSubtitle     bool
-	optSkipCover        bool
-	optForceHTTP        bool
-	optDownloadDanmaku  bool
-	optDanmakuFormats   string
-	optDanmakuFilter    string
-	optDanmakuFilterUser string
-	optDownloadComments bool
-	optNotifyWebhook    string
-	optSkipAi           bool
-	optVideoAscending   bool
-	optAudioAscending   bool
-	optAllowPcdn        bool
-	optFilePattern      string
-	optMultiFilePattern string
-	optSelectPage       string
-	optLanguage         string
-	optAria2cArgs       string
-	optUposHost         string
-	optForceReplaceHost bool
-	optSaveArchives     bool
-	optDelayPerPage     int
-	optMuxerTimeout     int
-	optRetryCount       int
-	optRetryDelay       int
-	optThreadSegmentSize int
+	optURL                string
+	optUseTvAPI           bool
+	optUseAppAPI          bool
+	optUseIntlAPI         bool
+	optUseMP4box          bool
+	optEncodingPriority   string
+	optDfnPriority        string
+	optOnlyShowInfo       bool
+	optShowAll            bool
+	optUseAria2c          bool
+	optInteractive        bool
+	optHideStreams        bool
+	optMultiThread        bool
+	optSimplyMux          bool
+	optVideoOnly          bool
+	optAudioOnly          bool
+	optDanmakuOnly        bool
+	optCoverOnly          bool
+	optSubOnly            bool
+	optSkipMux            bool
+	optDecryptDrm         bool
+	optAllowPreview       bool
+	optDrmKeyHex          string
+	optDrmKidHex          string
+	optMp4decryptPath     string
+	optWvdPath            string
+	optSkipSubtitle       bool
+	optSkipCover          bool
+	optForceHTTP          bool
+	optAria2cProxy        string
+	optAddDfnSuffix       bool
+	optOnlyHevc           bool
+	optOnlyAvc            bool
+	optOnlyAv1            bool
+	optNoPaddingPageNum   bool
+	optBandwidthAscending bool
+	optDownloadDanmaku    bool
+	optDanmakuFormats     string
+	optDanmakuFilter      string
+	optDanmakuFilterUser  string
+	optDownloadComments   bool
+	optNotifyWebhook      string
+	optSkipAi             bool
+	optVideoAscending     bool
+	optAudioAscending     bool
+	optAllowPcdn          bool
+	optFilePattern        string
+	optMultiFilePattern   string
+	optSelectPage         string
+	optLanguage           string
+	optAria2cArgs         string
+	optUposHost           string
+	optForceReplaceHost   bool
+	optSaveArchives       bool
+	optDelayPerPage       int
+	optMuxerTimeout       int
+	optRetryCount         int
+	optRetryDelay         int
+	optThreadSegmentSize  int
 
 	// Serve options
-	optServeListen    string
+	optServeListen        string
 	optServeMaxConcurrent int
-	optServeToken     string
+	optServeToken         string
+
+	// Subcommand options
+	optLiveOutput      string
+	optArticleOutput   string
+	optSubName         string
+	optWatchLaterLimit int
 )
 
 // rootCmd represents the base command.
 var rootCmd = &cobra.Command{
 	Use:   "BBDown [URL]",
-		Short: "BBDown - Bilibili Downloader",
-		Long: `BBDown is a command-line Bilibili video downloader.
+	Short: "BBDown - Bilibili Downloader",
+	Long: `BBDown is a command-line Bilibili video downloader.
 Supports regular videos, bangumi, courses, collections, playlists, and more.
 
 Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "1.0.0",
+	Version: "1.6.11-go",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 }
 
 // Execute adds all child commands and runs root.
 func Execute() {
+	util.SetDefaultDebugFn(func() bool { return debug })
+
+	// Normalize legacy single-dash aliases (upstream NormalizeCliArgs), then
+	// merge BBDown.config (line-based args) as option defaults.
+	args := normalizeCliArgs(os.Args[1:])
+	if merged, err := mergeConfigArgs(args); err == nil {
+		rootCmd.SetArgs(merged)
+	}
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// normalizeCliArgs maps "-help"/"-?" to "--help" and "-version" to "--version"
+// (upstream NormalizeCliArgs).
+func normalizeCliArgs(args []string) []string {
+	out := append([]string(nil), args...)
+	for i, a := range out {
+		switch a {
+		case "-help", "-?":
+			out[i] = "--help"
+		case "-version":
+			out[i] = "--version"
+		}
+	}
+	return out
+}
+
+// mergeConfigArgs builds the option alias map from the registered cobra flags
+// and merges the config file (config defaults < CLI args).
+func mergeConfigArgs(cliArgs []string) ([]string, error) {
+	aliasMap := make(map[string]string)
+	boolFlags := make(map[string]bool)
+	add := func(f *pflag.Flag) {
+		aliasMap["--"+f.Name] = f.Name
+		if f.Shorthand != "" {
+			aliasMap["-"+f.Shorthand] = f.Name
+		}
+		boolFlags[f.Name] = f.Value.Type() == "bool"
+	}
+	rootCmd.PersistentFlags().VisitAll(add)
+	rootCmd.Flags().VisitAll(add)
+	serveCmd.Flags().VisitAll(add)
+	liveCmd.Flags().VisitAll(add)
+	articleCmd.Flags().VisitAll(add)
+	watchLaterCmd.Flags().VisitAll(add)
+	subAddCmd.Flags().VisitAll(add)
+	subCheckCmd.Flags().VisitAll(add)
+
+	merged, err := config.MergeWithConfig(cliArgs, aliasMap, boolFlags)
+	if err != nil {
+		return cliArgs, nil
+	}
+	if len(merged) != len(cliArgs) {
+		util.Log("加载配置文件完成（配置为默认值，命令行参数优先）")
+	}
+	return merged, nil
 }
 
 func init() {
@@ -158,7 +229,15 @@ func init() {
 	rootCmd.Flags().StringVar(&optWvdPath, "wvd-path", "", "device.wvd路径")
 	rootCmd.Flags().BoolVar(&optSkipSubtitle, "skip-subtitle", false, "跳过字幕下载")
 	rootCmd.Flags().BoolVar(&optSkipCover, "skip-cover", false, "跳过封面下载")
-	rootCmd.Flags().BoolVar(&optForceHTTP, "force-http", true, "强制HTTP协议")
+	rootCmd.Flags().BoolVar(&optForceHTTP, "force-http", false, "强制HTTP协议")
+	// Deprecated compatibility options (upstream hidden flags).
+	rootCmd.Flags().StringVar(&optAria2cProxy, "aria2c-proxy", "", "aria2c代理(已弃用)")
+	rootCmd.Flags().BoolVar(&optAddDfnSuffix, "add-dfn-subfix", false, "添加画质后缀(已弃用)")
+	rootCmd.Flags().BoolVar(&optOnlyHevc, "only-hevc", false, "仅HEVC(已弃用)")
+	rootCmd.Flags().BoolVar(&optOnlyAvc, "only-avc", false, "仅AVC(已弃用)")
+	rootCmd.Flags().BoolVar(&optOnlyAv1, "only-av1", false, "仅AV1(已弃用)")
+	rootCmd.Flags().BoolVar(&optNoPaddingPageNum, "no-padding-page-num", false, "分P编号不补零(已弃用)")
+	rootCmd.Flags().BoolVar(&optBandwidthAscending, "bandwith-ascending", false, "码率升序(已弃用)")
 	rootCmd.Flags().BoolVarP(&optDownloadDanmaku, "download-danmaku", "d", false, "下载弹幕")
 	rootCmd.Flags().StringVar(&optDanmakuFormats, "download-danmaku-formats", "", "弹幕格式, 逗号分隔")
 	rootCmd.Flags().StringVar(&optDanmakuFilter, "danmaku-filter", "", "弹幕关键词过滤")
@@ -184,10 +263,26 @@ func init() {
 	rootCmd.Flags().IntVar(&optThreadSegmentSize, "thread-segment-size", 20, "分片大小(MB)")
 
 	// Serve flags
-	serveCmd.Flags().StringVar(&optServeListen, "listen", "http://127.0.0.1:23333", "API服务器监听地址")
+	serveCmd.Flags().StringVarP(&optServeListen, "listen", "l", "http://127.0.0.1:23333", "API服务器监听地址")
 	serveCmd.Flags().IntVar(&optServeMaxConcurrent, "max-concurrent", 3, "最大并发下载数")
 	serveCmd.Flags().StringVar(&optServeToken, "serve-token", "", "API认证Token")
 	serveCmd.Flags().StringVar(&optNotifyWebhook, "notify-webhook", "", "任务完成通知URL")
+
+	// Subcommand flags
+	liveCmd.Flags().StringVarP(&optLiveOutput, "output", "o", "", "输出文件路径(默认: 直播间标题_直播录制_时间.flv)")
+	articleCmd.Flags().StringVarP(&optArticleOutput, "output", "o", "", "输出 Markdown 文件路径(默认: 专栏标题.md)")
+	watchLaterCmd.Flags().IntVar(&optWatchLaterLimit, "limit", 0, "最多下载前 N 个稍后再看视频(默认 0=全部)")
+	subAddCmd.Flags().StringVar(&optSubName, "name", "", "订阅显示名称(默认使用目标字符串)")
+
+	// watchlater / sub check inherit the download option semantics (upstream).
+	for _, c := range []*cobra.Command{watchLaterCmd, subCheckCmd} {
+		c.Flags().StringVarP(&optEncodingPriority, "encoding-priority", "e", "", "视频编码优先级, 如 hevc,avc,av1")
+		c.Flags().StringVarP(&optDfnPriority, "dfn-priority", "q", "", "视频清晰度优先级, 如 8K 4K 1080P 高清 720P 高清")
+		c.Flags().BoolVarP(&optUseAppAPI, "use-app-api", "a", false, "使用APP端解析模式")
+		c.Flags().BoolVarP(&optUseTvAPI, "use-tv-api", "t", false, "使用TV端解析模式")
+		c.Flags().BoolVar(&optUseIntlAPI, "use-intl-api", false, "使用国际版解析模式")
+		c.Flags().StringVarP(&optWorkDir, "work-dir", "w", "", "设置工作目录(所有相对路径的根目录)")
+	}
 
 	// Register subcommands
 	rootCmd.AddCommand(loginCmd)
@@ -195,6 +290,12 @@ func init() {
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(liveCmd)
 	rootCmd.AddCommand(articleCmd)
+	rootCmd.AddCommand(watchLaterCmd)
+	rootCmd.AddCommand(subCmd)
+	subCmd.AddCommand(subAddCmd)
+	subCmd.AddCommand(subListCmd)
+	subCmd.AddCommand(subRemoveCmd)
+	subCmd.AddCommand(subCheckCmd)
 }
 
 func runDownload(cmd *cobra.Command, args []string) error {

@@ -44,8 +44,13 @@ func GetValidFileName(input string, replacement string, filterSlash bool) string
 
 	result := sb.String()
 
-	// Handle reserved names
-	if reservedNames[strings.ToUpper(result)] {
+	// Handle reserved names: Windows treats CON/PRN/AUX/NUL/COM1..9/LPT1..9 as
+	// reserved even WITH an extension (CON.txt), so match the basename too.
+	base := result
+	if idx := strings.LastIndexByte(base, '.'); idx >= 0 {
+		base = base[:idx]
+	}
+	if reservedNames[strings.ToUpper(result)] || reservedNames[strings.ToUpper(base)] {
 		result = "_" + result
 	}
 

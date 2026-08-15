@@ -48,10 +48,10 @@ func (f *NormalInfoFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo
 			IsUpowerPreview   bool `json:"is_upower_preview"`
 			IsUpowerPlay      bool `json:"is_upower_play"`
 			Pages             []struct {
-				Page     int         `json:"page"`
-				Part     string      `json:"part"`
-				Cid      json.Number `json:"cid"`
-				Duration int         `json:"duration"`
+				Page      int         `json:"page"`
+				Part      string      `json:"part"`
+				Cid       json.Number `json:"cid"`
+				Duration  int         `json:"duration"`
 				Dimension struct {
 					Width  int `json:"width"`
 					Height int `json:"height"`
@@ -148,7 +148,7 @@ func (f *NormalInfoFetcher) fetchInteractionPages(ctx context.Context, bvid stri
 	if start < 0 || end < 0 {
 		return nil, fmt.Errorf("failed to parse interaction data")
 	}
-	interactionJSON := resp[start+len("<interaction>"): end]
+	interactionJSON := resp[start+len("<interaction>") : end]
 
 	var graph struct {
 		GraphVersion int64 `json:"graph_version"`

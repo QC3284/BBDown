@@ -1,4 +1,4 @@
-.PHONY: build run test clean proto
+.PHONY: build run test clean
 
 APP := BBDown
 SRC := ./cmd/bbdown
@@ -14,6 +14,3 @@ test:
 
 clean:
 	rm -rf bin/
-
-proto:
-	cd internal/drm/proto && protoc --go_out=. --go_opt=paths=source_relative *.proto

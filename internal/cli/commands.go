@@ -2,14 +2,22 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
+	"time"
 
+	"github.com/QC3284/BBDown/internal/article"
 	"github.com/QC3284/BBDown/internal/config"
+	"github.com/QC3284/BBDown/internal/fetcher"
 	"github.com/QC3284/BBDown/internal/live"
 	"github.com/QC3284/BBDown/internal/login"
+	"github.com/QC3284/BBDown/internal/muxer"
 	"github.com/QC3284/BBDown/internal/server"
+	"github.com/QC3284/BBDown/internal/substore"
 	"github.com/QC3284/BBDown/internal/util"
 	"github.com/QC3284/BBDown/internal/workflow"
 	"github.com/spf13/cobra"
@@ -49,12 +57,12 @@ var serveCmd = &cobra.Command{
 		if listen == "" {
 			listen = "http://127.0.0.1:23333"
 		}
-		maxConc := optServeMaxConcurrent
-		if maxConc <= 0 {
-			maxConc = 3
+		// Upstream rejects max-concurrent < 1 instead of silently clamping.
+		if optServeMaxConcurrent < 1 {
+			return fmt.Errorf("参数有误：--max-concurrent 需 >= 1，当前为 %d", optServeMaxConcurrent)
 		}
 
-		srv := server.NewAPIServer(listen, maxConc, optServeToken, optNotifyWebhook)
+		srv := server.NewAPIServer(listen, optServeMaxConcurrent, optServeToken, optNotifyWebhook)
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
@@ -72,18 +80,42 @@ var liveCmd = &cobra.Command{
 		}
 		roomID := args[0]
 
+		// Segment merging at the end requires ffmpeg; fail fast (upstream).
+		if _, err := os.Stat(muxer.FFMPEG); err != nil {
+			if p, err := exec.LookPath("ffmpeg"); err == nil {
+				muxer.FFMPEG = p
+			} else {
+				return fmt.Errorf("找不到可执行的ffmpeg文件，直播分段合成需要 ffmpeg")
+			}
+		}
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+
 		client := buildHTTPClient(config.MyOption{})
-		streamURL, title, uname, err := live.ResolveLive(roomID, client)
+		util.Log("正在解析直播间 %s...", roomID)
+		_, title, uname, err := live.ResolveLive(ctx, roomID, client)
 		if err != nil {
 			return err
 		}
 
-		util.Log("直播间: %s (%s)", title, uname)
-		util.Log("开始录制...按 Ctrl+C 停止")
+		util.Log("直播间: %s (UP: %s)", title, uname)
+		outPath := optLiveOutput
+		if outPath == "" {
+			outPath = fmt.Sprintf("%s_直播录制_%s.flv", live.SanitizeFileName(title), time.Now().Format("20060102_150405"))
+		}
+		util.Log("开始录制直播流: %s (Ctrl+C 停止，断流自动重连)", outPath)
 
-		outPath := live.SanitizeFileName(fmt.Sprintf("%s_%s.flv", uname, title))
-		_ = streamURL
-		return live.DownloadToFile(roomID, outPath, client)
+		recorded, err := live.DownloadToFile(ctx, roomID, outPath, client)
+		if err != nil {
+			return err
+		}
+		if !recorded {
+			util.Log("未录制到任何内容")
+		} else {
+			util.Log("直播录制完成: %s", outPath)
+		}
+		return nil
 	},
 }
 
@@ -94,8 +126,291 @@ var articleCmd = &cobra.Command{
 		if len(args) < 1 {
 			return fmt.Errorf("请提供文章cv号")
 		}
-		return fmt.Errorf("article not yet implemented in Go version")
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+
+		cvID, err := article.ExtractCvId(args[0])
+		if err != nil {
+			return err
+		}
+		util.Log("正在获取专栏 cv%s...", cvID)
+		client := buildHTTPClient(config.MyOption{})
+		a, err := article.Fetch(ctx, client, cvID)
+		if err != nil {
+			return err
+		}
+		path := optArticleOutput
+		if path == "" {
+			path = live.SanitizeFileName(a.Title) + ".md"
+		}
+		if err := article.SaveAsMarkdown(a, path); err != nil {
+			return fmt.Errorf("专栏保存失败: %w", err)
+		}
+		util.Log("专栏已保存: %s", path)
+		return nil
 	},
+}
+
+var watchLaterCmd = &cobra.Command{
+	Use:   "watchlater",
+	Short: "下载稍后再看列表",
+	RunE:  runWatchLater,
+}
+
+var subCmd = &cobra.Command{
+	Use:   "sub",
+	Short: "订阅管理 (add/list/remove/check)",
+}
+
+var subAddCmd = &cobra.Command{
+	Use:   "add [target]",
+	Short: "添加订阅",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := substore.Add(args[0], optSubName); err != nil {
+			return err
+		}
+		util.Log("已添加订阅: %s", args[0])
+		return nil
+	},
+}
+
+var subListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "列出订阅",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		subs, err := substore.ListSorted()
+		if err != nil {
+			return err
+		}
+		if len(subs) == 0 {
+			util.Log("当前没有订阅，请先用 BBDown sub add <目标> 添加")
+			return nil
+		}
+		util.Log("共 %d 个订阅:", len(subs))
+		for _, s := range subs {
+			util.Log("  %s  [%s]  (添加于 %s)", s.Target, s.Name, time.Unix(s.AddedAt, 0).Local().Format("2006-01-02 15:04"))
+		}
+		return nil
+	},
+}
+
+var subRemoveCmd = &cobra.Command{
+	Use:   "remove [target]",
+	Short: "移除订阅",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := substore.Remove(args[0]); err != nil {
+			return err
+		}
+		util.Log("已移除订阅: %s", args[0])
+		return nil
+	},
+}
+
+var subCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "检查订阅并下载新内容",
+	RunE:  runSubCheck,
+}
+
+// runWatchLater downloads the watch-later list (upstream WatchLaterCommand).
+func runWatchLater(cmd *cobra.Command, args []string) error {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	cfg := config.DefaultMyOption()
+	cfg.Cookie = optCookie
+	cfg.AccessToken = optToken
+	cfg.UseTvAPI = optUseTvAPI
+	cfg.UseAppAPI = optUseAppAPI
+	cfg.UseIntlAPI = optUseIntlAPI
+	cfg.WorkDir = optWorkDir
+
+	client := buildHTTPClient(cfg)
+	if _, err := workflow.InitSession(ctx, &cfg, client); err != nil {
+		return err
+	}
+
+	util.Log("正在获取稍后再看列表...")
+	list, err := fetchWatchLater(ctx, client)
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		util.Log("稍后再看列表为空")
+		return nil
+	}
+
+	targets := list
+	if optWatchLaterLimit > 0 && len(targets) > optWatchLaterLimit {
+		targets = targets[:optWatchLaterLimit]
+	}
+	util.Log("共 %d 个稍后再看，开始下载 %d 个...", len(list), len(targets))
+	succeeded := 0
+	failed := 0
+	for _, t := range targets {
+		util.Log("--- 下载 av%s %s ---", t.Aid, t.Title)
+		opt := config.DefaultMyOption()
+		opt.URL = "av" + t.Aid
+		opt.Cookie = cfg.Cookie
+		opt.AccessToken = cfg.AccessToken
+		opt.EncodingPriority = optEncodingPriority
+		opt.DfnPriority = optDfnPriority
+		opt.UseAppAPI = cfg.UseAppAPI
+		opt.UseTvAPI = cfg.UseTvAPI
+		opt.UseIntlAPI = cfg.UseIntlAPI
+		opt.WorkDir = cfg.WorkDir
+		if err := workflow.New(opt, client).Run(ctx); err != nil {
+			failed++
+			util.LogWarn("av%s 下载失败（继续下一个）: %v", t.Aid, err)
+			continue
+		}
+		succeeded++
+	}
+	util.Log("稍后再看下载完成：成功 %d 个，失败 %d 个", succeeded, failed)
+	if failed > 0 {
+		return fmt.Errorf("%d 个下载失败", failed)
+	}
+	return nil
+}
+
+type watchLaterItem struct {
+	Aid   string `json:"aid"`
+	Title string `json:"title"`
+}
+
+func fetchWatchLater(ctx context.Context, client *util.HTTPClient) ([]watchLaterItem, error) {
+	api := "https://api.bilibili.com/x/v2/history/toview"
+	source, err := client.GetWebSource(ctx, api)
+	if err != nil {
+		return nil, err
+	}
+	var r struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			List []watchLaterItem `json:"list"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(source), &r); err != nil {
+		return nil, err
+	}
+	if r.Code != 0 {
+		return nil, fmt.Errorf("获取稍后再看失败(code=%d): %s。该接口需要登录，请先运行 BBDown login 或传入 --cookie。", r.Code, r.Message)
+	}
+	var list []watchLaterItem
+	for _, item := range r.Data.List {
+		if item.Aid != "" {
+			list = append(list, item)
+		}
+	}
+	return list, nil
+}
+
+// runSubCheck checks all subscriptions and downloads new content (upstream).
+func runSubCheck(cmd *cobra.Command, args []string) error {
+	subs, err := substore.Load()
+	if err != nil {
+		return err
+	}
+	if len(subs) == 0 {
+		util.LogWarn("当前没有订阅，请先用 BBDown sub add <目标> 添加")
+		return nil
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	cfg := config.DefaultMyOption()
+	cfg.Cookie = optCookie
+	cfg.AccessToken = optToken
+	cfg.UseTvAPI = optUseTvAPI
+	cfg.UseAppAPI = optUseAppAPI
+	cfg.UseIntlAPI = optUseIntlAPI
+	cfg.WorkDir = optWorkDir
+	client := buildHTTPClient(cfg)
+	wbi, err := workflow.InitSession(ctx, &cfg, client)
+	if err != nil {
+		return err
+	}
+
+	factory := fetcher.NewFactory(client, cfg.UseIntlAPI, wbi, cfg.Cookie, cfg.Host, cfg.EpHost, cfg.AccessToken)
+	for _, sub := range subs {
+		util.Log("检查订阅: %s (%s)", sub.Name, sub.Target)
+		resolved, err := workflow.ResolveURL(ctx, client, sub.Target)
+		if err != nil {
+			util.LogWarn("订阅解析失败（跳过）: %v", err)
+			continue
+		}
+		if resolved == "" {
+			continue
+		}
+		vInfo, err := factory.Create(resolved).Fetch(ctx, resolved)
+		if err != nil {
+			util.LogWarn("订阅拉取失败（跳过）: %v", err)
+			continue
+		}
+		var allAids []string
+		seen := make(map[string]bool)
+		for _, p := range vInfo.PagesInfo {
+			if p.Aid != "" && !seen[p.Aid] {
+				seen[p.Aid] = true
+				allAids = append(allAids, p.Aid)
+			}
+		}
+		history, err := substore.LoadHistory(sub.Target)
+		if err != nil {
+			return err
+		}
+		var newAids []string
+		for _, aid := range allAids {
+			known := false
+			for _, h := range history {
+				if h == aid {
+					known = true
+					break
+				}
+			}
+			if !known {
+				newAids = append(newAids, aid)
+			}
+		}
+		if len(newAids) == 0 {
+			util.Log("  没有新增内容")
+			continue
+		}
+		util.Log("  发现 %d 个新内容: av%s", len(newAids), joinAids(newAids))
+		for _, aid := range newAids {
+			opt := config.DefaultMyOption()
+			opt.URL = "av" + aid
+			opt.Cookie = cfg.Cookie
+			opt.AccessToken = cfg.AccessToken
+			opt.EncodingPriority = optEncodingPriority
+			opt.DfnPriority = optDfnPriority
+			opt.UseAppAPI = cfg.UseAppAPI
+			opt.UseTvAPI = cfg.UseTvAPI
+			opt.UseIntlAPI = cfg.UseIntlAPI
+			opt.WorkDir = cfg.WorkDir
+			if err := workflow.New(opt, client).Run(ctx); err != nil {
+				util.LogWarn("av%s 下载失败: %v", aid, err)
+				continue
+			}
+			if err := substore.RecordDownloaded(sub.Target, aid); err != nil {
+				return err
+			}
+		}
+	}
+	util.Log("订阅检查完成")
+	return nil
+}
+
+func joinAids(aids []string) string {
+	var sb []string
+	for _, a := range aids {
+		sb = append(sb, "av"+a)
+	}
+	return strings.Join(sb, ", ")
 }
 
 // buildMyOption constructs a MyOption from CLI flags.
@@ -150,6 +465,13 @@ func buildMyOption() config.MyOption {
 		Cookie:                 optCookie,
 		AccessToken:            optToken,
 		Aria2cArgs:             optAria2cArgs,
+		Aria2cProxy:            optAria2cProxy,
+		AddDfnSuffix:           optAddDfnSuffix,
+		OnlyHevc:               optOnlyHevc,
+		OnlyAvc:                optOnlyAvc,
+		OnlyAv1:                optOnlyAv1,
+		NoPaddingPageNum:       optNoPaddingPageNum,
+		BandwidthAscending:     optBandwidthAscending,
 		WorkDir:                optWorkDir,
 		FFmpegPath:             optFFmpegPath,
 		Mp4boxPath:             optMp4boxPath,

@@ -39,8 +39,8 @@ type DanmakuItem struct {
 type DanmakuList []DanmakuItem
 
 func (d DanmakuList) Len() int           { return len(d) }
-func (d DanmakuList) Less(i, j int) bool  { return d[i].Second < d[j].Second }
-func (d DanmakuList) Swap(i, j int)       { d[i], d[j] = d[j], d[i] }
+func (d DanmakuList) Less(i, j int) bool { return d[i].Second < d[j].Second }
+func (d DanmakuList) Swap(i, j int)      { d[i], d[j] = d[j], d[i] }
 
 // ParseDanmakuXML parses a Bilibili danmaku XML file.
 func ParseDanmakuXML(xmlPath string) (DanmakuList, error) {
@@ -50,7 +50,7 @@ func ParseDanmakuXML(xmlPath string) (DanmakuList, error) {
 	}
 
 	type D struct {
-		P   string `xml:"p,attr"`
+		P    string `xml:"p,attr"`
 		Text string `xml:",chardata"`
 	}
 	type Root struct {

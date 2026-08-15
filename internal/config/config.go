@@ -52,12 +52,12 @@ func SettingsFrom(ctx context.Context) AppSettings {
 
 // Convenience accessors for commonly accessed settings.
 
-func Cookie(ctx context.Context) string   { return Current(ctx).Cookie }
-func Token(ctx context.Context) string   { return Current(ctx).Token }
-func DebugLog(ctx context.Context) bool  { return Current(ctx).DebugLog }
-func Host(ctx context.Context) string    { return Current(ctx).Host }
-func EpHost(ctx context.Context) string  { return Current(ctx).EpHost }
-func TvHost(ctx context.Context) string  { return Current(ctx).TvHost }
-func Area(ctx context.Context) string    { return Current(ctx).Area }
-func Wbi(ctx context.Context) string     { return Current(ctx).Wbi }
+func Cookie(ctx context.Context) string     { return Current(ctx).Cookie }
+func Token(ctx context.Context) string      { return Current(ctx).Token }
+func DebugLog(ctx context.Context) bool     { return Current(ctx).DebugLog }
+func Host(ctx context.Context) string       { return Current(ctx).Host }
+func EpHost(ctx context.Context) string     { return Current(ctx).EpHost }
+func TvHost(ctx context.Context) string     { return Current(ctx).TvHost }
+func Area(ctx context.Context) string       { return Current(ctx).Area }
+func Wbi(ctx context.Context) string        { return Current(ctx).Wbi }
 func SkipSslCheck(ctx context.Context) bool { return Current(ctx).SkipSslCheck }

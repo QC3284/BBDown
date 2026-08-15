@@ -9,19 +9,18 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/QC3284/BBDown/internal/util"
 )
 
 const (
-	webGenerateURL  = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate?source=main-fe-header"
-	webPollURL      = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=%s&source=main-fe-header"
-	tvAuthURL       = "https://passport.snm0516.aisee.tv/x/passport-tv-login/qrcode/auth_code"
-	tvPollURL       = "https://passport.bilibili.com/x/passport-tv-login/qrcode/poll"
-	tvAppKey        = "4409e2ce8ffd12b8"
-	tvAppSecret     = "59b43e04ad6965f34319062b478f83dd"
+	webGenerateURL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate?source=main-fe-header"
+	webPollURL     = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=%s&source=main-fe-header"
+	tvAuthURL      = "https://passport.snm0516.aisee.tv/x/passport-tv-login/qrcode/auth_code"
+	tvPollURL      = "https://passport.bilibili.com/x/passport-tv-login/qrcode/poll"
+	tvAppKey       = "4409e2ce8ffd12b8"
+	tvAppSecret    = "59b43e04ad6965f34319062b478f83dd"
 )
 
 // LoginWeb performs WEB account login via QR code scanning.
@@ -57,17 +56,21 @@ func LoginWeb(client *util.HTTPClient) error {
 		util.LogWarn("终端二维码打印失败: %v", err)
 	}
 	util.Log("请使用Bilibili APP扫描上方二维码登录")
+	defer os.Remove("qrcode.png")
 
-	// Step 3: Poll for scan status
+	// Step 3: Poll for scan status. Collect Set-Cookie headers: a fresh scan
+	// login delivers SESSDATA via HttpOnly Set-Cookie, not in the callback URL.
 	scanned := false
+	var setCookies []string
 	for {
 		time.Sleep(1 * time.Second)
 
-		pollResp, err := client.GetWebSource(nil, fmt.Sprintf(webPollURL, qrcodeKey))
+		pollResp, setCk, err := client.GetWebSourceWithSetCookies(nil, fmt.Sprintf(webPollURL, qrcodeKey))
 		if err != nil {
 			util.LogWarn("轮询失败: %v", err)
 			continue
 		}
+		setCookies = append(setCookies, setCk...)
 
 		var pollResult struct {
 			Code int `json:"code"`
@@ -84,7 +87,6 @@ func LoginWeb(client *util.HTTPClient) error {
 		switch pollResult.Data.Code {
 		case 86038:
 			util.LogColor("%s", "二维码已过期, 请重新执行登录指令.")
-			_ = os.Remove("qrcode.png")
 			return fmt.Errorf("二维码已过期")
 		case 86101:
 			// Waiting for scan
@@ -103,30 +105,26 @@ func LoginWeb(client *util.HTTPClient) error {
 				return fmt.Errorf("回调URL为空")
 			}
 
-			// Extract SESSDATA from URL query
+			// Merge cookies from the callback URL query and Set-Cookie headers.
 			parsed, err := url.Parse(callbackURL)
 			if err != nil {
 				return fmt.Errorf("解析回调URL失败: %w", err)
 			}
 			queryStr := parsed.RawQuery
-			if queryStr == "" {
-				util.LogError("登录成功但回调 URL 未包含 cookie 参数")
+			cookieStr := MergeLoginCookies(queryStr, setCookies)
+			sessdata := GetCookieValue(cookieStr, "SESSDATA")
+			if cookieStr == "" || sessdata == "" {
+				util.LogError("登录成功但未获取到 SESSDATA（回调 URL 与 Set-Cookie 均无有效凭据）")
 				return fmt.Errorf("未获取到cookie")
 			}
-
-			sessdata := parsed.Query().Get("SESSDATA")
-			util.Log("登录成功: SESSDATA=%s", maskValue(sessdata))
+			util.Log("登录成功: SESSDATA=%s", util.MaskValue(sessdata))
 
 			// Save cookie to BBDown.data
-			cookieStr := strings.ReplaceAll(queryStr, "&", ";")
-			cookieStr = strings.ReplaceAll(cookieStr, ",", "%2C")
-
 			cookiePath := filepath.Join(appDir(), "BBDown.data")
 			if err := os.WriteFile(cookiePath, []byte(cookieStr), 0o600); err != nil {
 				return fmt.Errorf("保存cookie失败: %w", err)
 			}
 			util.Log("Cookie 已保存到 %s", cookiePath)
-			_ = os.Remove("qrcode.png")
 			return nil
 		}
 	}
@@ -169,6 +167,7 @@ func LoginTV(client *util.HTTPClient) error {
 		util.LogWarn("终端二维码打印失败: %v", err)
 	}
 	util.Log("请使用Bilibili APP扫描上方二维码登录TV账号")
+	defer os.Remove("qrcode.png")
 
 	// Update params for polling
 	params["auth_code"] = authCode
@@ -231,28 +230,29 @@ func getTVLoginParams() map[string]string {
 	now := time.Now()
 	deviceID := randomString(20)
 	buvid := randomString(37)
-	fingerprint := now.Format("20060102150405.000") + randomString(45)
+	// Upstream format: yyyyMMddHHmmssfff (17 chars, no separator) + 45 random chars.
+	fingerprint := now.Format("20060102150405") + fmt.Sprintf("%03d", now.Nanosecond()/1_000_000) + randomString(45)
 
 	params := map[string]string{
-		"appkey":          tvAppKey,
-		"auth_code":       "",
-		"bili_local_id":   deviceID,
-		"build":           "102801",
-		"buvid":           buvid,
-		"channel":         "master",
-		"device":          "OnePlus",
-		"device_id":       deviceID,
-		"device_name":     "OnePlus7TPro",
-		"device_platform": "Android10OnePlusHD1910",
-		"fingerprint":     fingerprint,
-		"guid":            buvid,
+		"appkey":            tvAppKey,
+		"auth_code":         "",
+		"bili_local_id":     deviceID,
+		"build":             "102801",
+		"buvid":             buvid,
+		"channel":           "master",
+		"device":            "OnePlus",
+		"device_id":         deviceID,
+		"device_name":       "OnePlus7TPro",
+		"device_platform":   "Android10OnePlusHD1910",
+		"fingerprint":       fingerprint,
+		"guid":              buvid,
 		"local_fingerprint": fingerprint,
-		"local_id":        buvid,
-		"mobi_app":        "android_tv_yst",
-		"networkstate":    "wifi",
-		"platform":        "android",
-		"sys_ver":         "29",
-		"ts":              fmt.Sprintf("%d", time.Now().Unix()),
+		"local_id":          buvid,
+		"mobi_app":          "android_tv_yst",
+		"networkstate":      "wifi",
+		"platform":          "android",
+		"sys_ver":           "29",
+		"ts":                fmt.Sprintf("%d", time.Now().Unix()),
 	}
 	params["sign"] = getTVSign(params)
 
@@ -274,11 +274,9 @@ func getTVSign(params map[string]string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// maskValue masks a secret value for log output (delegates to util.MaskValue).
 func maskValue(s string) string {
-	if len(s) <= 8 {
-		return "***"
-	}
-	return s[:4] + "***" + s[len(s)-4:]
+	return util.MaskValue(s)
 }
 
 func appDir() string {

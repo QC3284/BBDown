@@ -18,8 +18,8 @@ type ParsedResult struct {
 	ExtraPoints []ViewPoint `json:"extra_points,omitempty"`
 
 	// For FLV streams
-	Clips []string `json:"clips,omitempty"`     // Segment URLs
-	Dfns  []string `json:"dfns,omitempty"`      // Available quality IDs
+	Clips []string `json:"clips,omitempty"` // Segment URLs
+	Dfns  []string `json:"dfns,omitempty"`  // Available quality IDs
 
 	// Actual media duration in seconds (may differ from claimed duration for preview content)
 	ActualDurationSec int `json:"actual_duration_sec"`
