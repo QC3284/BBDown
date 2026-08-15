@@ -525,7 +525,7 @@ func (s *APIServer) sendCallback(task *DownloadTask) {
 			util.LogWarn("回调地址不安全（内网地址），已跳过: %s", s.notifyWebhook)
 			return
 		}
-		addrs, err := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
+		addrs, err := dnsLookupIP(context.Background(), "ip", host)
 		if err != nil {
 			util.LogWarn("回调域名无法解析，已跳过: %s", s.notifyWebhook)
 			return
@@ -603,7 +603,7 @@ func isSafeCallbackURL(raw string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return false
 	}
-	addrs, err := net.DefaultResolver.LookupIP(context.Background(), "ip", host)
+	addrs, err := dnsLookupIP(context.Background(), "ip", host)
 	if err != nil {
 		return false
 	}
@@ -613,6 +613,12 @@ func isSafeCallbackURL(raw string) bool {
 		}
 	}
 	return true
+}
+
+// dnsLookupIP is the DNS resolver used by the callback SSRF checks; it is a
+// variable so tests can stub it (production uses net.DefaultResolver).
+var dnsLookupIP = func(ctx context.Context, network, host string) ([]net.IP, error) {
+	return net.DefaultResolver.LookupIP(ctx, network, host)
 }
 
 // normalizeMappedIP maps IPv4-mapped IPv6 addresses back to IPv4 (upstream).

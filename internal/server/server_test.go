@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"fmt"
 	"net"
 	"testing"
 )
@@ -65,6 +67,22 @@ func TestSegmentHasPrefix(t *testing.T) {
 }
 
 func TestIsSafeCallbackURL(t *testing.T) {
+	// Stub DNS so the domain branch is deterministic and offline (CI-safe).
+	origResolver := dnsLookupIP
+	t.Cleanup(func() { dnsLookupIP = origResolver })
+	dnsLookupIP = func(ctx context.Context, network, host string) ([]net.IP, error) {
+		switch host {
+		case "public.example":
+			return []net.IP{net.ParseIP("8.8.8.8")}, nil
+		case "evil.example":
+			return []net.IP{net.ParseIP("10.0.0.1")}, nil
+		case "mixed.example":
+			return []net.IP{net.ParseIP("8.8.8.8"), net.ParseIP("192.168.1.1")}, nil
+		default:
+			return nil, fmt.Errorf("no such host")
+		}
+	}
+
 	// Literal-IP branch (upstream semantics).
 	if isSafeCallbackURL("http://127.0.0.1:9999/hook") {
 		t.Error("loopback literal should be blocked")
@@ -81,14 +99,25 @@ func TestIsSafeCallbackURL(t *testing.T) {
 	if !isSafeCallbackURL("http://192.168.1.5/hook") {
 		t.Error("RFC1918 LITERAL is allowed (no DNS rebinding possible)")
 	}
-	if !isSafeCallbackURL("https://example.com/hook") {
-		t.Error("public domain should be allowed")
-	}
 	if isSafeCallbackURL("ftp://example.com/hook") {
 		t.Error("non-http scheme should be blocked")
 	}
 	if !isSafeCallbackURL("") {
 		t.Error("empty URL means no webhook configured: legal (upstream)")
+	}
+
+	// Domain branch (stubbed DNS, deterministic).
+	if !isSafeCallbackURL("https://public.example/hook") {
+		t.Error("public domain should be allowed")
+	}
+	if isSafeCallbackURL("https://evil.example/hook") {
+		t.Error("domain resolving to private IP should be blocked")
+	}
+	if isSafeCallbackURL("https://mixed.example/hook") {
+		t.Error("any private address among resolved IPs should block the domain")
+	}
+	if isSafeCallbackURL("https://unresolvable.example/hook") {
+		t.Error("DNS failure should block the callback")
 	}
 }
 
