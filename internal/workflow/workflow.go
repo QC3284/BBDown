@@ -331,6 +331,17 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 	if retryDelay <= 0 {
 		retryDelay = 3 * time.Second
 	}
+
+	// 交互选择只询问一次（上游用 selected 标志避免下载失败重试时反复询问）；
+	// 与上游不同的是：重试时复用用户的选择，而不是退回默认 0。
+	vIndex := 0
+	aIndex := 0
+	selectionAsked := false
+	// FLV 分支：用户选择的清晰度跨重试复用，重试时用同一清晰度重新解析
+	// （上游重试时不重新解析，会拿到错误清晰度的片段）。
+	flvDfnPicked := false
+	var selectedDfn string
+
 	for retry := 0; retry < pageRetryLimit; retry++ {
 		// Fetch chapter/view points (upstream FetchPointsAsync; failure degrades
 		// to a warning and an empty chapter list).
@@ -417,10 +428,8 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		// Select tracks (interactive or default)
 		var selectedVideo *entity.Video
 		var selectedAudio *entity.Audio
-		vIndex := 0
-		aIndex := 0
 
-		if w.Cfg.Interactive {
+		if w.Cfg.Interactive && !selectionAsked {
 			if len(result.VideoTracks) > 0 {
 				fmt.Print("请选择一条视频流(输入序号): ")
 				fmt.Print("\033[36m")
@@ -448,6 +457,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					aIndex = 0
 				}
 			}
+			selectionAsked = true
 		}
 
 		if len(result.VideoTracks) > vIndex {
@@ -619,7 +629,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				util.LogError("请先运行: BBDown login  或使用 --cookie 参数")
 				return false
 			}
-			if w.Cfg.Interactive {
+			if w.Cfg.Interactive && !flvDfnPicked {
 				for i, q := range result.Dfns {
 					util.LogColorNoTime("%d.%s", i, config.QualityMap[q])
 				}
@@ -633,8 +643,12 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				if qi >= len(result.Dfns) || qi < 0 {
 					qi = 0
 				}
+				selectedDfn = result.Dfns[qi]
+				flvDfnPicked = true
+			}
+			if flvDfnPicked {
 				reResult, err := p.ExtractTracks(ctx, aidOri, page.Aid, page.Cid, page.Epid,
-					w.Cfg.UseTvAPI, w.Cfg.UseIntlAPI, w.Cfg.UseAppAPI, firstEncoding, w.Cfg.DecryptDrm, result.Dfns[qi])
+					w.Cfg.UseTvAPI, w.Cfg.UseIntlAPI, w.Cfg.UseAppAPI, firstEncoding, w.Cfg.DecryptDrm, selectedDfn)
 				if err != nil {
 					util.LogError("P%d 重新解析失败: %v", page.Index, err)
 					return false
