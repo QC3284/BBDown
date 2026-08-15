@@ -319,7 +319,9 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 				return err
 			}
 
-			if isTerminalOut() && resp.ContentLength > 0 {
+			// 小于 1MiB 的辅助资源（封面/字幕等）不显示进度条：
+			// 它们在百毫秒内完成，进度条只会留下一行 100% 噪声。
+			if isTerminalOut() && pr.size >= 1<<20 && resp.ContentLength > 0 {
 				pr2 := newProgressReader(resp.Body, resp.ContentLength+offset)
 				defer pr2.Close()
 				_, err = io.Copy(out, pr2)
