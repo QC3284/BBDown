@@ -796,6 +796,14 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if audioPath != "" {
 				os.Remove(audioPath)
 			}
+			// Only consumed material may be deleted: with --skip-mux nothing
+			// muxed these tracks, so deleting them would discard downloaded data
+			// the user asked to keep (the video/audio tracks are kept above too).
+			for _, m := range backgroundMaterial {
+				if m.Path != "" {
+					os.Remove(m.Path)
+				}
+			}
 		} else if w.OnSaved != nil {
 			if videoPath != "" {
 				w.OnSaved(videoPath)
@@ -803,9 +811,11 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if audioPath != "" {
 				w.OnSaved(audioPath)
 			}
-		}
-		for _, m := range backgroundMaterial {
-			os.Remove(m.Path)
+			for _, m := range backgroundMaterial {
+				if m.Path != "" {
+					w.OnSaved(m.Path)
+				}
+			}
 		}
 		coverPath := filepath.Join(page.Aid, page.Aid+".jpg")
 		if pagesCount == 1 || page.Index == allPages[len(allPages)-1].Index || page.Aid != allPages[len(allPages)-1].Aid {

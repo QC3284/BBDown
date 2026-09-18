@@ -32,7 +32,7 @@ func MuxAV(ctx context.Context, useMp4box bool, bvid, videoPath, audioPath, outP
 	url := "https://www.bilibili.com/video/" + bvid + "/"
 
 	if useMp4box {
-		return muxByMp4box(ctx, url, videoPath, audioPath, outPath, desc, title, author, episodeID, pic, lang, subs, audioOnly, videoOnly, points, timeoutMinutes)
+		return muxByMp4box(ctx, url, videoPath, audioPath, audioMaterial, outPath, desc, title, author, episodeID, pic, lang, subs, audioOnly, videoOnly, points, timeoutMinutes)
 	}
 	return muxByFFmpeg(ctx, url, videoPath, audioPath, outPath, desc, title, author, episodeID, pic, lang, subs, audioOnly, videoOnly, simplyMux, points, pubTime, isHevc, audioMaterial, timeoutMinutes)
 }
@@ -53,6 +53,11 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 	}
 
 	args := []string{}
+	// Output-side options must come AFTER every -i input: ffmpeg applies an
+	// option to the next file, so emitting -metadata/-disposition between two
+	// -i arguments turns them into input options and the whole mux fails with
+	// exit 234 (upstream BBDownMuxer emits them in the output section).
+	var outputOpts []string
 	inputCount := 0
 
 	if videoPath != "" {
@@ -66,17 +71,17 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 
 	// Background audio / dubbing tracks (upstream audioMaterial).
 	if len(audioMaterial) > 0 {
-		args = append(args, "-metadata:s:a:0", "title=原音频")
+		outputOpts = append(outputOpts, "-metadata:s:a:0", "title=原音频")
 		audioCount := 0
 		for _, a := range audioMaterial {
 			args = append(args, "-i", a.Path)
 			inputCount++
 			audioCount++
 			if a.Title != "" {
-				args = append(args, fmt.Sprintf("-metadata:s:a:%d", audioCount), "title="+escapeString(a.Title))
+				outputOpts = append(outputOpts, fmt.Sprintf("-metadata:s:a:%d", audioCount), "title="+escapeString(a.Title))
 			}
 			if a.PersonName != "" {
-				args = append(args, fmt.Sprintf("-metadata:s:a:%d", audioCount), "artist="+escapeString(a.PersonName))
+				outputOpts = append(outputOpts, fmt.Sprintf("-metadata:s:a:%d", audioCount), "artist="+escapeString(a.PersonName))
 			}
 		}
 	}
@@ -92,7 +97,7 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 			args = append(args, "-i", s.Path)
 			_, langName := util.GetSubtitleCode(s.Lan)
 			langCode, _ := util.GetSubtitleCode(s.Lan)
-			args = append(args,
+			outputOpts = append(outputOpts,
 				fmt.Sprintf("-metadata:s:s:%d", subIdx), "title="+escapeString(langName),
 				fmt.Sprintf("-metadata:s:s:%d", subIdx), "language="+escapeString(langCode),
 			)
@@ -106,7 +111,7 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 		if audioOnly {
 			dispositionIdx = "0"
 		}
-		args = append(args, "-disposition:v:"+dispositionIdx, "attached_pic")
+		outputOpts = append(outputOpts, "-disposition:v:"+dispositionIdx, "attached_pic")
 	}
 
 	// Chapters (view points) via an FFMETADATA sidecar file.
@@ -124,8 +129,11 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 			return err
 		}
 		args = append(args, "-i", metaFile)
-		args = append(args, "-map_chapters", fmt.Sprintf("%d", inputCount))
+		outputOpts = append(outputOpts, "-map_chapters", fmt.Sprintf("%d", inputCount))
 	}
+
+	// All inputs are in place now: flush the deferred output-side options.
+	args = append(args, outputOpts...)
 
 	for i := 0; i < inputCount; i++ {
 		args = append(args, "-map", fmt.Sprintf("%d", i))
@@ -224,7 +232,7 @@ func ffmpegMetaString(points []entity.ViewPoint) string {
 	return sb.String()
 }
 
-func muxByMp4box(ctx context.Context, url, videoPath, audioPath, outPath, desc, title, author, episodeID, pic, lang string, subs []entity.Subtitle, audioOnly, videoOnly bool, points []entity.ViewPoint, timeoutMinutes int) error {
+func muxByMp4box(ctx context.Context, url, videoPath, audioPath string, audioMaterial []entity.AudioMaterial, outPath, desc, title, author, episodeID, pic, lang string, subs []entity.Subtitle, audioOnly, videoOnly bool, points []entity.ViewPoint, timeoutMinutes int) error {
 	dir := filepath.Dir(outPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -248,6 +256,22 @@ func muxByMp4box(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 		}
 		args = append(args, "-add", fmt.Sprintf("%s:lang=%s", audioPath, audioLang))
 		nowID++
+	}
+
+	// Dubbing / background audio tracks must join the -add chain exactly like the
+	// ffmpeg branch does. Otherwise switching to mp4box automatically for Dolby
+	// Vision (ffmpeg < 5.0) silently dropped already-downloaded tracks, which the
+	// workflow then deleted — permanent data loss with no warning (upstream v1.6.17).
+	for _, material := range audioMaterial {
+		args = append(args, "-add", fmt.Sprintf("%s:lang=und", material.Path))
+		nowID++
+		name := material.Title
+		if name == "" {
+			name = material.PersonName
+		}
+		if name != "" {
+			args = append(args, "-udta", fmt.Sprintf("%d:type=name:str=\"%s\"", nowID, escapeString(name)))
+		}
 	}
 
 	metaFile := ""
