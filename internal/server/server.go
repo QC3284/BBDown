@@ -113,6 +113,7 @@ type APIServer struct {
 	acceptLimiter chan struct{} // pending-queue cap (maxConcurrent * 9)
 	taskFile      string
 	taskWG        sync.WaitGroup
+	auth          *authGuard
 
 	// persistMu serialises bbdown-tasks.json writes: several tasks finish
 	// concurrently and each calls persistFinishedTasks.
@@ -135,6 +136,7 @@ func NewAPIServer(listenURL string, maxConcurrent int, serveToken, notifyWebhook
 		semaphore:     make(chan struct{}, maxConcurrent),
 		acceptLimiter: make(chan struct{}, maxConcurrent*9),
 		taskFile:      "bbdown-tasks.json",
+		auth:          newAuthGuard(),
 	}
 }
 
@@ -245,6 +247,95 @@ func isLoopbackHost(host string) bool {
 	return ip.IsLoopback()
 }
 
+// Auth brute-force guard (upstream RF-9/RF-74): without it an unauthenticated
+// client may retry the serve token indefinitely, and an unbounded per-client map
+// would itself become the memory leak.
+const (
+	maxAuthFailures   = 10
+	authLockoutWindow = 5 * time.Minute
+	maxAuthTrackers   = 1000
+)
+
+type authFailure struct {
+	count int
+	until time.Time
+}
+
+// authGuard tracks failed token attempts per client, with a hard cap on the
+// number of tracked clients.
+type authGuard struct {
+	mu   sync.Mutex
+	hits map[string]*authFailure
+}
+
+func newAuthGuard() *authGuard {
+	return &authGuard{hits: map[string]*authFailure{}}
+}
+
+// blocked reports whether the client must wait before another attempt.
+func (g *authGuard) blocked(client string) (time.Duration, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	e, ok := g.hits[client]
+	if !ok || e.count < maxAuthFailures || time.Now().After(e.until) {
+		return 0, false
+	}
+	return time.Until(e.until), true
+}
+
+// fail records one failed attempt and re-arms the lockout window.
+func (g *authGuard) fail(client string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pruneLocked()
+	e, ok := g.hits[client]
+	if !ok || time.Now().After(e.until) {
+		e = &authFailure{}
+		g.hits[client] = e
+	}
+	e.count++
+	e.until = time.Now().Add(authLockoutWindow)
+}
+
+// reset clears the counter after a successful authentication.
+func (g *authGuard) reset(client string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.hits, client)
+}
+
+// pruneLocked keeps the map bounded: expired entries go first, and if that is
+// not enough one arbitrary entry is dropped so a flood of distinct clients
+// cannot grow it without limit.
+func (g *authGuard) pruneLocked() {
+	if len(g.hits) < maxAuthTrackers {
+		return
+	}
+	now := time.Now()
+	for k, v := range g.hits {
+		if now.After(v.until) {
+			delete(g.hits, k)
+		}
+	}
+	for k := range g.hits {
+		if len(g.hits) < maxAuthTrackers {
+			break
+		}
+		delete(g.hits, k)
+	}
+}
+
+// clientKey identifies the caller for the auth guard. RemoteAddr is used rather
+// than a forwarded header: without an explicit --trusted-proxy setting, XFF is
+// attacker-controlled and would let one client forge unlimited identities.
+func clientKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // tokenMatches compares the presented serve token in constant time. A plain
 // "!=" leaks the shared secret through response timing, which is measurable
 // across a loopback or LAN connection.
@@ -265,8 +356,18 @@ func (s *APIServer) tokenMiddleware(next http.Handler) http.Handler {
 			segmentHasPrefix(path, "/cancel") ||
 			segmentHasPrefix(path, "/remove-finished")
 		if isAPI && !tokenMatches(r.Header.Get("X-Serve-Token"), s.serveToken) {
+			client := clientKey(r)
+			if retry, blocked := s.auth.blocked(client); blocked {
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retry.Seconds())+1))
+				http.Error(w, `{"error":"too many failed attempts"}`, http.StatusTooManyRequests)
+				return
+			}
+			s.auth.fail(client)
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
+		}
+		if isAPI && s.serveToken != "" {
+			s.auth.reset(clientKey(r))
 		}
 		next.ServeHTTP(w, r)
 	})

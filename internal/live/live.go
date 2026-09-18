@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"encoding/binary"
 	"github.com/QC3284/BBDown/internal/muxer"
 	"github.com/QC3284/BBDown/internal/util"
 )
@@ -261,6 +262,14 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 		return true, nil
 	}
 
+	// Cut every segment back to its last complete FLV tag first: one truncated
+	// segment makes the concat demuxer abort the whole merge.
+	for _, f := range segFiles {
+		if dropped, err := trimFLVTail(f); err == nil && dropped > 0 {
+			util.LogDebug("分段 %s 丢弃了 %d 字节不完整标签", f, dropped)
+		}
+	}
+
 	util.Log("正在合成 %d 个直播分段...", len(segFiles))
 	listPath := filepath.Join(sessionDir, "concat.txt")
 	var sb strings.Builder
@@ -380,6 +389,46 @@ func streamToFile(ctx context.Context, url, segPath string) (int64, error) {
 		}
 	}
 	return offset, nil
+}
+
+// trimFLVTail truncates a segment to its last complete FLV tag and reports how
+// many trailing bytes were dropped. A network interruption or a cancellation
+// leaves half a tag at the end of the current segment; the ffmpeg concat demuxer
+// then aborts the entire merge at that point, losing the whole recording
+// (upstream v1.6.13 "分段尾裁剪").
+func trimFLVTail(path string) (int64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	// FLV header: "FLV" + version + flags + 4-byte data offset, then a 4-byte
+	// PreviousTagSize0.
+	if len(data) < 13 || string(data[:3]) != "FLV" {
+		return 0, nil // not a container we understand: leave it untouched
+	}
+	offset := int(binary.BigEndian.Uint32(data[5:9]))
+	if offset < 9 || offset+4 > len(data) {
+		offset = 9
+	}
+	pos := offset + 4
+
+	last := pos
+	for pos+11 <= len(data) {
+		dataSize := int(uint32(data[pos+1])<<16 | uint32(data[pos+2])<<8 | uint32(data[pos+3]))
+		next := pos + 11 + dataSize + 4
+		if next > len(data) {
+			break // the tag (or its trailing size field) is incomplete
+		}
+		pos = next
+		last = pos
+	}
+	if last >= len(data) {
+		return 0, nil
+	}
+	if err := os.Truncate(path, int64(last)); err != nil {
+		return 0, err
+	}
+	return int64(len(data) - last), nil
 }
 
 // SanitizeFileName replaces invalid filename characters and control chars.
