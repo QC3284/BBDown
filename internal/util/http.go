@@ -12,6 +12,20 @@ import (
 	"time"
 )
 
+// apiRetries and apiRetryBackoff bound the API retry policy; the backoff doubles
+// per attempt. Both are variables so tests can shrink them.
+var (
+	apiRetries      = 3
+	apiRetryBackoff = 500 * time.Millisecond
+)
+
+// SetRetries overrides the retry count for this client (from --retry-count).
+func (c *HTTPClient) SetRetries(n int) {
+	if n > 0 {
+		c.retries = n
+	}
+}
+
 // maxResponseBodyBytes bounds an API response body (upstream 64MB). A broken
 // endpoint or an --insecure MITM can otherwise stream a chunked body without
 // limit and exhaust memory.
@@ -73,6 +87,8 @@ type HTTPClient struct {
 	// credentialHosts are user-opted-in hosts that may receive cookies in
 	// addition to the official Bilibili domains.
 	credentialHosts []string
+	// retries overrides apiRetries when non-zero.
+	retries int
 }
 
 // NewHTTPClient creates a new HTTPClient.
@@ -213,7 +229,37 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 		c.debugFn("GET %s", MaskUrl(url))
 	}
 
-	resp, err := c.client.Do(req)
+	var resp *http.Response
+	retries := c.retries
+	if retries <= 0 {
+		retries = apiRetries
+	}
+	// Retry only transient failures — transport errors and 5xx. A 4xx is
+	// deterministic, so retrying it would just burn the budget and delay the
+	// error the caller needs to see (upstream retries min(MaxRetryCount,3) times
+	// with exponential backoff).
+	attemptReq := req
+	for attempt := 0; ; attempt++ {
+		resp, err = c.client.Do(attemptReq)
+		if err == nil && resp.StatusCode < http.StatusInternalServerError {
+			break
+		}
+		if attempt >= retries-1 || ctx.Err() != nil {
+			break
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		backoff := apiRetryBackoff << attempt
+		if c.debugFn != nil {
+			c.debugFn("GET %s 失败（第 %d 次），%v 后重试", MaskUrl(url), attempt+1, backoff)
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(backoff):
+		}
+		attemptReq = req.Clone(ctx)
+	}
 	if err != nil {
 		return "", nil, err
 	}

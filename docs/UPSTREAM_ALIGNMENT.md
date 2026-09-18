@@ -276,9 +276,30 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 > 经核实**与上游一致、不作为缺口**：CoverOnly 的「不提前返回」注释与上游行为相反，已按上游修正；\`GetValidFileName\` 的保留名处理原本已对齐。
 
-### 4.13 当前剩余队列
+### 4.13 剩余队列（2026-09-19 逐条核对后修正）
 
-- **待决策**（§4.5）：免二压重发（已固化为 \`TestFixtureReparseProtocol\` 跳启用例，波及 5 个夹具）、版本号策略、协作姿态。
+> **修正**：此前本节写「P1 队列已清空」是**错的** —— 那是按汇总时挑出的重点条目判的。
+> 逐行核对五片报告的 ❌/⚠️ 行（约 60 条）后，确认仍有下列条目未处理。
+
+**已完成（本轮补做，见 §4.15）**：mp4box 封面转义与 EscapeString 换行折叠、SRT `-->`` 与 ASS 反斜杠注入、
+`baseURLRegex` 收紧、显式 epid 的预告保留、国际版多余的转义预替换、收藏夹翻页不再静默截断、
+密钥临时文件按实际长度覆写、响应体 64MB 与 gRPC 48MB 上限、携 Cookie 前校验目标主机、
+`SavePaths` 去重、已完成任务按创建时间裁剪、aria2c 兜底超时、`--skip-mux` 跳过 DOVI 探测、
+大会员回退跟随镜像主机、VIP 判定走 JSON message、API 层有界重试。
+
+**仍未处理**：
+
+| 类别 | 条目 |
+|---|---|
+| 直播 | `LiveRecordResult` 三态（现为 `(bool, error)`）；合成改 staging 临时文件；旧会话分段只提示不删 |
+| 文件与路径 | `article`/`live` 支持 `--work-dir`；专栏与直播文件名接入保留名防护（现用 `live.SanitizeFileName`，未走 `GetValidFileName`） |
+| 订阅 | `SubscriptionStore` 历史每 target 上限 5000 条截断；`RecordDownloaded` 改 Remove+Add 保「最近」语义 |
+| HTTP | 服务器时钟校准（`ServerClock`，本地时钟偏差 >60s 时 WBI 签名被拒）；`SESSDATA` 有效期估算与提前告警；gRPC 帧首字节合法性校验；UA 版本池与按流隔离 |
+| 日志与工具 | `Logger` 改进程内单例 `StreamWriter`（写失败连续 5 次闭锁 + 30s 冷却）；`--aria2c-args` 未闭合引号处理 |
+| 下载 | 下载路径独占锁（`RunWithPathLock`）与败者临时文件清理 |
+
+**判定为「与上游一致、不作为缺口」**：`SavePaths` 集合语义、`/health` 无需认证、格式串中的文化敏感项（Go 无此问题）。
+
 ### 4.14 第八轮：P1 收尾
 
 | 条目 | 改动 | 验证 |
