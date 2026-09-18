@@ -253,6 +253,15 @@ func (w *Workflow) Run(ctx context.Context) error {
 	}
 	parserInst := parser.NewParser(w.HTTPClient, parserCfg)
 
+	// Only pages that still need downloading take part in archiving.
+	var archiveAids []string
+	for _, p := range pagesInfo {
+		if !w.checkAidArchived(p.Aid) {
+			archiveAids = append(archiveAids, p.Aid)
+		}
+	}
+	tracker := NewArchiveTracker(archiveAids)
+
 	var failedPages []int
 	for _, page := range pagesInfo {
 		if pagesCount > 1 && delay > 0 {
@@ -288,6 +297,13 @@ func (w *Workflow) Run(ctx context.Context) error {
 				return ctx.Err()
 			}
 			failedPages = append(failedPages, page.Index)
+		}
+		if w.Cfg.SaveArchivesToFile {
+			// The tracker holds the write back until every page of this aid is done.
+			if tracker.OnProcessed(page.Aid, success) {
+				w.saveAidArchived(page.Aid)
+				util.LogDebug("aid: %s 全部分P已完成, 已记录到 BBDown.archives", page.Aid)
+			}
 		}
 	}
 
@@ -862,8 +878,6 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		}
 
 		util.Log("下载P%d完毕", page.Index)
-
-		w.saveAidArchived(page.Aid)
 
 		if w.OnSaved != nil && savePath != "" {
 			w.OnSaved(savePath)
@@ -1507,6 +1521,37 @@ func (w *Workflow) handleDeprecatedOptions() {
 }
 
 // checkAidArchived checks if an aid has been downloaded before.
+// ArchiveTracker decides when an aid may be recorded in BBDown.archives.
+// Archiving is per aid, but a multi-page video must only be archived once every
+// page has succeeded: recording right after the first page made the remaining
+// pages of the same video look "already downloaded" on the next run and skip
+// them (upstream RF-75 ArchiveTracker).
+type ArchiveTracker struct {
+	pending map[string]int
+	failed  map[string]bool
+}
+
+// NewArchiveTracker takes the aids of every page about to be processed.
+func NewArchiveTracker(aids []string) *ArchiveTracker {
+	t := &ArchiveTracker{pending: map[string]int{}, failed: map[string]bool{}}
+	for _, a := range aids {
+		t.pending[a]++
+	}
+	return t
+}
+
+// OnProcessed reports whether aid may now be archived. A single failure for an
+// aid disqualifies it for the whole run.
+func (t *ArchiveTracker) OnProcessed(aid string, ok bool) bool {
+	if !ok {
+		t.failed[aid] = true
+	}
+	if t.pending[aid] > 0 {
+		t.pending[aid]--
+	}
+	return t.pending[aid] == 0 && !t.failed[aid]
+}
+
 func (w *Workflow) checkAidArchived(aid string) bool {
 	if !w.Cfg.SaveArchivesToFile {
 		return false
