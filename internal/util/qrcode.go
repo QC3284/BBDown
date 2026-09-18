@@ -23,19 +23,32 @@ func PrintQRCode(content string) error {
 		fmt.Fprintf(os.Stderr, "写入 qrcode.png 失败: %v\n", werr)
 	}
 
-	// Convert QR code to ASCII art
-	bitmap := qr.Bitmap()
+	fmt.Println(renderQRCode(qr))
+	return nil
+}
+
+// blockGlyph is the two-cell solid block each module is drawn with.
+const blockGlyph = "██"
+
+// renderQRCode renders the QR code as ANSI art using upstream
+// ConsoleQRCode.GetGraphic 的配色：模块为 true 的是**深色**模块，画成
+// ConsoleColor.Black；false 的浅色模块画成 ConsoleColor.White（.NET 里 White 是
+// 亮白，即 97）。
+//
+// 曾把极性画反：深色模块用 47（白底）、浅色模块用 40（黑底），整张码变成反色。
+// 反色码在深色终端上多数扫码器仍认，但一旦终端是浅色主题就扫不出来，所见也与上游相反。
+func renderQRCode(qr *qrcode.QRCode) string {
 	var sb strings.Builder
-	for _, row := range bitmap {
-		for _, col := range row {
-			if col {
-				sb.WriteString("\033[47m  \033[0m") // white block
+	for _, row := range qr.Bitmap() {
+		for _, dark := range row {
+			if dark {
+				sb.WriteString(AnsiBlack + blockGlyph)
 			} else {
-				sb.WriteString("\033[40m  \033[0m") // black block
+				sb.WriteString(AnsiWhite + blockGlyph)
 			}
 		}
+		sb.WriteString(AnsiReset)
 		sb.WriteByte('\n')
 	}
-	fmt.Println(sb.String())
-	return nil
+	return sb.String()
 }

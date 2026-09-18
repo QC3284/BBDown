@@ -20,6 +20,7 @@ const MaxLogFieldLen = 512
 // banner darker than upstream on every terminal.
 const (
 	AnsiReset      = "\033[0m"
+	AnsiBlack      = "\033[30m" // ConsoleColor.Black      (二维码深色模块)
 	AnsiRed        = "\033[91m" // ConsoleColor.Red        (LogError)
 	AnsiDarkYellow = "\033[33m" // ConsoleColor.DarkYellow (LogWarn)
 	AnsiCyan       = "\033[96m" // ConsoleColor.Cyan       (LogColor / 提示符)
