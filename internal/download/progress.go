@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +27,8 @@ type progressReader struct {
 	speed      string
 	started    int32
 	done       chan struct{}
+	finished   chan struct{}
+	closeOnce  sync.Once
 	isTerminal bool
 }
 
@@ -35,6 +39,7 @@ func newProgressReader(r io.Reader, total int64) *progressReader {
 		lastTime:   time.Now(),
 		isTerminal: term.IsTerminal(int(os.Stdout.Fd())),
 		done:       make(chan struct{}),
+		finished:   make(chan struct{}),
 	}
 	return pr
 }
@@ -50,11 +55,23 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Close 停掉渲染协程，并**等它把进度行擦干净**再返回。
+//
+// 不等的话，紧接着的日志会与最后一帧挤在同一行：上游用 using 作用域保证
+// ProgressBar.Dispose 先于后续日志，这里用 finished 通道表达同一时序。
 func (pr *progressReader) Close() {
-	close(pr.done)
+	pr.closeOnce.Do(func() { close(pr.done) })
+	if atomic.LoadInt32(&pr.started) == 1 {
+		<-pr.finished
+	}
 }
 
 func (pr *progressReader) renderLoop() {
+	defer close(pr.finished)
+	if !pr.isTerminal {
+		return
+	}
+	line := newProgressLine()
 	ticker := time.NewTicker(125 * time.Millisecond)
 	defer ticker.Stop()
 	animIdx := 0
@@ -81,19 +98,11 @@ func (pr *progressReader) renderLoop() {
 		}
 
 		blocks := int(pct * progressBlocks)
-		bar := make([]byte, progressBlocks)
-		for i := 0; i < progressBlocks; i++ {
-			if i < blocks {
-				bar[i] = '#'
-			} else {
-				bar[i] = '-'
-			}
-		}
+		bar := strings.Repeat("#", blocks) + strings.Repeat("-", progressBlocks-blocks)
 		anim := progressChars[animIdx%len(progressChars)]
 		animIdx++
 
-		fmt.Fprintf(os.Stdout, "                            [%s] %6.2f%% %c%s\r",
-			string(bar), pct*100, anim, pr.speed)
+		line.draw(fmt.Sprintf("                            [%s] %6.2f%% %c%s", bar, pct*100, anim, pr.speed))
 	}
 
 	// 立即绘制首帧：下载若在首个 tick(125ms) 前完成，进度条也不至于完全不可见。
@@ -101,9 +110,8 @@ func (pr *progressReader) renderLoop() {
 	for {
 		select {
 		case <-pr.done:
-			// 结束前补一帧最终状态(100%)并换行，快速下载也能看到完整进度条。
-			render()
-			fmt.Fprint(os.Stdout, "\n")
+			// 收尾擦除整行（上游 Dispose 语义），把这一行还给紧随其后的日志。
+			line.clear()
 			return
 		case <-ticker.C:
 			render()

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -97,6 +98,32 @@ func sanitizeLogArgs(args []interface{}) []interface{} {
 	return out
 }
 
+// ConsoleLock 串行化进程内的所有控制台写入：日志与进度条共用它。
+//
+// 上游 BBDown.Core.Logger.ConsoleLock 就是被 BBDown/Infrastructure/ProgressBar 复用的同一把锁；
+// 不加锁时进度条重绘会与日志写入互相插入，终端上留下半行进度残影（实测：下载结束打
+// 「合并分片...」时，上一帧的 25.07% 尾巴连同它一起显示成两行进度）。
+var ConsoleLock sync.Mutex
+
+// progressLineActive 表示终端当前行上停着一条尚未收尾的进度条。
+var progressLineActive atomic.Bool
+
+// SetProgressLineActive 由进度条在绘制/擦除时告知日志：这一行现在归进度条。
+func SetProgressLineActive(active bool) { progressLineActive.Store(active) }
+
+// consoleWrite 在 ConsoleLock 之下执行一次完整的控制台写入。
+//
+// 写日志前先给进度条那一行收尾（换行）：进度条是原地重绘的，日志若直接接在它后面，
+// 下一帧重绘会回到行首把这条日志整行擦掉。
+func consoleWrite(write func()) {
+	ConsoleLock.Lock()
+	defer ConsoleLock.Unlock()
+	if progressLineActive.Swap(false) {
+		fmt.Print("\n")
+	}
+	write()
+}
+
 // Logger provides thread-safe, colored console logging with optional file output.
 type Logger struct {
 	mu          sync.Mutex
@@ -179,7 +206,7 @@ func timestamp() string {
 func (l *Logger) Log(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
-	fmt.Println(line)
+	consoleWrite(func() { fmt.Println(line) })
 	l.appendToFile(line)
 }
 
@@ -187,10 +214,10 @@ func (l *Logger) Log(format string, args ...interface{}) {
 func (l *Logger) LogError(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
-	l.mu.Lock()
-	fmt.Print(timestamp() + " - ")
-	fmt.Print(AnsiRed + msg + AnsiReset + "\n")
-	l.mu.Unlock()
+	consoleWrite(func() {
+		fmt.Print(timestamp() + " - ")
+		fmt.Print(AnsiRed + msg + AnsiReset + "\n")
+	})
 	l.appendToFile(line)
 }
 
@@ -198,19 +225,17 @@ func (l *Logger) LogError(format string, args ...interface{}) {
 func (l *Logger) LogWarn(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
-	l.mu.Lock()
-	fmt.Print(timestamp() + " - ")
-	fmt.Print(AnsiDarkYellow + msg + AnsiReset + "\n")
-	l.mu.Unlock()
+	consoleWrite(func() {
+		fmt.Print(timestamp() + " - ")
+		fmt.Print(AnsiDarkYellow + msg + AnsiReset + "\n")
+	})
 	l.appendToFile(line)
 }
 
 // LogColorNoTime prints a colored line in cyan without timestamp, indented to align.
 func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	l.mu.Lock()
-	fmt.Print("                            " + AnsiCyan + msg + AnsiReset + "\n")
-	l.mu.Unlock()
+	consoleWrite(func() { fmt.Print("                            " + AnsiCyan + msg + AnsiReset + "\n") })
 	l.appendToFile("                             " + msg)
 }
 
@@ -218,10 +243,10 @@ func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
 func (l *Logger) LogColor(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
-	l.mu.Lock()
-	fmt.Print(timestamp() + " - ")
-	fmt.Print(AnsiCyan + msg + AnsiReset + "\n")
-	l.mu.Unlock()
+	consoleWrite(func() {
+		fmt.Print(timestamp() + " - ")
+		fmt.Print(AnsiCyan + msg + AnsiReset + "\n")
+	})
 	l.appendToFile(line)
 }
 
@@ -232,16 +257,14 @@ func (l *Logger) LogDebug(format string, args ...interface{}) {
 	}
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
-	l.mu.Lock()
-	fmt.Print(AnsiDarkGray + line + AnsiReset + "\n")
-	l.mu.Unlock()
+	consoleWrite(func() { fmt.Print(AnsiDarkGray + line + AnsiReset + "\n") })
 	l.appendToFile(line)
 }
 
 // Printf prints without timestamp prefix (for interactive prompts).
 func (l *Logger) Printf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	fmt.Print(msg)
+	consoleWrite(func() { fmt.Print(msg) })
 }
 
 // Default package-level logger.

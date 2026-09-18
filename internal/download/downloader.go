@@ -438,9 +438,17 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 		idx++
 	}
 
+	// 进度按「分片累计字节」实时聚合（上游 ProgressAggregator），只按分片完成累加会让
+	// 进度条以分片数为台阶跳变。
+	aggregate := newProgressAggregator(len(clips))
 	var totalBytes atomic.Int64
+	reportProgress := func(idx int) func(int64) {
+		return func(cumulative int64) { totalBytes.Store(aggregate.Report(idx, cumulative)) }
+	}
+
 	progressDone := make(chan struct{})
-	go renderAggregateProgress(&totalBytes, size, progressDone)
+	progressStopped := make(chan struct{})
+	go renderProgressBar(&totalBytes, size, progressDone, progressStopped)
 
 	sem := make(chan struct{}, maxConcurrentClips())
 	var wg sync.WaitGroup
@@ -471,7 +479,7 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 				return
 			}
 
-			n, err := downloadRange(ctx, url, destPath, c, cfg)
+			n, err := downloadRange(ctx, url, destPath, c, cfg, reportProgress(c.idx))
 			if err == ErrRangeNotSupported {
 				notSupported.Store(true)
 				recordErr(err)
@@ -486,6 +494,8 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 	}
 	wg.Wait()
 	close(progressDone)
+	// 等进度行擦干净再往下打日志：不等的话日志会和最后一帧挤在同一行。
+	<-progressStopped
 
 	if notSupported.Load() || firstErr != nil {
 		for _, c := range clips {
@@ -524,6 +534,24 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 	return nil
 }
 
+// countingWriter 把已写入的累计字节数回报给进度聚合。
+type countingWriter struct {
+	w       io.Writer
+	written int64
+	onWrite func(int64)
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	if n > 0 {
+		c.written += int64(n)
+		if c.onWrite != nil {
+			c.onWrite(c.written)
+		}
+	}
+	return n, err
+}
+
 type clipRange struct {
 	idx      int
 	from, to int64
@@ -535,12 +563,18 @@ func clipPath(dest string, idx int) string {
 
 // downloadRange downloads one byte range with per-clip retries and validates
 // that the server honored the requested offset.
-func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cfg DownloadConfig) (int64, error) {
+//
+// onProgress 收到的是**该分片自己的累计字节数**（不是增量）：聚合方按「新值 - 上次值」
+// 推进总量，重试时先上报 0 让总量回退，与上游 ProgressAggregator 同语义。
+func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cfg DownloadConfig, onProgress func(int64)) (int64, error) {
 	tmpPath := clipPath(destPath, clip.idx)
 
 	var lastErr error
 	for attempt := 0; attempt < cfg.retryCount(); attempt++ {
 		if attempt > 0 {
+			if onProgress != nil {
+				onProgress(0) // 分片从头重下，聚合总量随之回退
+			}
 			backoff := time.Duration(attempt) * cfg.retryDelay()
 			if !sleepCtx(ctx, backoff) {
 				return 0, ctx.Err()
@@ -585,7 +619,11 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 				return 0, err
 			}
 			defer out.Close()
-			return io.Copy(out, resp.Body)
+			counter := &countingWriter{w: out, onWrite: onProgress}
+			if _, err := io.Copy(counter, resp.Body); err != nil {
+				return counter.written, err
+			}
+			return counter.written, nil
 		}()
 		if err == nil {
 			return n, nil
@@ -599,9 +637,18 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 	return 0, lastErr
 }
 
+// renderProgressBar 是给测试留的接缝：替换它即可在不依赖真实终端的前提下断言
+// 「进度行收尾之后才允许打日志」的时序。
+var renderProgressBar = renderAggregateProgress
+
 // renderAggregateProgress draws a 40-block progress bar for multi-thread downloads.
-func renderAggregateProgress(counter *atomic.Int64, total int64, done chan struct{}) {
-	if !isTerminalOut() {
+//
+// 返回前关闭 stopped：调用方据此保证「进度行已擦干净」先于后续日志（上游用 using
+// 作用域表达同一件事——ProgressBar 的 Dispose 必须在合并日志之前完成）。
+func renderAggregateProgress(counter *atomic.Int64, total int64, done <-chan struct{}, stopped chan<- struct{}) {
+	defer close(stopped)
+	line := newProgressLine()
+	if !line.enabled {
 		return
 	}
 	ticker := time.NewTicker(125 * time.Millisecond)
@@ -626,19 +673,18 @@ func renderAggregateProgress(counter *atomic.Int64, total int64, done chan struc
 		if pct > 1 {
 			pct = 1
 		}
-		blocks := int(pct * 40)
-		bar := strings.Repeat("#", blocks) + strings.Repeat("-", 40-blocks)
-		fmt.Printf("                            [%s] %6.2f%% %c%s\r", bar, pct*100, chars[animIdx%len(chars)], speed)
+		blocks := int(pct * progressBlocks)
+		bar := strings.Repeat("#", blocks) + strings.Repeat("-", progressBlocks-blocks)
+		line.draw(fmt.Sprintf("                            [%s] %6.2f%% %c%s", bar, pct*100, chars[animIdx%len(chars)], speed))
 		animIdx++
 	}
 
-	// 立即绘制首帧；结束时补一帧最终状态(100%)并换行（与单线程进度条一致）。
+	// 立即绘制首帧；结束时擦掉整行（上游 ProgressBar.Dispose 的 UpdateText(string.Empty)）。
 	render()
 	for {
 		select {
 		case <-done:
-			render()
-			fmt.Print("\n")
+			line.clear()
 			return
 		case <-ticker.C:
 			render()
@@ -646,7 +692,8 @@ func renderAggregateProgress(counter *atomic.Int64, total int64, done chan struc
 	}
 }
 
-func isTerminalOut() bool {
+// isTerminalOut 是变量而非函数：用例需要在不依赖真实终端的前提下驱动进度条绘制。
+var isTerminalOut = func() bool {
 	fi, err := os.Stdout.Stat()
 	if err != nil {
 		return false
