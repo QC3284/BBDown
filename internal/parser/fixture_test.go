@@ -269,6 +269,21 @@ func TestFixtureBangumiWebDashVideoInfoRoot(t *testing.T) {
 	}
 }
 
+// TestFixturePlayLimitedReportsReason: a play_check with a limit reason must
+// surface as a readable error naming both the machine reason and the
+// human-readable detail, instead of an empty-track "success" (upstream F13).
+func TestFixturePlayLimitedReportsReason(t *testing.T) {
+	_, err := extractFixtureWithEpid(t, "play-limited", "307930")
+	if err == nil {
+		t.Fatal("a VIP-limited response must be reported as an error, not an empty track list")
+	}
+	for _, want := range []string{"大会员", "limit_play_reason=VIP_LIMIT"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must mention %q", err.Error(), want)
+		}
+	}
+}
+
 // extractIntlFixture drives the international parse path against a server that
 // routes by the prefer_code_type query parameter, which is how upstream's
 // FakeBilibiliApiServer distinguishes the two passes.
