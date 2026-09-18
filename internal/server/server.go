@@ -111,6 +111,13 @@ type APIServer struct {
 	acceptLimiter chan struct{} // pending-queue cap (maxConcurrent * 9)
 	taskFile      string
 	taskWG        sync.WaitGroup
+
+	// persistMu serialises bbdown-tasks.json writes: several tasks finish
+	// concurrently and each calls persistFinishedTasks.
+	persistMu sync.Mutex
+	// taskBaseCtx is the parent of every task context, so a shutdown can cancel
+	// in-flight downloads instead of truncating them at process exit.
+	taskBaseCtx context.Context
 }
 
 // NewAPIServer creates a new API server instance.
@@ -175,6 +182,12 @@ func (s *APIServer) Run(ctx context.Context) error {
 
 	s.loadFinishedTasks()
 
+	taskBaseCtx, taskCancelAll := context.WithCancel(ctx)
+	s.mu.Lock()
+	s.taskBaseCtx = taskBaseCtx
+	s.mu.Unlock()
+	defer taskCancelAll()
+
 	util.Log("API服务器已启动: %s", s.listenURL)
 	util.Log("最大并发: %d", s.maxConcurrent)
 
@@ -187,6 +200,10 @@ func (s *APIServer) Run(ctx context.Context) error {
 
 	go func() {
 		<-ctx.Done()
+		// Cancel in-flight tasks first. Waiting for them without cancelling meant
+		// they never reached Cancelled and never persisted, and the process exit
+		// truncated them after the 30s grace period.
+		taskCancelAll()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		done := make(chan struct{})
@@ -196,6 +213,9 @@ func (s *APIServer) Run(ctx context.Context) error {
 		case <-shutdownCtx.Done():
 			util.LogWarn("等待后台任务超时，强制退出")
 		}
+		// Persist whatever finished, including tasks cancelled above whose own
+		// deferred write may not have run yet.
+		s.persistFinishedTasks()
 		server.Shutdown(context.Background())
 	}()
 
@@ -396,7 +416,11 @@ func (s *APIServer) handleAddTask(w http.ResponseWriter, r *http.Request) {
 		TaskCreateTime: time.Now().Unix(),
 		mu:             &sync.Mutex{},
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	base := s.taskBaseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithCancel(base)
 	task.cancelFn = cancel
 
 	s.mu.Lock()
@@ -485,6 +509,23 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 	s.sendCallback(task)
 }
 
+// maskTaskError removes local absolute paths from an error message before it is
+// served to API clients: a failure such as
+// "open /home/user/Downloads/BV1xx/...mp4: no such file" leaks the server's
+// directory layout to any caller that can reach /get-tasks.
+func maskTaskError(msg string) string {
+	if msg == "" {
+		return msg
+	}
+	if dir := util.ExecutableDir(); len(dir) > 1 {
+		msg = strings.ReplaceAll(msg, dir, "<app-dir>")
+	}
+	if wd, err := os.Getwd(); err == nil && len(wd) > 1 {
+		msg = strings.ReplaceAll(msg, wd, "<work-dir>")
+	}
+	return util.SanitizeLogString(msg)
+}
+
 // finishTask moves a task to the finished list and sets its terminal fields.
 func (s *APIServer) finishTask(task *DownloadTask, errMsg string) {
 	task.mu.Lock()
@@ -492,7 +533,7 @@ func (s *APIServer) finishTask(task *DownloadTask, errMsg string) {
 		task.TaskFinishTime = time.Now().Unix()
 	}
 	if errMsg != "" {
-		task.ErrorMessage = errMsg
+		task.ErrorMessage = maskTaskError(errMsg)
 	}
 	task.mu.Unlock()
 	if task.cancelFn != nil {
@@ -760,8 +801,17 @@ func isBlockedAddress(ip net.IP) bool {
 // ---- Finished-task persistence (upstream bbdown-tasks.json) ----
 
 func (s *APIServer) persistFinishedTasks() {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
 	s.mu.Lock()
 	list := snapshotList(s.finishedTasks)
+	// The in-memory list is what /get-tasks serves and it used to grow without
+	// bound for the life of the process; apply the same cap here (only the
+	// oldest entries are dropped, so the remaining pointers stay valid).
+	if len(s.finishedTasks) > maxFinishedTasks {
+		s.finishedTasks = append([]*DownloadTask(nil), s.finishedTasks[len(s.finishedTasks)-maxFinishedTasks:]...)
+	}
 	s.mu.Unlock()
 
 	// Retention: drop entries older than 30 days, keep the newest 1000.
@@ -780,11 +830,15 @@ func (s *APIServer) persistFinishedTasks() {
 	if err != nil {
 		return
 	}
-	tmp := s.taskFile + ".tmp"
+	// A unique temp name: a shared "<file>.tmp" let two concurrent writers race
+	// onto the same path and rename a half-written file into place.
+	tmp := s.taskFile + ".tmp-" + generateJobID()
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return
 	}
-	os.Rename(tmp, s.taskFile)
+	if err := os.Rename(tmp, s.taskFile); err != nil {
+		os.Remove(tmp)
+	}
 }
 
 func (s *APIServer) loadFinishedTasks() {
