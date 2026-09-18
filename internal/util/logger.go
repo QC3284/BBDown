@@ -1,11 +1,85 @@
 package util
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
+
+// MaxLogFieldLen bounds one server-controlled value inside a log line, so a
+// hostile response cannot flood the terminal or the log file.
+const MaxLogFieldLen = 512
+
+// SanitizeLogString makes a value safe to interpolate into a single log line.
+// Server-controlled text (video titles, uploader names, API messages, values
+// derived from a request URL) can carry CR/LF and ANSI escapes that forge log
+// lines or rewrite the terminal (upstream RF-54 / RF-70). Control characters
+// become spaces and the result is truncated. Legitimate values pass through
+// unchanged.
+func SanitizeLogString(s string) string {
+	if s == "" {
+		return s
+	}
+	clean := true
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c == 0x7f {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return truncateRunes(s, MaxLogFieldLen)
+	}
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			sb.WriteByte(' ')
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return truncateRunes(strings.Join(strings.Fields(sb.String()), " "), MaxLogFieldLen)
+}
+
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == max {
+			return s[:i] + "…"
+		}
+		n++
+	}
+	return s
+}
+
+// sanitizeLogArg neutralises the argument forms that can carry server text.
+// Values are sanitised per argument rather than on the rendered line so that a
+// caller's own intentional formatting (indentation, prefixes) is preserved.
+func sanitizeLogArg(v interface{}) interface{} {
+	switch t := v.(type) {
+	case string:
+		return SanitizeLogString(t)
+	case error:
+		return errors.New(SanitizeLogString(t.Error()))
+	default:
+		return v
+	}
+}
+
+func sanitizeLogArgs(args []interface{}) []interface{} {
+	out := make([]interface{}, len(args))
+	for i, a := range args {
+		out[i] = sanitizeLogArg(a)
+	}
+	return out
+}
 
 // Logger provides thread-safe, colored console logging with optional file output.
 type Logger struct {
@@ -49,7 +123,7 @@ func timestamp() string {
 
 // Log prints a normal log line.
 func (l *Logger) Log(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
+	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	fmt.Println(line)
 	l.appendToFile(line)
@@ -57,7 +131,7 @@ func (l *Logger) Log(format string, args ...interface{}) {
 
 // LogError prints an error line in red.
 func (l *Logger) LogError(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
+	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	l.mu.Lock()
 	fmt.Print(timestamp() + " - ")
@@ -68,7 +142,7 @@ func (l *Logger) LogError(format string, args ...interface{}) {
 
 // LogWarn prints a warning line in yellow.
 func (l *Logger) LogWarn(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
+	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	l.mu.Lock()
 	fmt.Print(timestamp() + " - ")
@@ -79,7 +153,7 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 
 // LogColorNoTime prints a colored line in cyan without timestamp, indented to align.
 func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
+	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	l.mu.Lock()
 	fmt.Print("                            \033[36m" + msg + "\033[0m\n")
 	l.mu.Unlock()
@@ -88,7 +162,7 @@ func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
 
 // LogColor prints a colored line in cyan.
 func (l *Logger) LogColor(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
+	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	l.mu.Lock()
 	fmt.Print(timestamp() + " - ")
@@ -102,7 +176,7 @@ func (l *Logger) LogDebug(format string, args ...interface{}) {
 	if l.debugMode == nil || !l.debugMode() {
 		return
 	}
-	msg := fmt.Sprintf(format, args...)
+	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	l.mu.Lock()
 	fmt.Print("\033[90m" + line + "\033[0m\n")
