@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +18,17 @@ import (
 	"github.com/QC3284/BBDown/internal/util"
 )
 
-const reconnectLimit = 3
+const (
+	reconnectBaseBackoff = 3 * time.Second
+	reconnectMaxBackoff  = 30 * time.Second
+)
+
+// readStallTimeout is a variable so tests can shrink it; production uses 60s.
+var readStallTimeout = 60 * time.Second
+
+// resolveLive is a seam for tests: DownloadToFile is otherwise untestable
+// without hitting the live Bilibili API.
+var resolveLive = ResolveLive
 
 // ResolveLive resolves a Bilibili live room ID to a stream URL and metadata.
 func ResolveLive(ctx context.Context, roomID string, client *util.HTTPClient) (streamURL, title, uname string, err error) {
@@ -121,7 +132,18 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return false, err
 	}
-	defer os.RemoveAll(segRoot)
+	// Only this session's directory is removed once the recording finished
+	// cleanly; on a terminal failure the segments are kept for manual recovery
+	// (upstream v1.6.13). The .segs root is never removed recursively — it may
+	// still hold segments retained by earlier sessions.
+	keepSegments := false
+	defer func() {
+		if keepSegments {
+			return
+		}
+		os.RemoveAll(sessionDir)
+		os.Remove(segRoot) // succeeds only when it is now empty
+	}()
 
 	var segFiles []string
 	var total int64
@@ -129,22 +151,15 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 	segIdx := 0
 
 	for {
-		streamURL, _, _, err := ResolveLive(ctx, roomID, client)
+		streamURL, _, _, err := resolveLive(ctx, roomID, client)
 		if err != nil {
 			// Live has ended: finish normally.
 			if strings.Contains(err.Error(), "当前未在直播") {
 				break
 			}
+			backoff := reconnectBackoff(reconnect)
 			reconnect++
-			if reconnect > reconnectLimit {
-				util.LogWarn("直播流中断且 %d 次重连失败，已录制内容保留在 %s", reconnectLimit, segRoot)
-				return total > 0, fmt.Errorf("重连失败: %w", err)
-			}
-			backoff := time.Duration(3000*reconnect) * time.Millisecond
-			if backoff > 15*time.Second {
-				backoff = 15 * time.Second
-			}
-			util.LogWarn("直播流中断（%v），%v 后重连（%d/%d）...", err, backoff, reconnect, reconnectLimit)
+			util.LogWarn("直播流中断（%v），%v 后重连（第 %d 次）...", err, backoff, reconnect)
 			if !sleepCtx(ctx, backoff) {
 				break
 			}
@@ -154,34 +169,37 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 		segPath := filepath.Join(sessionDir, fmt.Sprintf("seg-%03d.flv", segIdx))
 		segIdx++
 		n, err := streamToFile(ctx, streamURL, segPath)
+		if n > 0 {
+			// Keep whatever was written: a cancelled or interrupted segment is
+			// still recoverable content, and it takes part in the merge.
+			total += n
+			segFiles = append(segFiles, segPath)
+		}
 		if err != nil {
-			os.Remove(segPath)
+			var werr errLiveWrite
+			if errors.As(err, &werr) {
+				// Local write failure is terminal — retrying cannot help.
+				keepSegments = total > 0
+				util.LogWarn("直播分段写入失败（%v），已录制内容保留在 %s", werr, sessionDir)
+				return total > 0, fmt.Errorf("直播录制写盘失败: %w", werr)
+			}
 			if ctx.Err() != nil {
 				break
 			}
+			backoff := reconnectBackoff(reconnect)
 			reconnect++
-			if reconnect > reconnectLimit {
-				util.LogWarn("直播流中断且 %d 次重连失败，已录制内容保留在 %s", reconnectLimit, segRoot)
-				return total > 0, fmt.Errorf("流传输失败: %w", err)
-			}
-			backoff := time.Duration(3000*reconnect) * time.Millisecond
-			if backoff > 15*time.Second {
-				backoff = 15 * time.Second
-			}
-			util.LogWarn("直播流中断（%v），%v 后重连（%d/%d）...", err, backoff, reconnect, reconnectLimit)
+			util.LogWarn("直播流中断（%v），%v 后重连（第 %d 次）...", err, backoff, reconnect)
 			if !sleepCtx(ctx, backoff) {
 				break
 			}
 			continue
 		}
 		if n > 0 {
-			total += n
 			reconnect = 0
-			segFiles = append(segFiles, segPath)
 		} else {
 			// Zero bytes: re-check whether the streamer went offline.
 			os.Remove(segPath)
-			if _, _, _, err := ResolveLive(ctx, roomID, client); err != nil {
+			if _, _, _, err := resolveLive(ctx, roomID, client); err != nil {
 				if strings.Contains(err.Error(), "当前未在直播") {
 					break
 				}
@@ -192,7 +210,7 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 		if ctx.Err() != nil {
 			break
 		}
-		if _, _, _, err := ResolveLive(ctx, roomID, client); err != nil {
+		if _, _, _, err := resolveLive(ctx, roomID, client); err != nil {
 			if strings.Contains(err.Error(), "当前未在直播") {
 				break
 			}
@@ -234,13 +252,43 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		os.Remove(path)
+		keepSegments = true
 		return true, fmt.Errorf("直播分段合成失败（分段保留在 %s）: %w", sessionDir, err)
 	}
 	return true, nil
 }
 
+// errLiveWrite marks a local write failure: unlike a network interruption it
+// is terminal and must not be retried (upstream LiveStreamWriteException).
+type errLiveWrite struct{ err error }
+
+func (e errLiveWrite) Error() string { return e.err.Error() }
+func (e errLiveWrite) Unwrap() error { return e.err }
+
+// reconnectBackoff grows from a few seconds up to a ceiling. Reconnection is
+// unlimited (upstream v1.6.13): as long as the room is still broadcasting and
+// the user has not cancelled, a lost network must not end the recording.
+func reconnectBackoff(attempt int) time.Duration {
+	d := time.Duration(attempt+1) * reconnectBaseBackoff
+	if d > reconnectMaxBackoff {
+		return reconnectMaxBackoff
+	}
+	return d
+}
+
+// streamToFile writes one segment to disk. A read that stops producing data for
+// readStallTimeout is treated as an interruption: during a network black hole
+// the connection neither resets nor EOFs, and the body read would otherwise
+// block forever, hanging the whole recording. Bytes already written are
+// returned even on error so the caller can keep them.
 func streamToFile(ctx context.Context, url, segPath string) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stall := time.AfterFunc(readStallTimeout, cancel)
+	defer stall.Stop()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -259,7 +307,7 @@ func streamToFile(ctx context.Context, url, segPath string) (int64, error) {
 
 	f, err := os.Create(segPath)
 	if err != nil {
-		return 0, err
+		return 0, errLiveWrite{err}
 	}
 	defer f.Close()
 
@@ -268,8 +316,9 @@ func streamToFile(ctx context.Context, url, segPath string) (int64, error) {
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
+			stall.Reset(readStallTimeout)
 			if _, werr := f.Write(buf[:n]); werr != nil {
-				return offset, werr
+				return offset, errLiveWrite{werr}
 			}
 			offset += int64(n)
 		}
