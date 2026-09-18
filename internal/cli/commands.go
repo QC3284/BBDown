@@ -374,6 +374,7 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 	subCheckWbi = wbi
 
 	factory := fetcher.NewFactory(client, cfg.UseIntlAPI, wbi, cfg.Cookie, cfg.Host, cfg.EpHost, cfg.AccessToken)
+	failures := 0
 	for _, sub := range subs {
 		if ctx.Err() != nil {
 			return silenceOnCancel(cmd, ctx.Err())
@@ -436,6 +437,7 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 			opt.Wbi = subCheckWbi
 			if err := workflow.New(opt, client).Run(ctx); err != nil {
 				util.LogWarn("av%s 下载失败: %v", aid, err)
+				failures++
 				continue
 			}
 			if err := substore.RecordDownloaded(sub.Target, aid); err != nil {
@@ -444,6 +446,21 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 		}
 	}
 	util.Log("订阅检查完成")
+	return subCheckResult(ctx.Err() != nil, failures)
+}
+
+// subCheckResult turns the per-video outcomes into the command's exit status.
+// Partial failures must not report success: the check used to end with an
+// unconditional "return nil", so scripts driving "BBDown sub check" saw exit 0
+// even when videos failed. A user cancellation still returns 0, which is the
+// documented behaviour for subcommands (see root.go silenceOnCancel).
+func subCheckResult(cancelled bool, failures int) error {
+	if cancelled {
+		return nil
+	}
+	if failures > 0 {
+		return fmt.Errorf("订阅检查完成，但有 %d 个视频下载失败", failures)
+	}
 	return nil
 }
 

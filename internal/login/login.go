@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/QC3284/BBDown/internal/util"
+	"strings"
 )
 
 const (
@@ -25,6 +26,17 @@ const (
 )
 
 // LoginWeb performs WEB account login via QR code scanning.
+// validateAccessToken rejects an empty token before it is persisted. Writing
+// "access_token=" produced a BBDownTV.data that reads as logged-in and then
+// fails everywhere with confusing errors instead of reporting the login problem
+// (upstream v1.6.12 validates the token strictly).
+func validateAccessToken(token string) error {
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("登录轮询未下发 access_token，拒绝写入凭据文件")
+	}
+	return nil
+}
+
 func LoginWeb(ctx context.Context, client *util.HTTPClient) error {
 	util.Log("获取登录地址...")
 
@@ -219,6 +231,9 @@ func LoginTV(ctx context.Context, client *util.HTTPClient) error {
 			continue
 		default:
 			accessToken := pollResult.Data.AccessToken
+			if err := validateAccessToken(accessToken); err != nil {
+				return err
+			}
 			util.Log("登录成功: AccessToken=%s", maskValue(accessToken))
 
 			tvTokenPath := filepath.Join(appDir(), "BBDownTV.data")
