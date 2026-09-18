@@ -144,15 +144,8 @@ func (w *Workflow) Run(ctx context.Context) error {
 		w.MetaHandler(vInfo)
 	}
 
-	// Print metadata
-	util.LogColor("%s", vInfo.Title)
-	if vInfo.PubTime > 0 {
-		t := time.Unix(vInfo.PubTime, 0)
-		util.Log("发布时间: %s", t.Format("2006-01-02 15:04:05"))
-	}
-	if len(vInfo.PagesInfo) > 0 && vInfo.PagesInfo[0].Bvid() != "" {
-		util.Log("https://www.bilibili.com/video/%s", vInfo.PagesInfo[0].Bvid())
-	}
+	printVideoHeader(vInfo, w.Cfg.UseIntlAPI)
+	applySteinGateFallback(&w.Cfg, vInfo)
 
 	// API type
 	apiType := "WEB"
@@ -431,6 +424,24 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		// Sort
 		result.VideoTracks = download.SortVideoTracks(result.VideoTracks, dfnPriority, encodingPriority, w.Cfg.VideoAscending)
 		result.AudioTracks = download.SortAudioTracks(result.AudioTracks, encodingPriority, w.Cfg.AudioAscending)
+
+		// 零轨道：dash 分支里没有任何视频流/音频流时要说出来，并按 only 模式判定失败
+		// （上游 Download.cs:553-563）。此前只清空轨道不报错，--video-only 遇到无视频流的
+		// 稿件会一件产物都不出却报成功（假成功）。
+		if (len(result.VideoTracks) > 0 || len(result.AudioTracks) > 0) && len(result.Clips) == 0 {
+			if len(result.VideoTracks) == 0 {
+				util.LogWarn("没有找到符合要求的视频流")
+				if w.Cfg.VideoOnly {
+					return false
+				}
+			}
+			if len(result.AudioTracks) == 0 {
+				util.LogWarn("没有找到符合要求的音频流")
+				if w.Cfg.AudioOnly {
+					return false
+				}
+			}
+		}
 
 		// Clear tracks for --audio-only / --video-only BEFORE display
 		if w.Cfg.AudioOnly {
@@ -1357,6 +1368,38 @@ func (w *Workflow) validateNumericOptions() error {
 	return nil
 }
 
+// printVideoHeader 打印稿件头部信息，标签与时区格式对齐上游 Workflow.cs：
+// 「视频标题: 」「发布时间: 」「视频URL: 」「UP主页: 」。此前标题与 URL 都是裸值，
+// 用户分不清哪一行是什么，脚本也无法按标签取值。
+func printVideoHeader(vInfo *entity.VInfo, useIntlAPI bool) {
+	util.LogColor("视频标题: %s", vInfo.Title)
+	if vInfo.PubTime > 0 {
+		// 上游 FormatTimeStamp(pubTime, "yyyy-MM-dd HH:mm:ss zzz")：带本地时区偏移。
+		util.Log("发布时间: %s", time.Unix(vInfo.PubTime, 0).Format("2006-01-02 15:04:05 -07:00"))
+	}
+	if len(vInfo.PagesInfo) > 0 {
+		if bvid := vInfo.PagesInfo[0].Bvid(); bvid != "" && !useIntlAPI {
+			util.Log("视频URL: https://www.bilibili.com/video/%s/", bvid)
+		}
+	}
+	for _, p := range vInfo.PagesInfo {
+		if p.OwnerMid != "" {
+			util.Log("UP主页: https://space.bilibili.com/%s", p.OwnerMid)
+			break
+		}
+	}
+}
+
+// applySteinGateFallback 处理「互动视频不支持 TV 端下载」（上游 Workflow.cs:156-160）：
+// 用户加了 -t 又碰到互动视频时，上游打印提示后就地改回默认（WEB）解析——
+// TV 接口拿不到互动视频的分P，继续走 TV 只会失败。
+func applySteinGateFallback(cfg *config.MyOption, vInfo *entity.VInfo) {
+	if vInfo.IsSteinGate && cfg.UseTvAPI {
+		util.Log("视频为互动视频，暂时不支持tv下载，修改为默认下载")
+		cfg.UseTvAPI = false
+	}
+}
+
 // maxExpandedPages caps -p range expansion (upstream MaxExpandedPages).
 const maxExpandedPages = 100000
 
@@ -1366,15 +1409,16 @@ func getSelectedPages(cfg *config.MyOption, vInfo *entity.VInfo, input string) (
 	sel := strings.ToUpper(strings.TrimSpace(cfg.SelectPage))
 	sel = strings.Trim(sel, ",")
 	if sel == "" {
-		// Auto-select from VInfo index or URL query param
+		// Auto-select from VInfo index or URL query param（上游 Pages.cs:22-33）。
+		// 两种来源都要给出提示：否则用户看到「已选择: 3」却不知道这是程序按 URL 里的
+		// ?p=3 自动选的，误以为丢了其他分P。
+		const autoSelectNotice = "程序已自动选择你输入的集数, 如果要下载其他集数请自行指定分P(如可使用-p ALL代表全部)"
 		if vInfo.Index != "" {
+			util.Log("%s", autoSelectNotice)
 			return []string{vInfo.Index}, nil
 		}
-		if idx := strings.Index(input, "?p="); idx >= 0 {
-			p := input[idx+3:]
-			if end := strings.IndexAny(p, "& "); end >= 0 {
-				p = p[:end]
-			}
+		if p := queryParam(input, "p"); p != "" {
+			util.Log("%s", autoSelectNotice)
 			return []string{p}, nil
 		}
 		return nil, nil // ALL
@@ -1384,11 +1428,7 @@ func getSelectedPages(cfg *config.MyOption, vInfo *entity.VInfo, input string) (
 		return nil, nil
 	}
 
-	// Replace LAST/NEW/LATEST with the page count (upstream uses Count).
-	lastIdx := fmt.Sprintf("%d", len(vInfo.PagesInfo))
-	sel = strings.ReplaceAll(sel, "LAST", lastIdx)
-	sel = strings.ReplaceAll(sel, "NEW", lastIdx)
-	sel = strings.ReplaceAll(sel, "LATEST", lastIdx)
+	sel = expandPageAliases(sel, len(vInfo.PagesInfo))
 
 	result, err := parsePageSelection(sel)
 	if err != nil {
@@ -1396,6 +1436,37 @@ func getSelectedPages(cfg *config.MyOption, vInfo *entity.VInfo, input string) (
 		return nil, err
 	}
 	return result, nil
+}
+
+// expandPageAliases 把「最新分P」别名（LAST/NEW/LATEST）按**逗号分段、整段全词**展开为实际页数。
+//
+// 不能做子串替换——上游为此专门踩过坑：LAST 是 LATEST 的前缀，先替换 LAST 会把 -p LATEST
+// 变成 "<N>EST"，轻则报「所选分P不存在: 5EST」，重则 -p 3,LATEST 里的 5EST 被静默丢弃，
+// 用户以为下全了其实只下了 P3。
+func expandPageAliases(selectPage string, pageCount int) string {
+	last := fmt.Sprintf("%d", pageCount)
+	expand := func(text string) string {
+		trimmed := strings.TrimSpace(text)
+		switch strings.ToUpper(trimmed) {
+		case "LAST", "NEW", "LATEST":
+			return last
+		}
+		return trimmed
+	}
+	segments := strings.Split(selectPage, ",")
+	for i, seg := range segments {
+		trimmed := strings.TrimSpace(seg)
+		// 连字符从第 2 个字符找起："-5" 这种负数不是范围（与 parsePageSelection 同规则）。
+		if len(trimmed) > 1 {
+			if rel := strings.Index(trimmed[1:], "-"); rel >= 0 {
+				dash := rel + 1
+				segments[i] = expand(trimmed[:dash]) + "-" + expand(trimmed[dash+1:])
+				continue
+			}
+		}
+		segments[i] = expand(trimmed)
+	}
+	return strings.Join(segments, ",")
 }
 
 // parsePageSelection parses expressions like "1,3,5", "1-10", "1-3,7,9-11".

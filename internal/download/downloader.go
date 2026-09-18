@@ -887,8 +887,23 @@ func SortAudioTracks(tracks []entity.Audio, encodingPriority map[string]int, asc
 	return sorted
 }
 
-// PrintAllTracks displays available video and audio tracks (matching C# format).
+// PrintAllTracks displays available tracks, in the order upstream Display.PrintAllTracksInfo
+// prints them: 背景音频流与配音（仅当两者都存在时）→ 视频流 → 音频流。
 func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool) {
+	// 背景音频与配音属于同一块信息（上游 Display.cs:19-35）：两者都存在才打印，
+	// 只打印首条配音名下的配音流。
+	if len(result.BackgroundAudioTracks) > 0 && len(result.RoleAudioList) > 0 {
+		util.Log("共计%d条背景音频流.", len(result.BackgroundAudioTracks))
+		for i, a := range result.BackgroundAudioTracks {
+			util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+		}
+		if firstRole := result.RoleAudioList[0].Audio; len(firstRole) > 0 {
+			util.Log("共计%d条配音, 每条包含%d条配音流.", len(result.RoleAudioList), len(firstRole))
+			for i, a := range firstRole {
+				util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+			}
+		}
+	}
 	if len(result.VideoTracks) > 0 {
 		util.Log("共计%d条视频流.", len(result.VideoTracks))
 		for i, v := range result.VideoTracks {
@@ -904,20 +919,32 @@ func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool)
 				i, v.Dfn, v.Res, v.Codecs, v.FPS, v.Bandwidth, util.FormatFileSize(size))
 			line = strings.ReplaceAll(line, "[] ", "")
 			util.LogColorNoTime("%s", line)
+			// --only-show-info：每条流后面直接给出可下载地址（上游 Console.WriteLine(v.baseUrl)），
+			// 少了这一行，-I 拿到的就只是体积/码率清单，脚本无法据此取流。
+			if onlyShowInfo {
+				fmt.Println(v.BaseURL)
+			}
 		}
 	}
 	if len(result.AudioTracks) > 0 {
 		util.Log("共计%d条音频流.", len(result.AudioTracks))
 		for i, a := range result.AudioTracks {
-			pDur := pageDur
-			if pDur == 0 {
-				pDur = a.Dur
+			util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+			if onlyShowInfo {
+				fmt.Println(a.BaseURL)
 			}
-			line := fmt.Sprintf("%d. [%s] [%d kbps] [~%s]",
-				i, a.Codecs, a.Bandwidth, util.FormatFileSize(float64(pDur)*float64(a.Bandwidth)*1024/8))
-			util.LogColorNoTime("%s", line)
 		}
 	}
+}
+
+// formatAudioTrackLine 渲染一条音频流的清单行（上游三处音频列表共用同一格式）。
+func formatAudioTrackLine(index int, a entity.Audio, pageDur int) string {
+	pDur := pageDur
+	if pDur == 0 {
+		pDur = a.Dur
+	}
+	return fmt.Sprintf("%d. [%s] [%d kbps] [~%s]",
+		index, a.Codecs, a.Bandwidth, util.FormatFileSize(float64(pDur)*float64(a.Bandwidth)*1024/8))
 }
 
 // PrintSelectedTrack shows the chosen tracks (matching C# format).
