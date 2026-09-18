@@ -108,38 +108,9 @@ func (f *IntlBangumiInfoFetcher) Fetch(ctx context.Context, id string) (*entity.
 		}
 	}
 
-	var pagesInfo []entity.Page
-	i := 1
-	for _, ep := range pages {
-		em, ok := ep.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		// Skip trailers (预告).
-		if gs(em, "badge") == "预告" {
-			continue
-		}
-		res := dimensionRes(em)
-		titleText := gs(em, "title")
-		if lt, ok := em["long_title"].(string); ok && lt != "" {
-			titleText += " " + lt
-		}
-		titleText = strings.TrimSpace(titleText)
-		p := entity.Page{
-			Index:   i,
-			Aid:     gs(em, "aid"),
-			Cid:     gs(em, "cid"),
-			Epid:    gs(em, "id"),
-			Title:   titleText,
-			Dur:     gi(em, "duration"),
-			Res:     res,
-			PubTime: gi64(em, "pub_time"),
-		}
-		i++
-		if p.Epid == epID {
-			index = fmt.Sprintf("%d", p.Index)
-		}
-		pagesInfo = append(pagesInfo, p)
+	pagesInfo, index, err := buildBangumiPages(pages, epID)
+	if err != nil {
+		return nil, err
 	}
 
 	return &entity.VInfo{

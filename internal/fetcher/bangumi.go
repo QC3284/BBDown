@@ -83,6 +83,32 @@ func (f *BangumiInfoFetcher) Fetch(ctx context.Context, id string) (*entity.VInf
 		}
 	}
 
+	pagesInfo, index, err := buildBangumiPages(pages, epID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &entity.VInfo{
+		Title:     strings.TrimSpace(title),
+		Desc:      strings.TrimSpace(desc),
+		Pic:       cover,
+		PubTime:   pubTime,
+		IsBangumi: true,
+		Index:     index,
+		PagesInfo: pagesInfo,
+	}, nil
+}
+
+// buildBangumiPages maps raw episode objects to pages and locates the requested
+// episode. The domestic and the international fetcher built byte-identical page
+// lists, so the mapping lives here once. Two contracts matter:
+//
+//   - previews (预告) are never offered as downloadable pages;
+//   - when a specific episode was requested and no page carries its id, that is
+//     an error. Previously the caller got an empty Index, the workflow fell back
+//     to ALL pages, and asking for one episode silently downloaded the whole
+//     season (upstream raises a clear error here).
+func buildBangumiPages(pages []interface{}, epID string) ([]entity.Page, string, error) {
 	var pagesInfo []entity.Page
 	index := ""
 	i := 1
@@ -118,15 +144,10 @@ func (f *BangumiInfoFetcher) Fetch(ctx context.Context, id string) (*entity.VInf
 		pagesInfo = append(pagesInfo, p)
 	}
 
-	return &entity.VInfo{
-		Title:     strings.TrimSpace(title),
-		Desc:      strings.TrimSpace(desc),
-		Pic:       cover,
-		PubTime:   pubTime,
-		IsBangumi: true,
-		Index:     index,
-		PagesInfo: pagesInfo,
-	}, nil
+	if epID != "" && index == "" {
+		return nil, "", fmt.Errorf("未找到指定的剧集 ep%s：该季可能不含此集，或接口返回结构已变化（拒绝回退为整季下载）", epID)
+	}
+	return pagesInfo, index, nil
 }
 
 // parsePubTime reads publish.pub_time (string "yyyy-MM-dd HH:mm:ss") with a
