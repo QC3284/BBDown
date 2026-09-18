@@ -12,6 +12,38 @@ import (
 	"time"
 )
 
+// IsTrustedCookieHost reports whether host may receive BBDown credentials.
+// A credential-bearing request must never be redirected outside this set
+// (upstream IsTrustedCookieHost, RF-13/RF-37/RF-50).
+func IsTrustedCookieHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return false
+	}
+	for _, suffix := range []string{"bilibili.com", "b23.tv", "biliintl.com", "bilibili.tv", "bilivideo.com", "hdslb.com", "aisee.tv", "biliapi.net"} {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// credentialRedirectGuard stops a credential-bearing request from following a
+// redirect to a host that is not allowed to see the Cookie / access_token.
+// Without it http.Client transparently forwards the request (Go only strips
+// Cookie across *domains*, not across a same-domain different-port hop), so a
+// 3xx from a compromised or --insecure endpoint could exfiltrate SESSDATA.
+func credentialRedirectGuard(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("重定向跳数超过 10 次")
+	}
+	host := strings.ToLower(req.URL.Hostname())
+	if !IsTrustedCookieHost(host) {
+		return fmt.Errorf("拒绝跟随重定向到不可信主机 %s（该请求携带凭据）", host)
+	}
+	return nil
+}
+
 // HTTPClient wraps the standard http.Client with BBDown-specific behavior.
 type HTTPClient struct {
 	client    *http.Client
@@ -34,8 +66,9 @@ func NewHTTPClient(skipSSL func() bool, cookieFn func() string, debugFn func(str
 
 	c := &HTTPClient{
 		client: &http.Client{
-			Transport: transport,
-			Timeout:   2 * time.Minute,
+			Transport:     transport,
+			Timeout:       2 * time.Minute,
+			CheckRedirect: credentialRedirectGuard,
 		},
 		userAgent: randomUserAgent(),
 		debugFn:   debugFn,
@@ -228,7 +261,10 @@ func (c *HTTPClient) SetCookieFn(fn func() string) {
 }
 
 // DownloadClient returns an http.Client sharing this client's transport (TLS
-// config, proxy, connection pool) but WITHOUT the overall request timeout:
+// config, proxy, connection pool) but WITHOUT the overall request timeout.
+// Media URLs legitimately redirect to CDN hosts that are not Bilibili domains,
+// so this client is deliberately not given the credential redirect guard; it is
+// not used for credential-bearing API calls.
 // media downloads can legitimately take much longer than the 2-minute API
 // timeout, and cancellation is driven by context instead.
 func (c *HTTPClient) DownloadClient() *http.Client {
