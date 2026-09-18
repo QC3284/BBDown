@@ -20,7 +20,9 @@ func TestGetValidFileName(t *testing.T) {
 		{"COM1", "_", false, "_COM1"},
 		{"CON.txt", "_", true, "_CON.txt"}, // reserved basename with extension
 		{"", "_", true, ""},
-		{"trailing.dot.", "_", true, "trailing.dot."},
+		// Upstream v1.6.18 trims a trailing dot/space: Windows silently drops it, so
+		// the file would otherwise land under a different name than the log says.
+		{"trailing.dot.", "_", true, "trailing.dot"},
 	}
 	for _, c := range cases {
 		got := GetValidFileName(c.in, c.repl, c.slash)

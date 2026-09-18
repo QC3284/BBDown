@@ -60,16 +60,17 @@ func GetValidFileName(input string, replacement string, filterSlash bool) string
 	result := sb.String()
 
 	// Windows rejects a trailing dot or space ("video." / "video ") and silently
-	// drops it, so the file lands under an unexpected name (upstream trims both).
-	result = strings.TrimRight(result, " .")
-
-	// Cap the basename: template-built names such as "<videoTitle>_<dfn>_<fps>"
-	// can exceed the per-component budget on every filesystem, and a component
-	// cut mid-rune would produce invalid UTF-8.
-	result = truncateRunes(result, maxFileNameRunes)
-	if result == "" {
-		result = replacement
+	// drops it, so the file lands under an unexpected name. The basename is capped
+	// too: template-built names such as "<videoTitle>_<dfn>_<fps>" can exceed the
+	// per-component budget, and cutting one mid-rune would produce invalid UTF-8.
+	trimmed := strings.TrimRight(result, " .")
+	if trimmed == "" && result != "" {
+		// Nothing but dots and spaces: Windows rejects that outright, so fall back to
+		// a usable component. An empty input stays empty — callers use it to mean
+		// "no value".
+		trimmed = replacement
 	}
+	result = truncateRunes(trimmed, maxFileNameRunes)
 
 	// Handle reserved names: Windows treats CON/PRN/AUX/NUL/COM1..9/LPT1..9 as
 	// reserved even WITH an extension (CON.txt), so match the basename too.
