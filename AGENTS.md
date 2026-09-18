@@ -55,6 +55,8 @@ go build ./... && go vet ./... && go test ./...
   `t.Skip` 保护并说明依赖。
 - 解析层改动优先接到 `internal/parser/testdata/` 的夹具回放基座上（`fixture_test.go`）。
 - 计时相关的用例把超时做成变量（如 `readStallTimeout`、`downloadStallTimeout`）以便测试收窄。
+- **不要用固定 `time.Sleep` 等待异步副作用**：慢速 CI runner（尤其 windows-latest）上会变成时序竞态。
+  改为轮询可观测的状态（磁盘字节数、channel 信号）并设上限。
 
 ## 提交与分支
 

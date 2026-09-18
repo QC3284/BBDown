@@ -26,6 +26,21 @@ func flushThenHold(w http.ResponseWriter, r *http.Request) {
 	<-r.Context().Done()
 }
 
+// segmentBytes sums the bytes already written under a .segs root.
+func segmentBytes(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
 // TestDownloadToFileKeepsPartialContentOnCancel pins the v1.6.13 alignment fix.
 // Cancelling mid-segment used to delete the segment before the cancellation was
 // even checked, so a Ctrl+C after minutes of recording threw away everything.
@@ -53,7 +68,17 @@ func TestDownloadToFileKeepsPartialContentOnCancel(t *testing.T) {
 		done <- result{state, err}
 	}()
 
-	time.Sleep(150 * time.Millisecond) // let the first bytes land
+	// Wait until the recorder has actually put bytes on disk rather than sleeping a
+	// fixed amount: on a slow runner the cancel could land before the first read,
+	// which turned this into a flaky "no-data" result instead of a real regression.
+	segRoot := out + ".segs"
+	deadline := time.Now().Add(5 * time.Second)
+	for segmentBytes(segRoot) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the recorder never wrote a segment; nothing to preserve")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	cancel()
 
 	select {
