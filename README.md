@@ -102,7 +102,7 @@ BBDown sub check
 | `--danmaku-only` | 仅下载弹幕 |
 | `--skip-mux` | 跳过混流 |
 | `--use-aria2c` | 调用 aria2c 下载 |
-| `--multi-thread` | 多线程下载（默认开启） |
+| `--multi-thread` | 多线程下载（默认开启，`--multi-thread false` 关闭） |
 | `--force-http` | 强制 HTTP 协议（默认关闭，mcdn 域名除外） |
 | `--comments` | 下载评论区（导出 .comments.json） |
 | `--thread-segment-size` | 多线程分片大小(MB，默认 20) |
