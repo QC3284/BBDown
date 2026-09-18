@@ -1,0 +1,96 @@
+# 片 A：serve / API 服务器
+
+> 审计对象：C# 上游 v1.6.11 → v1.6.19（CHANGELOG 1.6.12~1.6.19 + REVIEW_FINDINGS RF-9/10/15/24/27/38/54/55/56/74/81/82/83/86 等）在 Go 重写（仓库 `main`，serve 实现 = internal/server/server.go + internal/cli/commands.go）中的落地状态。
+> 方法：先读 C# 上游真身（`BBDown/Infrastructure/BBDownApiServer.cs`、`BBDown/Commands/ServeCommand.cs`、`BBDown/Program.cs`、`BBDown/Application/Pages.cs`）与上游测试断言（`BBDown.Tests/ServeApi*Tests.cs`、`CancellationClassificationTests.cs`），再逐条 grep/read Go 侧取证。未修改任何 Go 源文件。
+
+## 结论摘要
+
+- 审核条目数：33（✅ 11 / ⚠️ 6 / ❌ 15 / ➖ 1 / ❓ 0）
+- 最高风险 3 条：
+  1. **读端点完全没有 Host 校验（RF-15）**：无 token 的默认回环部署下，DNS rebinding 页面可读取 `/get-tasks` 里的 SavePaths 绝对路径；且写端点也无 Origin/Content-Type 校验（CSRF 简单请求可直接驱动 `/add-task`、`/cancel`）——两条收口在 Go 侧均零实现，属可实际利用的安全缺口（P0）。
+  2. **服务器关停不取消在途任务**：任务 ctx 派生自 `context.Background()`，关停只 `taskWG.Wait()` 30 秒不 cancel，30 秒后进程退出即截断正在下载的任务——状态不落 Cancelled、不落盘、产物半截（P1，数据/可观测性）。
+  3. **持久化写盘用固定 `.tmp` 名且无内存裁剪**：多任务并发完成时所有 goroutine 写同一个 `bbdown-tasks.json.tmp`（上游已改 GUID 名），`finishedTasks` 内存列表永不裁剪（超过 1000 条的裁剪只作用于写盘副本）——长驻进程既有写坏风险也有无界增长（P1）。
+- 本片整体判断：**serve 的"功能性"契约（端点集合、JobId/202、PascalCase 任务 JSON、队列满 429、非回环必须带 token、webhook SSRF 全量守卫、Snapshot 锁一致性）基本对齐；"安全与运维纵深"（认证限速、Host/Origin/Content-Type 三门禁、错误消息路径脱敏、响应安全头、查询限流、Retry-After、日志单行化、持久化健壮性）几乎整片缺失**。原因是 Go 侧 `/add-task` 只解出 `url` 一个字段（这本身把 configFile/area/insecure/filePattern/interactive/selectPage/danmakuFilter 等一整族注入面在构造上关死了，是好事），但**没有把上游为"同一批端点"补的中间件层搬迁过来**。建议按 P0/P1 清单补一个中间件 + 限流器 + 持久化收口，工作量集中在 `internal/server/server.go`。
+
+## 条目明细
+
+| # | 来源 | 上游变更 | Go 现状 | 判定 | 证据（Go 侧 file:line） | 建议动作 | 优先级 |
+|---|---|---|---|---|---|---|---|
+| 1 | v1.6.14 / RF-9 / RF-74 | 认证失败按来源 IP 滑动窗口限速（1 分钟 5 次 → 429 + `Retry-After: 60`）；字典上限 1024 条、超限按最后失败时间裁剪；401 只记 IP、日志 `TruncateForLog` 单行化+截断防刷盘 | 零实现：token 不匹配即返回 401，无计数、无限速、无告警日志、无 Retry-After。附带观察：Go 全仓从未调用 `util.SetLogFile`，serve 根本没有 `bbdown-api.log` 文件 sink，故"刷盘"前提不成立，但可观测性同时缺失（401 完全无痕） | ❌ | internal/server/server.go:218-231（tokenMiddleware：仅字符串比较+401，无 IP 计数/无日志/无 429）；全仓 grep `Retry-After` / `429` 仅命中 internal/server/server.go:303；grep `SetLogFile` 仅 internal/util/logger.go:24-30 定义、无调用点 | 在 tokenMiddleware 内加 IP→滑动窗口字典（上限 1024，超限按最近失败时间裁剪）、超阈值 429+Retry-After、401 只记 IP；日志 sink 化时统一走单行化+截断 helper | P1 |
+| 2 | v1.6.12（提交 c6bfaa2，CHANGELOG 未单列） | serve token 用常量时间比较（SHA-256 定长化 + `FixedTimeEquals`），消除按字符短路的时序侧信道 | 直接 `!=` 字符串比较 | ❌ | internal/server/server.go:225（`r.Header.Get("X-Serve-Token") != s.serveToken`） | 用 `crypto/subtle.ConstantTimeCompare`（先各自 SHA-256 定长化） | P2 |
+| 3 | v1.6.15 | 新增 `BBDOWN_SERVE_TOKEN` 环境变量，且**优先于** `--serve-token`（避免令牌出现在 `ps`/`/proc/*/cmdline`）；两者冲突时告警 | 完全未支持环境变量：只有 `--serve-token` 标志 | ❌ | internal/cli/root.go:284（`serveCmd.Flags().StringVar(&optServeToken, "serve-token", ...)`）；grep `BBDOWN_SERVE_TOKEN` / `SERVE_TOKEN` 全仓 0 命中 | serve 启动时读 `os.Getenv("BBDOWN_SERVE_TOKEN")` 优先，冲突时 LogWarn | P1 |
+| 4 | v1.6.15 | 新增 `--trusted-proxy`：信任直连反代追加的 XFF 末项做限速计键 | 无该选项（与第 1 条同源：连限速都没有） | ❌ | internal/cli/root.go:282-285（serve 仅注册 listen/max-concurrent/serve-token/notify-webhook 四个标志） | 随第 1 条一并实现 | P2 |
+| 5 | v1.6.15 / v1.6.18（基线不变量） | 非回环监听（0.0.0.0/::/网卡 IP）必须配置 token，否则拒绝启动（启动前置错误可见、退出码非 0） | 已实现：scheme 必须 http、非回环且无 token 直接报错，且 Run 内兜底再校验一次 | ✅ | internal/server/server.go:135-144（validateListenURL）、:148（Run 内调用）、:205-214（isLoopbackHost 仅认 localhost/IsLoopback）；测试 internal/server/server_test.go:28-53 | 无 | — |
+| 6 | v1.6.17 / RF-2 | 命令层迁移 `AsyncCommand`：serve 链路真异步（`RunAsync`）、监听地址前置校验拆为同步 `ValidateListenUrl` | 不存在 async-over-sync 面：Go 直接阻塞 `ListenAndServe`（仅占 1 个 goroutine，无线程池饥饿/死锁）；且启动校验同步返回 error，由 RunE→`os.Exit(1)` 传递 | ➖ | internal/server/server.go:147-193（Run/ListenAndServe）；internal/cli/commands.go:94-95（RunE 直接返回 err） | 无（C# 特有：async-over-sync 线程池阻塞语义） | — |
+| 7 | v1.6.18 / RF-38 | serve 取消分支补 token 守卫：用户主动取消返回 0，**token 未取消的内部中断必须落失败分支返回 1**（Docker/systemd/CI 需要崩溃信号） | 已实现：Ctrl+C → ctx 取消 → Shutdown → `ListenAndServe` 返回 `http.ErrServerClosed` → RunE 返回 nil（0）；真实故障（端口占用、监听地址非法、max-concurrent<1）返回 error → cli.Execute `os.Exit(1)` | ✅ | internal/cli/commands.go:83（max-concurrent 校验 return error）、:94-95（ErrServerClosed→nil）、internal/cli/root.go:135-143（非 context.Canceled 错误 → `os.Exit(1)`） | 无 | — |
+| 8 | v1.6.12（提交 c6bfaa2，`CancellationClassificationTests`） | `ClassifyCancellation`：解析/下载两阶段都区分"主动取消"（Cancelled+"已取消"）与"HttpClient 超时"（token 未取消 → Failed，不冒充取消） | **半对齐**：排队等待期取消 → Cancelled ✅（:335-343）；下载阶段按 `ctx.Err()` 分类 ✅（:384-389）；**解析阶段（ResolveURL 失败分支）无条件记 Failed**，用户取消会被写成 `Failed` + ErrorMessage="解析链接失败: ... context canceled"，与上游 Cancelled/"已取消"不一致 | ⚠️ | internal/server/server.go:353-359（ResolveURL err → `SetStatus(StatusFailed)`，无 ctx.Err() 分支）对照 :384-389（Run err 分支有 ctx.Err() 分类）；取消确实会经该分支返回错误：internal/util/http.go:198-200（`c.client.Do(req)` 原样返回 `*url.Error`） | 在 :354 失败分支前加 `if ctx.Err() != nil { Cancelled + "已取消" } else { Failed }`，与下载阶段共用同一分类逻辑 | P1 |
+| 9 | 基线（`SetupServer` 的 `ApplicationStopping` → `_serverLifetimeCts.Cancel()`）+ 关注点"任务全生命周期取消" | 关停时先取消服务器级 CTS（任务 `linkedCts` 与之链接），任务在 30 秒窗口内以 Cancelled 收尾并落盘 | **未实现**：任务 ctx 由 `context.WithCancel(context.Background())` 派生，与服务器 ctx 无关联；关停 goroutine 只 `taskWG.Wait()`（30s 超时后仅记日志）不 cancel → 在途任务不被取消，30 秒后 `ListenAndServe` 返回、进程退出，任务既不落 Cancelled 也不落盘，半截产物残留 | ❌ | internal/server/server.go:315-316（任务 ctx = Background 派生）、:178-190（关停 goroutine 仅等待，无 cancel）、:189（`server.Shutdown(context.Background())` 本身也无超时） | 服务器持一个 lifetime ctx，任务 ctx 用 `context.WithCancel` 链接服务器 ctx；关停先 cancel 再 Wait | P1 |
+| 10 | v1.6.18 安全性 | `/add-task` 请求体 `configFile` 字段防御性清零（未来接通即任意本地文件读取注入点） | 构造上关闭：请求体只解出 `url`，其余字段一律丢弃；任务配置固定 `config.DefaultMyOption()` | ✅ | internal/server/server.go:290-297（匿名结构体仅 `URL string \`json:"url"\``）、:370-372（`cfg := config.DefaultMyOption(); cfg.URL = url`） | 无 | — |
+| 11 | v1.6.18 / RF-56 | `area` 字段白名单（仅 hk/tw/th，其余回落 ""），堵住"任意文本拼进官方 API query + 跳过登录检测" | 构造上关闭：不接收该字段，任务恒用默认 `Area` | ✅ | internal/server/server.go:291-294、:370-372 | 无 | — |
+| 12 | v1.6.17 / RF-24 | `interactive` 强制清零（否则任务阻塞在 `Console.ReadLine`，不可取消地占死并发槽） | 构造上关闭：不接收该字段；且 Go 侧 serve 任务用默认配置，`Interactive` 为默认 false | ✅ | internal/server/server.go:291-294、:370-372；internal/config/settings.go 默认值由 `DefaultMyOption()` 提供 | 无 | — |
+| 13 | v1.6.19 / RF-82 | `SanitizeUntrustedOptions` 一并清零隐藏废弃开关（addDfnSubfix / noPaddingPageNum / bandwidthAscending / onlyHevc/avc/av1），否则它们会在 FilePattern 被清零后重新填入默认模板 | 构造上关闭：不接收这些字段，任务恒用默认模板与默认开关 | ✅ | internal/server/server.go:291-294、:370-372 | 无 | — |
+| 14 | v1.6.12 | 净化客户端传入的 `RetryCount`/`RetryDelay`（clamp [1,3]/[0,5000]）、清除 `Debug` 堆栈暴露标志、`host` 规范化剔除 scheme 并限制官方域名 | 全部构造上关闭：不接收这些字段；`Debug`=默认 false、重试参数=Go 默认值、host=官方默认 | ✅ | internal/server/server.go:291-294、:370-372（`DefaultMyOption()`） | 无（提示：Go 的默认 RetryCount/RetryDelay 未套上游 [1,3]/[0,5000] 收紧，但无客户端控制面，等价） | — |
+| 15 | v1.6.14 | 写端点 CSRF/跨源防护：`/add-task`/`/cancel`/`/remove-finished` 校验 `Origin` 必须是回环来源否则 403；`/add-task` 强制 JSON Content-Type（text/plain 是跨源"免预检"载体）否则 415 | **零实现**：无 Origin 校验、无 Content-Type 校验；`json.Decoder` 不检查 Content-Type，攻击者页面用 `text/plain` + 合法 JSON body 的简单请求即可跨源驱动本机 serve 提交/取消任务（读不回响应但副作用成立） | ❌ | internal/server/server.go:210-231（tokenMiddleware 只判 token，无 Origin/Content-Type 分支；注意无 token 时 handler 直接是裸 mux，见 :156-158）、:285-297（直接 Decode） | 加写端点中间件：Origin 非空且非回环 → 403；`/add-task` Content-Type 非 json/\*+json → 415；同时补 `IsLoopbackOrigin` 纯函数与单测 | P0 |
+| 16 | v1.6.15 | 请求体超 64KB 上限返回 **413 Payload Too Large**（此前注释/实现/测试三处不一致，统一为 413） | 超限体经 `MaxBytesReader` 报错后落 Decode 失败分支，返回 **400**（语义不同：负载过大 vs 语法错误） | ⚠️ | internal/server/server.go:290（`http.MaxBytesReader(..., maxRequestBodySize)`）、:294-297（错误统一 400） | 区分 `*http.MaxBytesError` → 413 | P2 |
+| 17 | v1.6.17 / RF-15 | 无 token（默认回环部署）时 API 端点强制 Host 为**字面回环**（localhost/127/8/::1，刻意不做 DNS 解析），否则 403——堵住 DNS rebinding 读 `/get-tasks`（含 SavePaths 绝对路径） | **零实现**：全仓无 `r.Host`/`Request.Host` 校验；`isLoopbackHost` 只被监听地址校验复用，请求侧从不调用 | ❌ | internal/server/server.go:218-231（tokenMiddleware 无 Host 分支）、:154-166（mux 直挂，无中间件）；grep `r.Host` / `Request.Host` 全仓 0 命中 | 无 token 时对 isAPI 路径校验 `r.Host` 字面回环（复用现成 `isLoopbackHost` :205-214，但需注意它接受 "localhost" 大小写不敏感、拒绝空 Host）；403 + Warn 日志；带 token 时跳过 | P0 |
+| 18 | v1.6.17 | `/get-tasks` 族响应补 `Cache-Control: no-store` 与 `X-Content-Type-Options: nosniff`（任务数据含服务器绝对路径，禁止缓存落盘） | 未设置：`writeJSON` 只写 Content-Type | ❌ | internal/server/server.go:729-733（writeJSON 仅 `Content-Type: application/json`） | writeJSON 或中间件补两个响应头 | P2 |
+| 19 | v1.6.15（D8，提交 0f306ed） | `/get-tasks` 族加并发信号量（上限 8，非阻塞获取），槽位不足 429 + `Retry-After: 60`——快照深拷贝是查询端点的真实成本 | 未实现：查询端点无任何限流，每次 `/get-tasks` 都在锁内深拷贝 running+finished 全部任务 | ❌ | internal/server/server.go:237-245（handleGetTasks 直接 snapshotList）、:277-283（snapshotList 逐任务深拷贝）；无信号量字段（结构体 :101-114 仅 semaphore/acceptLimiter） | 加 `queryLimiter chan struct{}`（容量 8），非阻塞获取失败 → 429+Retry-After | P2 |
+| 20 | v1.6.19 / RF-83 | `/add-task` 队列满 429 补 `Retry-After: 60`（与认证/查询限速一致，客户端可统一退避） | 429 已返回，但**无 Retry-After 头** | ❌ | internal/server/server.go:299-305（`http.Error(w, ..., StatusTooManyRequests)`，未设 `Retry-After`） | 在 429 前 `w.Header().Set("Retry-After", "60")`（注意 http.Error 会覆盖部分头，需先 Set） | P1 |
+| 21 | v1.6.14 | 任务错误消息经 `/get-tasks` 返回前脱敏绝对路径（`SanitizeErrorMessage`：IOException 消息常含 `D:\data\...`，泄露服务器文件系统布局） | 未脱敏：`err.Error()` 原样写入 `ErrorMessage`，随快照经 `/get-tasks` 返回与落盘 | ❌ | internal/server/server.go:356（`s.finishTask(task, err.Error())`）、:390、:411-412（ErrorMessage 直存） | 加 `sanitizeErrorMessage`（正则保留末段）并在两处写入点调用；服务端日志保留原文 | P1 |
+| 22 | v1.6.19 / RF-86 | `DownloadTask.Snapshot()` 把 `Status`/`IsSuccessful` 的读取移入锁内，避免返回 status=Succeeded 而 isSuccessful=false 的不一致快照 | 已对齐：`Snapshot()` 整段持锁拷贝；`SetStatus` 在同一把锁内成对写 Status/IsSuccessful；SavePaths 也已复制为独立副本 | ✅ | internal/server/server.go:65-72（Snapshot 锁内 `cp := *t` + SavePaths 深拷贝）、:82-87（SetStatus 同锁成对写）、:75-79（AddSavePath 同锁） | 无 | — |
+| 23 | v1.6.17 | `AddSavePath` 去重：同一产物不再在快照中重复两条（产物列表语义是集合而非序列） | 未去重：直接 append | ❌ | internal/server/server.go:75-79（无 `Contains` 判断）、:380（`wf.OnSaved` 回调） | append 前做一次线性去重 | P2 |
+| 24 | v1.6.17 / RF-10 | 已完成任务溢出裁剪必须**按 `TaskCreateTime` 排序**移除最旧创建的（旧逻辑移除列表头部会误删"后创建但先完成"的任务）；保留期基准为 `TaskCreateTime` | 未对齐：裁剪取切片**末尾** N 条（=完成顺序）丢弃前段，即按完成顺序保留最新，正是上游修掉的语义；保留期基准也用的是 `TaskFinishTime`（:687）而非 `TaskCreateTime` | ❌ | internal/server/server.go:691-693（`kept = kept[len(kept)-maxFinishedTasks:]`）、:684-690（`t.TaskFinishTime >= cutoff`） | 裁剪前按 `TaskCreateTime` 升序取溢出集合删除；保留期改用 TaskCreateTime | P2 |
+| 25 | v1.6.17 | 任务持久化临时文件名带 GUID（`bbdown-tasks.json.tmp-{guid}`，对齐订阅存储）：固定 `.tmp` 名会被同目录多实例/并发写盘互相踩踏 | 固定 `bbdown-tasks.json.tmp`；且 `persistFinishedTasks` 由**每个任务 goroutine 的 defer** 调用（:333），多任务同时完成即并发写同一 tmp 文件再 rename；无 fsync，失败静默 return（上游有连续失败计数并升 Error） | ❌ | internal/server/server.go:699-703（`tmp := s.taskFile + ".tmp"` + WriteFile + Rename，无错误日志）、:332-333（每任务 defer 调用） | tmp 名加随机后缀；`persistFinishedTasks` 加互斥（或复用 `_persistLock` 语义）；失败至少 LogWarn，连续失败升 Error | P1 |
+| 26 | RF-3（serve 已完成任务无界堆积，上游判定"现有防护已覆盖"、维持现状） | 上游：`MaxFinishedTasks=1000` + 30 天保留，且在 `_taskLock` 内**同时裁剪内存列表**（`TrimFinishedTasksLocked`），内存/快照/磁盘三处都有界 | 上限常量存在，但只作用于**写盘副本**：`snapshotList` 产出新切片后裁剪，`s.finishedTasks` 只增不减（:426），且启动加载 :721 也不裁剪 → 长驻进程内存与每次 `/get-tasks` 的深拷贝成本无界增长 | ⚠️ | internal/server/server.go:683-693（裁剪的是 `list` 副本）、:426（`s.finishedTasks = append(...)` 无上限）、:718-722（加载后不裁剪） | 把裁剪改为在 `s.mu` 内直接作用于 `s.finishedTasks`（与 :418-426 的 finishTask 同锁） | P1 |
+| 27 | RF-27（FindBinaries 进程级静态工具路径，上游判定维持现状） | 上游：serve 下路径字段已清零，并发任务写同值静态工具路径无实际冲突，维持现状 | 同构：`findBinaries` 写 `muxer.FFMPEG/MP4BOX` 包级变量，serve 任务路径字段不可控（默认空 → 走 PATH 探测），与上游结论一致 | ✅ | internal/workflow/workflow.go:1357-1390（写 muxer.FFMPEG/MP4BOX 包级变量）；internal/server/server.go:370-372（路径字段恒默认空） | 无（可随 OPTIMIZATION 一并收编到 per-task 配置） | — |
+| 28 | v1.6.19 / RF-81 | `ParsePageSelection` 增**累计**上限（单段 ≤ MaxExpandedPages，总量也 ≤ 上限，堵 `1-100000,1-100000,...` 的内存/CPU 放大与 MB 级日志行）；serve 下忽略装饰性弹幕过滤 | 半对齐：serve 侧 ✅（不接受 selectPage/danmakuFilter，构造上关闭）；**解析器侧仅保留按段上限，无累计上限** | ⚠️ | serve 侧：internal/server/server.go:291-294、:370-372；解析器侧：internal/workflow/workflow.go:1344-1346（`e-s+1 > maxExpandedPages` 仅判单段）、:1270（上限常量） | 在 `:1347` 的 append 循环内加 `if len(result) >= maxExpandedPages { return nil, ... }` | P1 |
+| 29 | RF-33 / RF-71 | API.md 更正 `DownloadTask` 字段清单（补 `ErrorMessage`/`SavePaths`）与时间戳语义（`TaskCreateTime`/`TaskFinishTime` 是 UTC 纪元秒，与时区无关） | 已对齐：两个字段都在快照结构中并序列化；两个时间字段都是 `time.Now().Unix()`（UTC 纪元秒） | ✅ | internal/server/server.go:57-58（ErrorMessage/SavePaths 的 json tag）、:312（TaskCreateTime）、:397/407-409（TaskFinishTime） | 无（Go 仓无 API.md，文档侧无对应物） | — |
+| 30 | 关注点"任务 JSON PascalCase 契约"（基线契约，非窗口内变更） | N/A（对比基线）；窗口内仅文档化（RF-33/RF-71） | PascalCase 字段名、`Status` 枚举值（Queued/Running/Succeeded/Failed/Cancelled）、`/add-task` 202 `{"TaskId":...}` 全部对齐；**但两处类型/语义漂移**：`DownloadSpeed` Go 是 `string` 且全仓无赋值（上游是 double，成功时 = TotalDownloadedBytes/elapsed），`TotalDownloadedBytes` Go 恒 0（上游由进度条累计）；另 Go 对 Title/Pic/VideoPubTime/TaskFinishTime/DownloadSpeed/ErrorMessage/SavePaths 用了 `omitempty`，上游恒输出 null 键 | ⚠️ | internal/server/server.go:43-62（字段与 tag：:53 `DownloadSpeed string`、:54 `TotalDownloadedBytes int64`）、:89-92（TaskID）；grep `DownloadSpeed` 与 `TotalDownloadedBytes` 在 `non-_test` Go 文件中仅命中 server.go:53-54 | 若要严格对齐契约：`DownloadSpeed` 改数值、成功路径按上游口径计算、Progress/字节数接入下载进度；否则至少在文档里声明差异 | P2 |
+| 31 | v1.6.18 / RF-55 | webhook 域名解析出**空地址数组**时：校验侧"空过放行"与连接侧 `addresses[0]` 越界两侧语义不一致，会把已成功任务打成"异常终止"；现两侧对齐（校验拒绝 / 连接跳过） | **半对齐**：校验函数对空数组返回 true（vacuous loop，等于"空过放行"）；连接侧不显式跳过，而是让 `chosen` 保持 nil 去拨号 `"<nil>:port"`，拨号失败只落 LogDebug——不 panic、不影响任务状态（因为 Go 的 sendCallback 不返回错误），后果等价于"回调静默不发生"；另该校验函数在生产路径**无调用点**（仅测试引用），生产只走 sendCallback 内的内联校验 | ⚠️ | internal/server/server.go:606-615（isSafeCallbackURL 空数组直接 return true）、:533-545（chosen 保持 nil 后 `target = chosen`）、:559（`net.JoinHostPort(target.String(), port)`）；调用点：仅 internal/server/server_test.go:87-119 | 在 :543 后补 `if target == nil { LogWarn("回调地址解析结果为空，已跳过"); return }`；并让校验函数对空数组返回 false 以保持两侧一致 | P2 |
+| 32 | 基线（v1.6.10 系列）+ RF-55 复核 | webhook SSRF 全量守卫：字面 IP 与域名两分支、IPv4-mapped 归一、169.254/16/RFC1918/CGNAT/ULA 拦截、域名解析出内网即拒、连接前复查并把 TCP 连接绑定到本次校验的 IP、禁跟随重定向、2 分钟超时 | 已实现且语义与上游一致（两分支 + `normalizeMappedIP` + `isBlockedAddress` + 拨号绑定校验 IP + `ErrUseLastResponse` + 2 分钟超时）；0.0.0.0/:: 经 `IsUnspecified()` 覆盖 | ✅ | internal/server/server.go:495-586（sendCallback：:516-545 两分支、:559-576 绑定 IP 的 DialContext + 禁跳转 + 超时）、:635-643（isUnsafeLiteralIP 含 IsUnspecified）、:647-674（isBlockedAddress） | 无（仅第 31 条的空数组分支待补） | — |
+| 33 | v1.6.18 / RF-54（serve 侧一半；UrlResolver 侧归 D） | serve 把客户端可控串（`option.Url`）直接拼进日志 → 可含 CRLF 伪造日志行；现统一过 `SanitizeLogString` 单行化 | 未收口：处理任务时把客户端原始 URL 原样 `util.Log` 输出；Go logger 全链路无单行化/截断（`Log`/`LogWarn`/`LogError` 直接 `fmt.Sprintf` + 落盘） | ❌ | internal/server/server.go:345（`util.Log("处理任务 %s: %s", task.JobID, url)`）、internal/util/logger.go:51-58（`Log` 无净化）、:31-40（`appendToFile` 原样写） | 加 `util.SanitizeLogString`（\r/\n 转义）+ 截断，在 logger 出口统一套用（比逐调用点修补更稳） | P2 |
+
+### 备注（不单独成行，供修复时参考）
+
+- **上游的 `413` / 错误码文档族（RF-61/RF-84）与 Docker 配方（RF-85）**：Go 仓既无 `API.md` 也无 `Dockerfile`（根目录仅 go.mod/cmd/internal/docs/README/Makefile/PKGBUILD），文档与打包侧无可对齐物 → 不列条目。
+- **Go 侧 serve 无文件日志**：上游 `Program.StartServerAsync` 设 `Logger.LogFilePath = <cwd>/bbdown-api.log`；Go 全仓无 `SetLogFile` 调用点，日志只到 stdout。属 v1.6.4 基线能力缺失（不在 1.6.12~1.6.19 窗口），但与第 1/33 条的"日志 sink 化"修复强相关，建议一并评估。
+- **`/health` 端点**：Go 额外提供且不受 token 保护（internal/server/server.go:166、:487-489），上游无该端点；无敏感数据，暂不构成风险，仅记录差异。
+- **`/remove-finished/failed` 语义漂移**：上游按 `!IsSuccessful` 删除（Cancelled 也算），Go 按 `Status != StatusFailed` 删除（保留 Cancelled）——internal/server/server.go:469-475。非窗口内变更，仅记录。
+
+## 归属其它范围的条目
+
+- RF-14/RF-31/RF-43/RF-44/RF-47/RF-72（两级失败隔离过滤器与外部程序启动/权限/帧校验异常逃逸）→ B
+- RF-45（免二压降级丢杜比/Hi-Res 音轨）、RF-63（res/fps 占位符净化）、RF-58（dfn/codecs 占位符净化）、RF-23（mp4box 临时名后缀）→ B
+- RF-32（sub check 取消语义）、RF-30（订阅历史损坏）→ C
+- RF-35（DRM 取钥取消透传）、RF-57（ToolFinder 不搜 CWD）、RF-78（空 .wvd 诊断）、RF-79（DRM/登录响应体有界读取）、RF-88（DRM 测试假绿）→ B/E
+- RF-50/RF-51（GetWebSourceCoreAsync 逐跳可信校验与 64MB 有界读取）、RF-66（NoRedirectClient 超时对齐）→ D
+- RF-53（GetPropertySafe 键名净化）、RF-65/RF-52（fetcher code 先查与诊断可达）、RF-80（服务器 message 净化）、RF-26（Core 解析/网络低危族）、RF-46（live 畸形响应）、RF-48（Page.bvid 越界 aid）、RF-49（逐条降级过滤器补 TimeoutException）→ E/C
+- RF-56 的"官方域名白名单唯一定义源"（`HTTPUtil.OfficialHostSuffixes`）→ D（Go serve 不接受 host 字段，缺口不可达）
+- RF-4/RF-13/RF-37/RF-59（登录与 DRM 重定向收口）、RF-60/RF-68（tr-TR 文化敏感）、RF-5/RF-6/RF-19（culture / itags / 占位符）→ D/E
+- RF-67（CI 漏洞扫描门禁）、RF-76/RF-77/RF-87（AOT 绑定、local-integration、Docker smoke/concurrency）→ CI/工具链（➖）
+- RF-75（假绿测试抽生产类型）、RF-69（回环测试代理隔离）→ 测试工程（➖）
+- RF-16/RF-39/RF-40/RF-41/RF-42/RF-61/RF-71/RF-84/RF-85（README/wiki/CLI-Reference/API.md/Docker 文档族）→ 文档（Go 仓无对应文档面）
+- CHANGELOG 1.6.12~1.6.19 中的直播录制重连续录/画质/分段裁剪（C）、登录与 TV 登录收口（C）、article/watchlater（C）、混流输出选项位置与评论父目录（B/E）、fetcher/DRM/字幕弹幕（E）→ 各自范围
+
+## 未能判定（❓）汇总
+
+表内无 ❓ 行；以下两条的**代码级缺口是确定的**，但影响面需要运行/集成确认，已按 ❌/⚠️ 判定并在"建议的验证方式"给出复现方法：
+
+- 第 15 条（CSRF）：Go 侧确无任何 Origin/Content-Type 门禁；但"浏览器跨源 `text/plain` + JSON body 能否真正执行到 `json.Decode`"需要一次真实浏览器/实测（Go 的 `MaxBytesReader` 与 Decode 路径没有额外防护是静态确定的）。
+- 第 9 条（关停截断）：静态可确定"任务 ctx 与服务器 ctx 无关联、关停不 cancel"；"30 秒等待窗口内在途任务被进程退出截断到什么程度（半截产物/未落盘）"需要集成测试观测。
+
+## 建议的验证方式
+
+1. **补测试锚点**：把上游的三个测试文件当验收清单逐条移植（它们是可读断言，覆盖正好是本片缺口）：
+   - `BBDown.Tests/ServeApiHttpTests.cs`：`HostValidation_WithoutToken_RejectsNonLoopbackHost`/`AcceptsLoopbackHosts`/`WithToken_SkipsHostCheck`（第 17 条）、`Cors_NonLoopbackOrigin_WriteApi_403` 与 `AddTask_TextPlainContentType_415`（第 15 条）、`TokenAuth_RepeatedFailures_RateLimited429`、`TokenAuth_WrongToken_Returns401`（第 1 条）、`AddTask_QueueFull_Returns429`（第 20 条）、`GetTasks_QuerySlotsExhausted_Returns429`（第 19 条）、`AddTask_OversizedBody_Returns413`（第 16 条）、`Cancel_RealQueuedTask_ProducesCancelledAndPersisted`（第 8/9 条）、`PersistFinishedTasks_AtomicWrite_LeavesValidJson`、`LoadFinishedTasks_RecoversTasksOnRestart`（第 25 条）。
+   - `BBDown.Tests/ServeApiSecurityTests.cs`：`IsSafeCallbackUrlAsync` 字面/域名/零地址/越界（第 31/32 条）、`IsLoopbackOrigin`/`IsLoopbackHost`（第 15/17 条）、`IsAuthLockedOut_SlidingWindow_ThresholdReached` 与 `IsAuthLockedOut_DictionaryStaysBounded_UnderIpHammering`（第 1 条）、`TrimFinishedTasksLocked_KeepsNewestByCreateTime_NotByCompletionOrder`（第 24/26 条）。
+   - `BBDown.Tests/CancellationClassificationTests.cs`：`ClassifyCancellation_GenuineCancel_IsCancelled` / `_TimeoutWithoutTokenCancel_IsFailedNotCancelled`（第 8 条）。
+2. **Go 侧现成可跑的验证**：`go test ./internal/server/...`（现有 server_test.go 覆盖 validateListenURL/isLoopbackHost/segmentHasPrefix/isSafeCallbackURL/isBlockedAddress）；`go vet ./...` 可复核 `Snapshot()` 复制含未导出字段的写法与并发锁。
+3. **端到端脚本建议**（新起回环 serve，用 curl 断言）：
+   - `curl -H 'Host: attacker.example' http://127.0.0.1:23333/get-tasks` 期望 403（当前会 200，暴露 SavePaths）；
+   - `curl -X POST -H 'Origin: https://evil.example' -H 'Content-Type: text/plain' --data '{"url":"BV1xx"}' http://127.0.0.1:23333/add-task` 期望 403/415（当前会 202 建任务）；
+   - 循环 6 次错误 token 后期望 429+Retry-After（当前恒 401）；
+   - 灌满 accept 队列后断言 429 响应头含 `Retry-After: 60`；
+   - 起 `--notify-webhook http://<只解析到空数组的域名>/x`（测试桩 DNS）确认回调被显式跳过且任务状态不受影响。
+4. **关停语义集成测试**（第 9 条）：起 serve → 提交一个大文件下载任务 → `SIGINT` → 断言 30 秒内 `/get-tasks` 已把任务标 Cancelled 且 `bbdown-tasks.json` 已落盘；当前预期失败（任务不会被取消）。
+5. **待实测项**（第 30 条）：抓一次真实 `/get-tasks/{id}` 响应，比对上游字段清单与类型（`DownloadSpeed` 应为数值、`TotalDownloadedBytes` 非 0 才能证明"进度字段可用"）。
