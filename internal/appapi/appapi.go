@@ -223,8 +223,16 @@ func readMessage(data []byte) ([]byte, error) {
 	}
 	first := data[0]
 	size := int(binary.BigEndian.Uint32(data[1:5]))
-	if first == 1 {
+	switch first {
+	case 1:
 		return gzipDecompress(data[5:])
+	case 0:
+		// Uncompressed: handled below.
+	default:
+		// The frame header's first byte is a compressed flag and may only be 0 or 1.
+		// Anything else is a malformed frame; handing it to the protobuf decoder as
+		// if it were payload yields confusing downstream errors (upstream validates).
+		return nil, fmt.Errorf("畸形 gRPC 帧：首字节 %d（合法值仅 0/1）", first)
 	}
 	payloadLen := size
 	if payloadLen > len(data)-5 {
