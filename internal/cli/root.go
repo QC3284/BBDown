@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/util"
@@ -128,9 +129,11 @@ func Execute() {
 
 	// Normalize legacy single-dash aliases (upstream NormalizeCliArgs), then
 	// merge BBDown.config (line-based args) as option defaults.
-	args := normalizeCliArgs(os.Args[1:])
+	aliasMap, boolFlags := buildFlagMaps()
+	args := foldBoolFlagValues(normalizeCliArgs(os.Args[1:]), aliasMap, boolFlags)
 	if merged, err := mergeConfigArgs(args); err == nil {
-		rootCmd.SetArgs(merged)
+		// 配置文件里的 "--flag false" 同样是上游写法，折行后一并交给 cobra。
+		rootCmd.SetArgs(foldBoolFlagValues(merged, aliasMap, boolFlags))
 	}
 
 	if err := rootCmd.Execute(); err != nil {
@@ -173,6 +176,21 @@ func normalizeCliArgs(args []string) []string {
 // mergeConfigArgs builds the option alias map from the registered cobra flags
 // and merges the config file (config defaults < CLI args).
 func mergeConfigArgs(cliArgs []string) ([]string, error) {
+	aliasMap, boolFlags := buildFlagMaps()
+	merged, err := config.MergeWithConfig(cliArgs, aliasMap, boolFlags)
+	if err != nil {
+		return cliArgs, nil
+	}
+	if len(merged) != len(cliArgs) {
+		util.Log("加载配置文件完成（配置为默认值，命令行参数优先）")
+	}
+	return merged, nil
+}
+
+// buildFlagMaps collects every registered flag's alias (long and shorthand) and
+// whether it is boolean. Both the config merge and the bool-value folding below
+// need the same view of the command tree.
+func buildFlagMaps() (map[string]string, map[string]bool) {
 	aliasMap := make(map[string]string)
 	boolFlags := make(map[string]bool)
 	add := func(f *pflag.Flag) {
@@ -190,15 +208,40 @@ func mergeConfigArgs(cliArgs []string) ([]string, error) {
 	watchLaterCmd.Flags().VisitAll(add)
 	subAddCmd.Flags().VisitAll(add)
 	subCheckCmd.Flags().VisitAll(add)
+	return aliasMap, boolFlags
+}
 
-	merged, err := config.MergeWithConfig(cliArgs, aliasMap, boolFlags)
-	if err != nil {
-		return cliArgs, nil
+// foldBoolFlagValues rewrites "--flag true|false" into "--flag=true|false" for
+// boolean flags.
+//
+// 上游用 System.CommandLine，布尔选项的 arity 是 0..1，所以上游 README 里的
+// `--multi-thread false`（关闭多线程）是有效写法；Go 的 pflag 对布尔选项只认
+// `--flag=false`，`--flag false` 会把 flag 置为 true、并把 "false" 留成一个位置参数
+// （在这里会被当成输入 URL）。照上游文档抄命令的用户会「关不掉」多线程，
+// 所以要在这里折平。
+//
+// "--" 之后全是位置参数，不再折行。值的大小写不敏感（上游 Boolean.Parse 同样如此）。
+func foldBoolFlagValues(args []string, aliasMap map[string]string, boolFlags map[string]bool) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			out = append(out, args[i:]...)
+			break
+		}
+		if len(a) > 1 && a[0] == '-' && !strings.Contains(a, "=") {
+			if name, ok := aliasMap[a]; ok && boolFlags[name] && i+1 < len(args) {
+				switch strings.ToLower(args[i+1]) {
+				case "true", "false":
+					out = append(out, a+"="+strings.ToLower(args[i+1]))
+					i++
+					continue
+				}
+			}
+		}
+		out = append(out, a)
 	}
-	if len(merged) != len(cliArgs) {
-		util.Log("加载配置文件完成（配置为默认值，命令行参数优先）")
-	}
-	return merged, nil
+	return out
 }
 
 func init() {
