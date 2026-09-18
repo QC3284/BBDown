@@ -23,6 +23,7 @@ import (
 	"github.com/QC3284/BBDown/internal/muxer"
 	"github.com/QC3284/BBDown/internal/parser"
 	"github.com/QC3284/BBDown/internal/util"
+	"sync"
 )
 
 const backupHost = "upos-sz-mirrorcoso1.bilivideo.com"
@@ -503,6 +504,12 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			savePath += ".m4a"
 		}
 		util.LogDebug("SavePath: %s", savePath)
+
+		// Hold the product lock across the existence check, the download and the
+		// mux: releasing it earlier would let a concurrent task decide to download
+		// the same file and then overwrite this one's finished output.
+		unlockPath := lockPath(savePath)
+		defer unlockPath()
 
 		// Skip if exists
 		if info, err := os.Stat(savePath); err == nil && info.Size() > 0 {
@@ -1556,6 +1563,44 @@ func (t *ArchiveTracker) OnProcessed(aid string, ok bool) bool {
 		t.pending[aid]--
 	}
 	return t.pending[aid] == 0 && !t.failed[aid]
+}
+
+// pathLocks serialise downloads that target the same product. Two concurrent
+// tasks (serve tasks, or a batch command) would otherwise both pass the
+// "already exists" check, download the same media twice, and have the loser
+// overwrite the winner's finished file.
+var (
+	pathLocksMu sync.Mutex
+	pathLocks   = map[string]*pathLock{}
+)
+
+type pathLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockPath takes the lock for path and returns the release function. Unrelated
+// paths never contend, and the entry is dropped once the last holder leaves.
+func lockPath(path string) func() {
+	pathLocksMu.Lock()
+	l, ok := pathLocks[path]
+	if !ok {
+		l = &pathLock{}
+		pathLocks[path] = l
+	}
+	l.refs++
+	pathLocksMu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		pathLocksMu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(pathLocks, path)
+		}
+		pathLocksMu.Unlock()
+	}
 }
 
 func (w *Workflow) checkAidArchived(aid string) bool {
