@@ -156,11 +156,46 @@ func fetchLiveStreamURL(ctx context.Context, client *util.HTTPClient, roomID, qn
 // DownloadToFile records a live stream with automatic reconnection, writing
 // per-connection segments which are merged with ffmpeg at the end (upstream
 // LiveStreamUtil). Cancellation stops recording but still finalizes segments.
-func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPClient) (bool, error) {
+// LiveRecordResult classifies one recording session (upstream LiveRecordResult).
+// A plain bool could not tell "nothing was captured" from "the merge failed but
+// the raw segments are still on disk for manual recovery".
+type LiveRecordResult int
+
+const (
+	// LiveNoData: the room produced no usable segment.
+	LiveNoData LiveRecordResult = iota
+	// LiveSuccess: the segments were merged into the output file.
+	LiveSuccess
+	// LiveConcatFailedWithSegmentsSaved: the merge failed or produced a truncated
+	// product; the raw segments were kept.
+	LiveConcatFailedWithSegmentsSaved
+)
+
+func (r LiveRecordResult) String() string {
+	switch r {
+	case LiveSuccess:
+		return "success"
+	case LiveConcatFailedWithSegmentsSaved:
+		return "concat-failed-segments-saved"
+	default:
+		return "no-data"
+	}
+}
+
+// stateFor classifies an aborted session: anything already captured is kept for
+// manual recovery, otherwise nothing was recorded at all.
+func stateFor(total int64) LiveRecordResult {
+	if total > 0 {
+		return LiveConcatFailedWithSegmentsSaved
+	}
+	return LiveNoData
+}
+
+func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPClient) (LiveRecordResult, error) {
 	segRoot := path + ".segs"
 	sessionDir := filepath.Join(segRoot, "session-"+time.Now().Format("20060102_150405"))
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		return false, err
+		return LiveNoData, err
 	}
 	// Only this session's directory is removed once the recording finished
 	// cleanly; on a terminal failure the segments are kept for manual recovery
@@ -211,7 +246,7 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 				// Local write failure is terminal — retrying cannot help.
 				keepSegments = total > 0
 				util.LogWarn("直播分段写入失败（%v），已录制内容保留在 %s", werr, sessionDir)
-				return total > 0, fmt.Errorf("直播录制写盘失败: %w", werr)
+				return stateFor(total), fmt.Errorf("直播录制写盘失败: %w", werr)
 			}
 			if ctx.Err() != nil {
 				break
@@ -248,18 +283,18 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 	}
 
 	if total == 0 {
-		return false, nil
+		return LiveNoData, nil
 	}
 
 	// Merge segments (single segment: plain rename; more: ffmpeg concat).
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return true, err
+		return stateFor(total), err
 	}
 	if len(segFiles) == 1 {
 		if err := os.Rename(segFiles[0], path); err != nil {
-			return true, err
+			return stateFor(total), err
 		}
-		return true, nil
+		return LiveSuccess, nil
 	}
 
 	// Cut every segment back to its last complete FLV tag first: one truncated
@@ -279,19 +314,25 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 		sb.WriteString("\"\n")
 	}
 	if err := os.WriteFile(listPath, []byte(sb.String()), 0o644); err != nil {
-		return true, err
+		keepSegments = true
+		return LiveConcatFailedWithSegmentsSaved, err
 	}
 
 	// Segment merging reuses the muxer timeout ceiling (default 30 minutes).
 	mergeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(mergeCtx, muxer.FFMPEG, "-loglevel", "warning", "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", path)
+	// Merge into a staging file and rename only on success: writing straight to path
+	// left a truncated product behind when the merge failed, which then looked like a
+	// finished recording.
+	stagingPath := path + ".staging"
+	_ = os.Remove(stagingPath)
+	cmd := exec.CommandContext(mergeCtx, muxer.FFMPEG, "-loglevel", "warning", "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", stagingPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		os.Remove(path)
+		_ = os.Remove(stagingPath)
 		keepSegments = true
-		return true, fmt.Errorf("直播分段合成失败（分段保留在 %s）: %w", sessionDir, err)
+		return LiveConcatFailedWithSegmentsSaved, fmt.Errorf("直播分段合成失败（分段保留在 %s）: %w", sessionDir, err)
 	}
 
 	// Validate the product before the segments are dropped. ffmpeg can exit 0
@@ -304,17 +345,22 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 			inputBytes += st.Size()
 		}
 	}
-	outStat, statErr := os.Stat(path)
+	outStat, statErr := os.Stat(stagingPath)
 	if statErr != nil || outStat.Size() == 0 || (inputBytes > 0 && float64(outStat.Size()) < float64(inputBytes)*0.8) {
 		var outBytes int64
 		if statErr == nil {
 			outBytes = outStat.Size()
 		}
-		os.Remove(path)
+		_ = os.Remove(stagingPath)
 		keepSegments = true
-		return true, fmt.Errorf("直播分段合成产物异常（产物 %d 字节，源 %d 字节），分段已保留在 %s", outBytes, inputBytes, sessionDir)
+		return LiveConcatFailedWithSegmentsSaved, fmt.Errorf("直播分段合成产物异常（产物 %d 字节，源 %d 字节），分段已保留在 %s", outBytes, inputBytes, sessionDir)
 	}
-	return true, nil
+	if err := os.Rename(stagingPath, path); err != nil {
+		_ = os.Remove(stagingPath)
+		keepSegments = true
+		return LiveConcatFailedWithSegmentsSaved, err
+	}
+	return LiveSuccess, nil
 }
 
 // errLiveWrite marks a local write failure: unlike a network interruption it

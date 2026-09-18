@@ -44,13 +44,13 @@ func TestDownloadToFileKeepsPartialContentOnCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	type result struct {
-		ok  bool
-		err error
+		state LiveRecordResult
+		err   error
 	}
 	done := make(chan result, 1)
 	go func() {
-		ok, err := DownloadToFile(ctx, "1", out, nil)
-		done <- result{ok, err}
+		state, err := DownloadToFile(ctx, "1", out, nil)
+		done <- result{state, err}
 	}()
 
 	time.Sleep(150 * time.Millisecond) // let the first bytes land
@@ -58,8 +58,8 @@ func TestDownloadToFileKeepsPartialContentOnCancel(t *testing.T) {
 
 	select {
 	case r := <-done:
-		if !r.ok {
-			t.Fatalf("DownloadToFile reported no content (err=%v); recorded bytes were discarded", r.err)
+		if r.state != LiveSuccess {
+			t.Fatalf("DownloadToFile reported %v (err=%v); recorded bytes were discarded", r.state, r.err)
 		}
 		if r.err != nil {
 			t.Fatalf("unexpected error: %v", r.err)
@@ -179,5 +179,28 @@ func TestReconnectBackoffGrowsAndCaps(t *testing.T) {
 	}
 	if got := reconnectBackoff(1000); got != reconnectMaxBackoff {
 		t.Errorf("late backoff = %v, want %v", got, reconnectMaxBackoff)
+	}
+}
+
+// TestLiveRecordStateClassification pins the three states: a caller must be able
+// to tell "nothing captured" from "the merge failed but segments are on disk",
+// which a plain bool could not express.
+func TestLiveRecordStateClassification(t *testing.T) {
+	if got := stateFor(0); got != LiveNoData {
+		t.Errorf("stateFor(0) = %v, want no-data", got)
+	}
+	if got := stateFor(1024); got != LiveConcatFailedWithSegmentsSaved {
+		t.Errorf("stateFor(1024) = %v, want concat-failed-segments-saved", got)
+	}
+
+	want := map[LiveRecordResult]string{
+		LiveNoData:                        "no-data",
+		LiveSuccess:                       "success",
+		LiveConcatFailedWithSegmentsSaved: "concat-failed-segments-saved",
+	}
+	for state, s := range want {
+		if got := state.String(); got != s {
+			t.Errorf("String() = %q, want %q", got, s)
+		}
 	}
 }

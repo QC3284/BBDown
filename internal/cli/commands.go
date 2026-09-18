@@ -157,13 +157,19 @@ var liveCmd = &cobra.Command{
 		}
 		util.Log("开始录制直播流: %s (Ctrl+C 停止，断流自动重连)", outPath)
 
-		recorded, err := live.DownloadToFile(ctx, roomID, outPath, client)
+		result, err := live.DownloadToFile(ctx, roomID, outPath, client)
 		if err != nil {
+			if result == live.LiveConcatFailedWithSegmentsSaved {
+				util.LogWarn("直播合成未完成，原始分段已保留，可手动合成")
+			}
 			return silenceOnCancel(cmd, err)
 		}
-		if !recorded {
+		switch result {
+		case live.LiveNoData:
 			util.Log("未录制到任何内容")
-		} else {
+		case live.LiveConcatFailedWithSegmentsSaved:
+			util.LogWarn("直播合成未完成，原始分段已保留，可手动合成")
+		default:
 			util.Log("直播录制完成: %s", outPath)
 		}
 		return nil
