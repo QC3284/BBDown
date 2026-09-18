@@ -115,6 +115,7 @@ type APIServer struct {
 	taskWG        sync.WaitGroup
 	auth          *authGuard
 	trustedProxy  string
+	queryLimiter  chan struct{} // bounds concurrent /get-tasks queries
 
 	// persistMu serialises bbdown-tasks.json writes: several tasks finish
 	// concurrently and each calls persistFinishedTasks.
@@ -138,6 +139,7 @@ func NewAPIServer(listenURL string, maxConcurrent int, serveToken, notifyWebhook
 		acceptLimiter: make(chan struct{}, maxConcurrent*9),
 		taskFile:      "bbdown-tasks.json",
 		auth:          newAuthGuard(),
+		queryLimiter:  make(chan struct{}, maxConcurrentQueries),
 	}
 }
 
@@ -476,9 +478,23 @@ func isWriteEndpoint(path string) bool {
 		segmentHasPrefix(path, "/remove-finished")
 }
 
+// maxConcurrentQueries caps simultaneous /get-tasks requests.
+const maxConcurrentQueries = 32
+
 func (s *APIServer) handleGetTasks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		methodNotAllowed(w)
+		return
+	}
+	// Bound concurrent queries: every listing walks the whole finished-task slice
+	// and each response exposes absolute save paths, so unbounded parallelism is
+	// both a CPU/memory amplifier and an information-disclosure one.
+	select {
+	case s.queryLimiter <- struct{}{}:
+		defer func() { <-s.queryLimiter }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, `{"error":"too many concurrent queries"}`, http.StatusTooManyRequests)
 		return
 	}
 	s.mu.Lock()
