@@ -12,6 +12,24 @@ import (
 	"time"
 )
 
+// maxResponseBodyBytes bounds an API response body (upstream 64MB). A broken
+// endpoint or an --insecure MITM can otherwise stream a chunked body without
+// limit and exhaust memory.
+const maxResponseBodyBytes = 64 << 20
+
+// ReadAllBounded reads r up to limit bytes and fails when the body is larger,
+// instead of silently truncating it.
+func ReadAllBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("响应体超过 %d 字节上限", limit)
+	}
+	return data, nil
+}
+
 // IsTrustedCookieHost reports whether host may receive BBDown credentials.
 // A credential-bearing request must never be redirected outside this set
 // (upstream IsTrustedCookieHost, RF-13/RF-37/RF-50).
@@ -152,7 +170,7 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 		return "", nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, MaskUrl(url))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := ReadAllBounded(resp.Body, maxResponseBodyBytes)
 	if err != nil {
 		return "", nil, err
 	}
@@ -233,7 +251,7 @@ func (c *HTTPClient) PostResponse(ctx context.Context, url string, body []byte, 
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, MaskUrl(url))
 	}
 
-	return io.ReadAll(resp.Body)
+	return ReadAllBounded(resp.Body, maxResponseBodyBytes)
 }
 
 // RandomUserAgent returns a freshly generated random user agent string,
@@ -293,5 +311,5 @@ func (c *HTTPClient) PostForm(ctx context.Context, urlStr string, form url.Value
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, MaskUrl(urlStr))
 	}
-	return io.ReadAll(resp.Body)
+	return ReadAllBounded(resp.Body, maxResponseBodyBytes)
 }

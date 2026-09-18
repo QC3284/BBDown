@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"strconv"
 
 	"github.com/QC3284/BBDown/internal/util"
@@ -245,13 +244,17 @@ func gzipCompress(data []byte) []byte {
 	return buf.Bytes()
 }
 
+// maxGRPCBodyBytes bounds the decompressed gRPC payload (upstream 48MB): a
+// small gzip bomb would otherwise expand without limit.
+const maxGRPCBodyBytes = 48 << 20
+
 func gzipDecompress(data []byte) ([]byte, error) {
 	r, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	defer r.Close()
-	return io.ReadAll(r)
+	return util.ReadAllBounded(r, maxGRPCBodyBytes)
 }
 
 // ---- protobuf wire helpers ----
