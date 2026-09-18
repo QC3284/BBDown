@@ -1,6 +1,6 @@
 # Maintainer: QC3284 <qc3284@github>
 pkgname=bbdown-go-git
-pkgver=1.6.19
+pkgver=1.6.19.go.1
 pkgrel=1
 pkgdesc="一款命令行式哔哩哔哩下载器. Bilibili Downloader. (Go 重写)"
 arch=("x86_64" "aarch64")
