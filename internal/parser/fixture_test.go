@@ -180,6 +180,26 @@ func TestFixtureBangumiWebDashParsesTracks(t *testing.T) {
 	}
 }
 
+// TestFixtureBangumiWebDashVideoInfoRoot: the same pgc endpoint also answers
+// with the tracks nested under "result.video_info" instead of a bare "result".
+// Both shapes must locate the track list the same way (upstream F02a/F02b), and
+// the bangumi path must not be WBI-signed.
+func TestFixtureBangumiWebDashVideoInfoRoot(t *testing.T) {
+	res, err := extractFixtureWithEpid(t, "bangumi-web-dash-video-info", "307930")
+	if err != nil {
+		t.Fatalf("bangumi parse: %v", err)
+	}
+	if len(res.VideoTracks) != 1 {
+		t.Fatalf("video tracks = %d, want 1", len(res.VideoTracks))
+	}
+	if res.VideoTracks[0].ID != "116" {
+		t.Errorf("video id = %q, want 116", res.VideoTracks[0].ID)
+	}
+	if res.VideoTracks[0].Dfn != "1080P 高帧率" {
+		t.Errorf("video dfn = %q, want 1080P 高帧率", res.VideoTracks[0].Dfn)
+	}
+}
+
 // extractIntlFixture drives the international parse path against a server that
 // routes by the prefer_code_type query parameter, which is how upstream's
 // FakeBilibiliApiServer distinguishes the two passes.

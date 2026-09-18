@@ -291,6 +291,6 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 | **intl 夹具接入** | intl 路径 scheme 改走 \`apiBase\` 使其可注入；新增按 query 分流的回放夹具 | \`TestFixtureIntlMergesTwoPassStreamLists\` —— **两趟 \`prefer_code_type\` 合并本来就是对的**，现有夹具背书 |
 | **bangumi 夹具接入** | \`result\` 根（而非 \`data\`）的轨道映射 | \`TestFixtureBangumiWebDashParsesTracks\` |
 
-**夹具覆盖**：15 个上游夹具中 9 个已接（绿），其余 5 个（\`dash-reparse-pass1/2\`、\`durl-replay-first/empty\`、\`flv-durl\`）统一被「免二压重发」决策阻塞 —— 即 \`TestFixtureReparseProtocol\` 那一条跳启用例。
+**夹具覆盖**：15 个上游夹具中 **10 个已接（绿）**，其余 5 个（`dash-reparse-pass1/2`、`durl-replay-first/empty`、`flv-durl`）统一被「免二压重发」决策阻塞 —— 即 `TestFixtureReparseProtocol` 那一条跳启用例。接入过程中 **intl 两趟合并、bangumi 的 `result` 与 `result.video_info` 两种根形状、DoVi+FLAC 音轨追加** 四条「静态判定 ✅」被真实响应夹具证实为正确。
 - **夹具**：按 query 分流的假服务器 → 接 \`intl-code0/1\`、\`bangumi-web-dash-*\` 四个夹具。
 
