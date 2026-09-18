@@ -1,0 +1,48 @@
+name: release
+
+# Publishing is tag-driven: pushing a tag such as v1.6.19-go builds every
+# platform and attaches the archives to the GitHub release. The version string
+# in the binary must match the tag, because the update check compares
+# /releases/latest against it.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./...
+      - name: Build
+        run: |
+          set -e
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64; do
+            os=\${target%/*}; arch=\${target#*/}
+            ext=""
+            [ "\$os" = "windows" ] && ext=".exe"
+            GOOS=\$os GOARCH=\$arch go build -trimpath -ldflags="-s -w" -o "dist/BBDown\$ext" ./cmd/bbdown/
+            if [ "\$os" = "windows" ]; then
+              (cd dist && zip -q "BBDown_\${os}_\${arch}.zip" "BBDown\$ext" && rm "BBDown\$ext")
+            else
+              (cd dist && tar czf "BBDown_\${os}_\${arch}.tar.gz" "BBDown\$ext" && rm "BBDown\$ext")
+            fi
+          done
+      - name: Publish
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          set -e
+          if gh release view "\$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "\$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "\$GITHUB_REF_NAME" dist/* --title "\$GITHUB_REF_NAME" --generate-notes
+          fi
