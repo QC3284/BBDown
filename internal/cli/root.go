@@ -335,7 +335,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand).
-	util.CheckUpdateAsync(context.Background(), client, "v1.6.19")
+	util.CheckUpdateAsync(context.Background(), client, "v1.6.19-go")
 
 	wf := workflow.New(cfg, client)
 
