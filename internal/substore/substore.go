@@ -31,6 +31,10 @@ var StoreRoot = exeDir()
 
 var ioLock sync.Mutex
 
+// maxHistoryPerTarget bounds the per-subscription history: large enough that a
+// normal subscription never reaches it, small enough to keep parsing cheap.
+const maxHistoryPerTarget = 5000
+
 func exeDir() string {
 	return util.ExecutableDir()
 }
@@ -164,12 +168,21 @@ func RecordDownloaded(target, aid string) error {
 	if m == nil {
 		m = make(map[string][]string)
 	}
+	// Move an already-recorded aid to the end rather than ignoring it: the list is
+	// ordered by recency and the cap below evicts from the front.
 	list := m[target]
+	out := list[:0]
 	for _, a := range list {
-		if a == aid {
-			return nil
+		if a != aid {
+			out = append(out, a)
 		}
 	}
-	m[target] = append(list, aid)
+	out = append(out, aid)
+	// Bound the history: it otherwise grows forever and every `sub check` parses it
+	// in full (upstream keeps the most recent MaxHistoryPerTarget entries).
+	if len(out) > maxHistoryPerTarget {
+		out = out[len(out)-maxHistoryPerTarget:]
+	}
+	m[target] = out
 	return atomicWrite(historyFile(), m)
 }
