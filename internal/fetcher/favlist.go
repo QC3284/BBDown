@@ -16,6 +16,28 @@ type FavListFetcher struct {
 	client *util.HTTPClient
 }
 
+// favPageAction says how favourites paging should proceed after one page.
+type favPageAction int
+
+const (
+	favContinue favPageAction = iota
+	favStop
+)
+
+// favPageActionFor decides what one favourites page means. Paging used to end
+// with a bare "break" for every outcome, so a risk-control page or a malformed
+// media_count silently truncated the list; an empty page is the only case that
+// legitimately ends it (upstream stops on an empty page and reports errors).
+func favPageActionFor(code int, message string, medias []interface{}) (favPageAction, error) {
+	if code != 0 {
+		return favStop, fmt.Errorf("收藏夹翻页返回 code=%d: %s", code, message)
+	}
+	if len(medias) == 0 {
+		return favStop, nil
+	}
+	return favContinue, nil
+}
+
 func (f *FavListFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo, error) {
 	rest := strings.TrimPrefix(id, "favId:")
 	parts := strings.SplitN(rest, ":", 2)
@@ -146,13 +168,21 @@ func (f *FavListFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo, e
 		api := fmt.Sprintf("https://api.bilibili.com/x/v3/fav/resource/list?media_id=%s&pn=%d&ps=%d&order=mtime&type=2&tid=0&platform=web", favID, page, pageSize)
 		resp, err := f.client.GetWebSource(ctx, api)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("收藏夹第 %d 页请求失败: %w", page, err)
 		}
 		var pageRoot map[string]interface{}
 		if json.Unmarshal([]byte(resp), &pageRoot) != nil {
+			return nil, fmt.Errorf("收藏夹第 %d 页响应无法解析", page)
+		}
+		pageData := gm(pageRoot, "data")
+		action, err := favPageActionFor(gi(pageRoot, "code"), gs(pageRoot, "message"), ga(pageData, "medias"))
+		if err != nil {
+			return nil, err
+		}
+		if action == favStop {
 			break
 		}
-		processPage(gm(pageRoot, "data"))
+		processPage(pageData)
 	}
 
 	if len(failures) > 0 {

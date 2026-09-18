@@ -26,6 +26,15 @@ func FindMp4decrypt(explicitPath string) string {
 // line), mp4decrypt is run with "mp4decrypt --key-file <keyfile> <input> <output>",
 // and the input is atomically replaced by the decrypted output. Timeout caps the
 // external process (upstream reuses the muxer timeout for this).
+// overwriteFile zero-fills size bytes of path. It is kept separate from the
+// caller's remove so the overwrite itself is testable.
+func overwriteFile(path string, size int) error {
+	if size <= 0 {
+		return nil
+	}
+	return os.WriteFile(path, make([]byte, size), 0o600)
+}
+
 func DecryptStream(ctx context.Context, mp4decryptPath, kidHex, keyHex, input string, timeout time.Duration) error {
 	if input == "" {
 		return nil
@@ -45,12 +54,14 @@ func DecryptStream(ctx context.Context, mp4decryptPath, kidHex, keyHex, input st
 		return fmt.Errorf("decrypt: create key file: %w", err)
 	}
 	keyPath := keyFile.Name()
+	keyPayload := kidHex + ":" + keyHex
 	defer func() {
-		// Securely delete: overwrite with NULs before removing (best effort).
-		_ = os.WriteFile(keyPath, make([]byte, 64), 0o600)
+		// Overwrite exactly what was written (best effort). A fixed 64-byte pass
+		// over a 65-byte "kid:key" line left the final character on disk.
+		_ = overwriteFile(keyPath, len(keyPayload))
 		_ = os.Remove(keyPath)
 	}()
-	if _, err := keyFile.WriteString(kidHex + ":" + keyHex); err != nil {
+	if _, err := keyFile.WriteString(keyPayload); err != nil {
 		_ = keyFile.Close()
 		return fmt.Errorf("decrypt: write key file: %w", err)
 	}
