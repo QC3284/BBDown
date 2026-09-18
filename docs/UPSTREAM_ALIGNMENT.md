@@ -162,10 +162,10 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 | # | 事项 | 结论 | 落地 |
 |---|---|---|---|
-| 1 | **免二压重发机制整体缺失** | **补齐** | 已按上游 \`ParseDash\` 的 \`reparsePass\` 实现：qn=0 首请求 + qn=127 重取，仅带 \`dash.video\` 的文档整体接管，重取被拒/失败沿用首轮，用户取消向上传播。原本被它阻塞的 5 个夹具（\`dash-reparse-pass1/2\`、\`durl-replay-first/empty\`、\`flv-durl\`）全部转绿 |
+| 1 | **免二压重发机制整体缺失** | **补齐** | 已按上游 `ParseDash` 的 `reparsePass` 实现：qn=0 首请求 + qn=127 重取，仅带 `dash.video` 的文档整体接管，重取被拒/失败沿用首轮，用户取消向上传播。原本被它阻塞的 5 个夹具（`dash-reparse-pass1/2`、`durl-replay-first/empty`、`flv-durl`）全部转绿 |
 | 2 | ❓ RF-45（免二压重发降级丢杜比音轨） | **随 #1 一并解决** | 接管时才重置 dolby/flac 追加标记的语义已由「整体替换文档后统一解析」覆盖 |
-| 3 | 版本号策略（D4） | **\`<上游版本>-go\`** | 已升至 **1.6.19-go**：banner / cobra \`Version\` / 更新检查 tag / README / PKGBUILD 同步 |
-| 4 | 协作姿态（D5） | **引入** | 新增 \`CHANGELOG.md\`（Keep a Changelog，版本号语义写进头部）与 \`AGENTS.md\`（布局、最高约束、测试纪律、上游同步步骤） |
+| 3 | 版本号策略（D4） | **`<上游版本>-go`** | 已升至 **1.6.19-go**：banner / cobra `Version` / 更新检查 tag / README / PKGBUILD 同步 |
+| 4 | 协作姿态（D5） | **引入** | 新增 `CHANGELOG.md`（Keep a Changelog，版本号语义写进头部）与 `AGENTS.md`（布局、最高约束、测试纪律、上游同步步骤） |
 | 5 | 修复批次划分 | P0 → 横切设施 → 测试基座 → P1 分批 | 已按此顺序执行完毕 |
 
 ### 4.6 修复记录
@@ -193,12 +193,12 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 ### 4.10 第五轮：夹具基座扩容
 
-上游 15 个 parser 夹具已全部落地到 \`internal/parser/testdata/\`，回放基座覆盖其中 7 个：
+上游 15 个 parser 夹具已全部落地到 `internal/parser/testdata/`，回放基座覆盖其中 7 个：
 
-- 已接（绿）：\`drm-dash-badkid\`、\`drm-dash\`、\`biz-error\`、\`missing-nodes-tolerant\`、\`dolby-flac-audio\`（1 视频 / 4 音轨 — **DoVi + FLAC 追加在 Go 侧本来就正确**，此前只是静态推断，现有夹具背书）。
-- **已接（跳过）**：\`TestFixtureReparseProtocol\` —— 免二压重发协议（qn=0 首请求 → qn=127 重发 → 失败回退首次响应）在 Go 侧**完全不存在**，单次请求。断言已写好，只等实现后删掉 \`t.Skip\`。
-- 依赖重发协议、暂不可接：\`dash-reparse-pass1/2\`、\`durl-replay-first/empty\`、\`flv-durl\`（期望 2 次请求、第二次带 \`qn=127\`）。
-- 需按 query 分流的假服务器：\`intl-code0/1\`、\`bangumi-web-dash-*\`。
+- 已接（绿）：`drm-dash-badkid`、`drm-dash`、`biz-error`、`missing-nodes-tolerant`、`dolby-flac-audio`（1 视频 / 4 音轨 — **DoVi + FLAC 追加在 Go 侧本来就正确**，此前只是静态推断，现有夹具背书）。
+- **已接（跳过）**：`TestFixtureReparseProtocol` —— 免二压重发协议（qn=0 首请求 → qn=127 重发 → 失败回退首次响应）在 Go 侧**完全不存在**，单次请求。断言已写好，只等实现后删掉 `t.Skip`。
+- 依赖重发协议、暂不可接：`dash-reparse-pass1/2`、`durl-replay-first/empty`、`flv-durl`（期望 2 次请求、第二次带 `qn=127`）。
+- 需按 query 分流的假服务器：`intl-code0/1`、`bangumi-web-dash-*`。
 
 > 该测试即 §4.5 待决策 1 的**具体形态**：决策不再是纸面讨论，而是一个断言写好的跳启用例。
 
@@ -256,25 +256,25 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 | 条目 | 改动 | 验证 |
 |---|---|---|
-| **serve 关停不取消在途任务**（A#2） | 任务 ctx 统一派生自可取消的服务基础 ctx；关停时先取消再等待，最后落盘 —— 原先既不落 Cancelled 也不落盘，30s 后被进程退出截断 | \`shutdown_test.go\`：预占执行槽使任务必然走取消分支，断言状态与落盘；变异后用例超时 |
-| **serve 持久化三缺**（A#3） | 唯一临时名 + \`persistMu\` 串行化（共享 \`<file>.tmp\` 曾让并发写者抢同一路径）；内存 \`finishedTasks\` 同样按上限裁剪（\`/get-tasks\` 服务的就是它）；\`ErrorMessage\` 脱敏本机绝对路径并去控制字符 | 并发写 + 无残留临时文件用例 |
-| **serve token 硬化** | 常量时间比较（明文 \`!=\` 经响应时间泄露密钥）；\`BBDOWN_SERVE_TOKEN\` 环境变量优先于旗标 | \`token_test.go\` |
-| **\`-p\` 展开累计上限**（RF-81） | 原先上限按「每个范围」判定，\`1-60000,1-60000\` 可连过两次并展开 12 万项 | 用例覆盖累计与单范围|
-| **超大请求体返回 413** | 原先退化为通用 400，客户端无法区分「太大」与「格式错」 | \`body_test.go\` |
-| **\`sub check\` 部分失败返回 0**（C） | 末尾恒 \`return nil\`，全失败也报成功；现统计失败数并非零退出（主动取消仍为 0） | \`subcheck_test.go\` |
-| **空 access_token 写盘**（C） | TV 登录 \`default\` 分支把空 token 写进 \`BBDownTV.data\`，留下看似已登录实则无效的凭据 | \`token_test.go\`（login） |
-| **文件名卫生**（D#3） | 尾随点/空格（Windows 静默丢弃）、基名按 rune 截断到 100、全为点时回退、保留名判定后置 | \`filename_hygiene_test.go\`（含真实 \`utf8.ValidString\` 断言） |
-| **aria2c 输入注入**（B） | URL 直接来自接口 \`base_url\`，可带换行注入 \`out=\`/\`dir=\` 选项；Cookie 早有防护而 URL 没有 | \`aria2c_input_test.go\`；变异后注入行真的出现 |
-| **评论导出不建父目录**（B） | 路径来自保存模板，父目录不存在直接失败 | \`comments_test.go\` |
-| **SubOnly 恒 \`.srt\`**（B，RF-18） | ASS/JSON 轨道会被改成扩展名与内容不符；现沿用真实扩展名并对 \`lan\` 段净化 | 代码级 + 净化函数已有用例 |
-| **CoverOnly 不提前返回**（B） | 代码里写着「matching C#: no early return」，但上游明确 \`return true\` 并注明「否则…用户只要封面却白白下载完整视频」——**在码注释是错的**，现补上提前返回（无封面资源时报失败而非零产物成功） | 对照上游源码确认 |
-| **混流非事务化**（B） | 直写 \`savePath\` 时中断会留下截断成品，而「已存在, 跳过下载」会把它永久当成已完成；现写唯一 \`.muxing-*.mp4\` 后改名 | 代码级 |
-| **直播 qn=30000 + 回落**（C） | 原固定游客档 \`qn=10000\`；现请求 30000，该档无可用 flv 流时以 10000 再取一次 | \`resolve_test.go\`（回落 + 快路径两条） |
+| **serve 关停不取消在途任务**（A#2） | 任务 ctx 统一派生自可取消的服务基础 ctx；关停时先取消再等待，最后落盘 —— 原先既不落 Cancelled 也不落盘，30s 后被进程退出截断 | `shutdown_test.go`：预占执行槽使任务必然走取消分支，断言状态与落盘；变异后用例超时 |
+| **serve 持久化三缺**（A#3） | 唯一临时名 + `persistMu` 串行化（共享 `<file>.tmp` 曾让并发写者抢同一路径）；内存 `finishedTasks` 同样按上限裁剪（`/get-tasks` 服务的就是它）；`ErrorMessage` 脱敏本机绝对路径并去控制字符 | 并发写 + 无残留临时文件用例 |
+| **serve token 硬化** | 常量时间比较（明文 `!=` 经响应时间泄露密钥）；`BBDOWN_SERVE_TOKEN` 环境变量优先于旗标 | `token_test.go` |
+| **`-p` 展开累计上限**（RF-81） | 原先上限按「每个范围」判定，`1-60000,1-60000` 可连过两次并展开 12 万项 | 用例覆盖累计与单范围|
+| **超大请求体返回 413** | 原先退化为通用 400，客户端无法区分「太大」与「格式错」 | `body_test.go` |
+| **`sub check` 部分失败返回 0**（C） | 末尾恒 `return nil`，全失败也报成功；现统计失败数并非零退出（主动取消仍为 0） | `subcheck_test.go` |
+| **空 access_token 写盘**（C） | TV 登录 `default` 分支把空 token 写进 `BBDownTV.data`，留下看似已登录实则无效的凭据 | `token_test.go`（login） |
+| **文件名卫生**（D#3） | 尾随点/空格（Windows 静默丢弃）、基名按 rune 截断到 100、全为点时回退、保留名判定后置 | `filename_hygiene_test.go`（含真实 `utf8.ValidString` 断言） |
+| **aria2c 输入注入**（B） | URL 直接来自接口 `base_url`，可带换行注入 `out=`/`dir=` 选项；Cookie 早有防护而 URL 没有 | `aria2c_input_test.go`；变异后注入行真的出现 |
+| **评论导出不建父目录**（B） | 路径来自保存模板，父目录不存在直接失败 | `comments_test.go` |
+| **SubOnly 恒 `.srt`**（B，RF-18） | ASS/JSON 轨道会被改成扩展名与内容不符；现沿用真实扩展名并对 `lan` 段净化 | 代码级 + 净化函数已有用例 |
+| **CoverOnly 不提前返回**（B） | 代码里写着「matching C#: no early return」，但上游明确 `return true` 并注明「否则…用户只要封面却白白下载完整视频」——**在码注释是错的**，现补上提前返回（无封面资源时报失败而非零产物成功） | 对照上游源码确认 |
+| **混流非事务化**（B） | 直写 `savePath` 时中断会留下截断成品，而「已存在, 跳过下载」会把它永久当成已完成；现写唯一 `.muxing-*.mp4` 后改名 | 代码级 |
+| **直播 qn=30000 + 回落**（C） | 原固定游客档 `qn=10000`；现请求 30000，该档无可用 flv 流时以 10000 再取一次 | `resolve_test.go`（回落 + 快路径两条） |
 | **直播合并产物大小校验**（C） | ffmpeg 遇坏段会截断并仍以 0 退出，紧随其后的分段清理会静默丢掉整场录制；现产物显著小于源时保留分段并报错 | 代码级 |
-| **直播录制前不加载凭据**（C） | client 用空配置构造，永远游客身份 —— 上述 qn=30000 因此永远落空；现走 \`InitSession\`（\`--cookie\` 优先，否则本地 \`BBDown.data\`） | 代码级 |
-| **VOD 读停滞无看门狗**（B） | 媒体下载用无总超时的 client，连接既不 RST 也不 EOF 时 \`io.Copy\` 永久阻塞 | \`stall_test.go\`（停滞中止 + 慢速存活两条） |
+| **直播录制前不加载凭据**（C） | client 用空配置构造，永远游客身份 —— 上述 qn=30000 因此永远落空；现走 `InitSession`（`--cookie` 优先，否则本地 `BBDown.data`） | 代码级 |
+| **VOD 读停滞无看门狗**（B） | 媒体下载用无总超时的 client，连接既不 RST 也不 EOF 时 `io.Copy` 永久阻塞 | `stall_test.go`（停滞中止 + 慢速存活两条） |
 
-> 经核实**与上游一致、不作为缺口**：CoverOnly 的「不提前返回」注释与上游行为相反，已按上游修正；\`GetValidFileName\` 的保留名处理原本已对齐。
+> 经核实**与上游一致、不作为缺口**：CoverOnly 的「不提前返回」注释与上游行为相反，已按上游修正；`GetValidFileName` 的保留名处理原本已对齐。
 
 ### 4.13 剩余队列（2026-09-19 逐条核对后修正）
 
@@ -306,16 +306,16 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 | 条目 | 改动 | 验证 |
 |---|---|---|
-| **入档粒度**（B，RF-75） | 多P稿件共享同一 aid，原先下完**第一个分P**就写进 \`BBDown.archives\`，下次运行余下分P被判定已下载而跳过。移植上游 \`ArchiveTracker\`：该 aid 全部分P成功才入档，任一页失败即本 run 内不再入档；单P稿件仍立即入档 | \`archive_test.go\` 5 条，对齐上游 \`ArchiveGranularityTests\` |
-| **serve 认证失败限速**（A，RF-9/RF-74） | token 可被无限次尝试；现按客户端计数，10 次失败锁定 5 分钟并带 \`Retry-After\`，成功即清零，跟踪表有硬上限（防自身成为内存增长点） | 单元（锁定/复位/有界）+ 端到端（10×401 → 429 → 正确 token 仍通） |
-| **\`--trusted-proxy\`**（A） | 限速按 IP 归属，而 XFF 可伪造；无条件采信等于给攻击者无限个假身份。现仅当请求确实来自配置的代理时取 XFF 最后一跳 | \`proxy_test.go\` |
-| **直播分段尾裁剪**（C） | 网络中断/取消后段尾可能只剩半个 FLV 标签，concat demuxer 会在该处中止**整场**合成；现合成前逐段裁到最后一个完整标签 | \`trimflv_test.go\`（构造真实 FLV 标签序列） |
-| **登录顶层 \`code\` 校验**（C） | 顶层 code 解析了却从未检查，风控/限流响应会落进 default 成功分支，最终以「回调 URL 为空」这种误导性原因失败 | \`token_test.go\`（login） |
-| **intl 夹具接入** | intl 路径 scheme 改走 \`apiBase\` 使其可注入；新增按 query 分流的回放夹具 | \`TestFixtureIntlMergesTwoPassStreamLists\` —— **两趟 \`prefer_code_type\` 合并本来就是对的**，现有夹具背书 |
-| **bangumi 夹具接入** | \`result\` 根（而非 \`data\`）的轨道映射 | \`TestFixtureBangumiWebDashParsesTracks\` |
+| **入档粒度**（B，RF-75） | 多P稿件共享同一 aid，原先下完**第一个分P**就写进 `BBDown.archives`，下次运行余下分P被判定已下载而跳过。移植上游 `ArchiveTracker`：该 aid 全部分P成功才入档，任一页失败即本 run 内不再入档；单P稿件仍立即入档 | `archive_test.go` 5 条，对齐上游 `ArchiveGranularityTests` |
+| **serve 认证失败限速**（A，RF-9/RF-74） | token 可被无限次尝试；现按客户端计数，10 次失败锁定 5 分钟并带 `Retry-After`，成功即清零，跟踪表有硬上限（防自身成为内存增长点） | 单元（锁定/复位/有界）+ 端到端（10×401 → 429 → 正确 token 仍通） |
+| **`--trusted-proxy`**（A） | 限速按 IP 归属，而 XFF 可伪造；无条件采信等于给攻击者无限个假身份。现仅当请求确实来自配置的代理时取 XFF 最后一跳 | `proxy_test.go` |
+| **直播分段尾裁剪**（C） | 网络中断/取消后段尾可能只剩半个 FLV 标签，concat demuxer 会在该处中止**整场**合成；现合成前逐段裁到最后一个完整标签 | `trimflv_test.go`（构造真实 FLV 标签序列） |
+| **登录顶层 `code` 校验**（C） | 顶层 code 解析了却从未检查，风控/限流响应会落进 default 成功分支，最终以「回调 URL 为空」这种误导性原因失败 | `token_test.go`（login） |
+| **intl 夹具接入** | intl 路径 scheme 改走 `apiBase` 使其可注入；新增按 query 分流的回放夹具 | `TestFixtureIntlMergesTwoPassStreamLists` —— **两趟 `prefer_code_type` 合并本来就是对的**，现有夹具背书 |
+| **bangumi 夹具接入** | `result` 根（而非 `data`）的轨道映射 | `TestFixtureBangumiWebDashParsesTracks` |
 
 **夹具覆盖**：15 个上游夹具中 **10 个已接（绿）**，其余 5 个（`dash-reparse-pass1/2`、`durl-replay-first/empty`、`flv-durl`）统一被「免二压重发」决策阻塞 —— 即 `TestFixtureReparseProtocol` 那一条跳启用例。接入过程中 **intl 两趟合并、bangumi 的 `result` 与 `result.video_info` 两种根形状、DoVi+FLAC 音轨追加** 四条「静态判定 ✅」被真实响应夹具证实为正确。
-- **夹具**：按 query 分流的假服务器 → 接 \`intl-code0/1\`、\`bangumi-web-dash-*\` 四个夹具。
+- **夹具**：按 query 分流的假服务器 → 接 `intl-code0/1`、`bangumi-web-dash-*` 四个夹具。
 ### 4.15 第九轮起：逐条核对后的补做
 
 > 起因：本轮重新逐行核对五片报告的 ❌/⚠️（约 60 条），发现 §4.13 早先「队列已清空」的判断有误。

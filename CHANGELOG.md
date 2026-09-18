@@ -31,7 +31,8 @@
 ### 变更
 
 - README 的 `--multi-thread` 一行补上 `--multi-thread false` 的关闭写法（与上游一致）。
-- 修正 CHANGELOG 自身 11 处被误写成「反斜杠+反引号」的行内代码标记。
+- 修正本文件与 docs/ 下共 173 处被误写成「反斜杠+反引号」的行内代码标记（例如把
+  `GetValidFileName` 写成 `\`GetValidFileName\``）——那些反斜杠会在 GitHub 上原样显示。
 
 ## [1.6.19-go.1] - 2026-09-19
 
