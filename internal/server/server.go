@@ -20,6 +20,7 @@ import (
 	"github.com/QC3284/BBDown/internal/entity"
 	"github.com/QC3284/BBDown/internal/util"
 	"github.com/QC3284/BBDown/internal/workflow"
+	"sort"
 )
 
 // TaskStatus represents the state of a download task (PascalCase values,
@@ -75,8 +76,18 @@ func (t *DownloadTask) Snapshot() DownloadTask {
 
 // AddSavePath adds a file path to the task save list.
 func (t *DownloadTask) AddSavePath(path string) {
+	if path == "" {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// The list is a set: a resumed page or a retry can report the same artefact
+	// twice, and clients should not see duplicate SavePaths (upstream dedupes).
+	for _, p := range t.SavePaths {
+		if p == path {
+			return
+		}
+	}
 	t.SavePaths = append(t.SavePaths, path)
 }
 
@@ -976,19 +987,27 @@ func (s *APIServer) persistFinishedTasks() {
 	// bound for the life of the process; apply the same cap here (only the
 	// oldest entries are dropped, so the remaining pointers stay valid).
 	if len(s.finishedTasks) > maxFinishedTasks {
-		s.finishedTasks = append([]*DownloadTask(nil), s.finishedTasks[len(s.finishedTasks)-maxFinishedTasks:]...)
+		// Retention is keyed on creation time, not on list position: the slice is in
+		// completion order, so dropping the head would discard a task that was
+		// created earlier but happened to finish later (upstream sorts by
+		// TaskCreateTime before trimming).
+		byCreate := append([]*DownloadTask(nil), s.finishedTasks...)
+		sort.SliceStable(byCreate, func(i, j int) bool { return byCreate[i].TaskCreateTime < byCreate[j].TaskCreateTime })
+		s.finishedTasks = byCreate[len(byCreate)-maxFinishedTasks:]
 	}
 	s.mu.Unlock()
 
-	// Retention: drop entries older than 30 days, keep the newest 1000.
+	// Retention: drop entries created more than 30 days ago, keep the newest 1000.
+	// Both bounds are keyed on creation time for the same reason as above.
 	cutoff := time.Now().Add(-finishedRetention).Unix()
 	kept := list[:0]
 	for _, t := range list {
-		if t.TaskFinishTime >= cutoff {
+		if t.TaskCreateTime >= cutoff {
 			kept = append(kept, t)
 		}
 	}
 	if len(kept) > maxFinishedTasks {
+		sort.SliceStable(kept, func(i, j int) bool { return kept[i].TaskCreateTime < kept[j].TaskCreateTime })
 		kept = kept[len(kept)-maxFinishedTasks:]
 	}
 

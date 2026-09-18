@@ -1051,6 +1051,10 @@ func (w *Workflow) initRequestSession(ctx context.Context) {
 	// The HTTP client was built with the CLI-provided cookie; switch it to the
 	// effective credentials (CLI flag or BBDown.data file).
 	w.HTTPClient.SetCookieFn(func() string { return w.Cfg.Cookie })
+	// Tell the client which hosts may receive them: the official domains, or the
+	// mirrors the user opted into. A redirect target or an unconfigured host must
+	// never see SESSDATA.
+	w.HTTPClient.SetCredentialHosts(w.Cfg.Host, w.Cfg.EpHost, w.Cfg.TvHost)
 
 	// Batch commands (watchlater / sub check) pre-fetch the WBI key once and
 	// preset it here, avoiding one nav request per item (upstream initializes

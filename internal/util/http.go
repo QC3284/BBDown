@@ -69,6 +69,10 @@ type HTTPClient struct {
 	debugFn   func(string, ...interface{})
 	skipSSL   func() bool
 	cookieFn  func() string
+
+	// credentialHosts are user-opted-in hosts that may receive cookies in
+	// addition to the official Bilibili domains.
+	credentialHosts []string
 }
 
 // NewHTTPClient creates a new HTTPClient.
@@ -120,6 +124,52 @@ func randomUserAgent() string {
 	return fmt.Sprintf("Mozilla/5.0 (%s) %s", platform, browsers[rand.Intn(len(browsers))])
 }
 
+// SetCredentialHosts records the hosts the user explicitly opted into with
+// --host/--ep-host/--tv-host; they may receive credentials like the official
+// domains do.
+func (c *HTTPClient) SetCredentialHosts(hosts ...string) {
+	c.credentialHosts = hosts
+}
+
+// normalizeCredentialHost reduces a configured host (which may carry a scheme
+// and a port) to a bare lowercase hostname.
+func normalizeCredentialHost(h string) string {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return ""
+	}
+	if !strings.Contains(h, "://") {
+		h = "https://" + h
+	}
+	u, err := url.Parse(h)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// maySendCredentials reports whether rawURL may receive the user's cookies: an
+// official Bilibili host, or one explicitly configured through
+// --host/--ep-host/--tv-host. Everything else is refused — a URL assembled from
+// server-controlled data (a base_url, a redirect target) could otherwise carry
+// SESSDATA off to an arbitrary host.
+func (c *HTTPClient) maySendCredentials(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	if IsTrustedCookieHost(u.Hostname()) {
+		return true
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, h := range c.credentialHosts {
+		if normalizeCredentialHost(h) == host {
+			return true
+		}
+	}
+	return false
+}
+
 // GetWebSource fetches the content from a URL as a string.
 func (c *HTTPClient) GetWebSource(ctx context.Context, url string) (string, error) {
 	body, _, err := c.GetWebSourceWithSetCookies(ctx, url)
@@ -145,7 +195,11 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 		cookieVal += ";CURRENT_FNVAL=4048;"
 	}
 	if cookieVal != "" {
-		req.Header.Set("Cookie", cookieVal)
+		if c.maySendCredentials(url) {
+			req.Header.Set("Cookie", cookieVal)
+		} else {
+			LogWarn("目标主机不在可信凭据范围内，已跳过 Cookie: %s", MaskUrl(url))
+		}
 	}
 	if strings.Contains(url, "api.bilibili.com") {
 		req.Header.Set("Referer", "https://www.bilibili.com/")
