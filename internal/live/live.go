@@ -23,6 +23,10 @@ const (
 	reconnectMaxBackoff  = 30 * time.Second
 )
 
+// liveAPIBase is the live API origin; a variable so tests can point the
+// recorder at a local server (the download path has no config host of its own).
+var liveAPIBase = "https://api.live.bilibili.com"
+
 // readStallTimeout is a variable so tests can shrink it; production uses 60s.
 var readStallTimeout = 60 * time.Second
 
@@ -37,7 +41,7 @@ func ResolveLive(ctx context.Context, roomID string, client *util.HTTPClient) (s
 	}
 
 	// Get room info
-	infoAPI := "https://api.live.bilibili.com/room/v1/Room/get_info?room_id=" + roomID
+	infoAPI := liveAPIBase + "/room/v1/Room/get_info?room_id=" + roomID
 	infoJSON, err := client.GetWebSource(ctx, infoAPI)
 	if err != nil {
 		return "", "", "", fmt.Errorf("获取直播间信息失败: %w", err)
@@ -65,14 +69,37 @@ func ResolveLive(ctx context.Context, roomID string, client *util.HTTPClient) (s
 		return "", "", "", fmt.Errorf("直播间 %s 当前未在直播", roomID)
 	}
 
-	// Get stream URL
+	// qn=30000 asks for the highest tier the account is entitled to (credentials
+	// are loaded before recording). An anonymous or unprivileged session may be
+	// offered nothing usable at that tier, in which case the request is repeated
+	// once at qn=10000 (upstream v1.6.13).
+	streamURL, err = fetchLiveStreamURL(ctx, client, roomID, "30000")
+	if err != nil {
+		return "", "", "", err
+	}
+	if streamURL == "" {
+		streamURL, err = fetchLiveStreamURL(ctx, client, roomID, "10000")
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	if streamURL == "" {
+		return "", "", "", fmt.Errorf("无法获取直播间 %s 的可录制流地址（qn=30000 与 qn=10000 均无可用 flv 流）", roomID)
+	}
+	return streamURL, title, uname, nil
+}
+
+// fetchLiveStreamURL requests the room play URL at one quality tier. An empty
+// URL with a nil error means the API answered but offered no usable flv stream,
+// which lets the caller fall back to a lower tier instead of failing outright.
+func fetchLiveStreamURL(ctx context.Context, client *util.HTTPClient, roomID, qn string) (string, error) {
 	playAPI := fmt.Sprintf(
-		"https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=%s&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web",
-		roomID,
+		liveAPIBase+"/xlive/web-room/v2/index/getRoomPlayInfo?room_id=%s&protocol=0,1&format=0,1,2&codec=0,1&qn=%s&platform=web",
+		roomID, qn,
 	)
 	playJSON, err := client.GetWebSource(ctx, playAPI)
 	if err != nil {
-		return "", "", "", fmt.Errorf("获取直播流地址失败: %w", err)
+		return "", fmt.Errorf("获取直播流地址失败: %w", err)
 	}
 
 	var playResult struct {
@@ -97,7 +124,7 @@ func ResolveLive(ctx context.Context, roomID string, client *util.HTTPClient) (s
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(playJSON), &playResult); err != nil {
-		return "", "", "", fmt.Errorf("解析直播流信息: %w", err)
+		return "", fmt.Errorf("解析直播流信息: %w", err)
 	}
 
 	for _, stream := range playResult.Data.PlayurlInfo.Playurl.Stream {
@@ -114,13 +141,15 @@ func ResolveLive(ctx context.Context, roomID string, client *util.HTTPClient) (s
 					if urlInfo.Host == "" {
 						continue
 					}
-					return urlInfo.Host + baseURL + urlInfo.Extra, title, uname, nil
+					return urlInfo.Host + baseURL + urlInfo.Extra, nil
 				}
 			}
 		}
 	}
 
-	return "", "", "", fmt.Errorf("无法获取直播间 %s 的可录制流地址", roomID)
+	// No usable flv stream at this tier: report it as "nothing found" rather than
+	// an error so the caller can fall back to a lower quality.
+	return "", nil
 }
 
 // DownloadToFile records a live stream with automatic reconnection, writing
@@ -254,6 +283,27 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 		os.Remove(path)
 		keepSegments = true
 		return true, fmt.Errorf("直播分段合成失败（分段保留在 %s）: %w", sessionDir, err)
+	}
+
+	// Validate the product before the segments are dropped. ffmpeg can exit 0
+	// after a truncated concat (a broken segment ends the output early), and the
+	// sources are cleaned up right after — which lost the whole recording
+	// silently. A far smaller output means the merge did not cover the input.
+	var inputBytes int64
+	for _, f := range segFiles {
+		if st, err := os.Stat(f); err == nil {
+			inputBytes += st.Size()
+		}
+	}
+	outStat, statErr := os.Stat(path)
+	if statErr != nil || outStat.Size() == 0 || (inputBytes > 0 && float64(outStat.Size()) < float64(inputBytes)*0.8) {
+		var outBytes int64
+		if statErr == nil {
+			outBytes = outStat.Size()
+		}
+		os.Remove(path)
+		keepSegments = true
+		return true, fmt.Errorf("直播分段合成产物异常（产物 %d 字节，源 %d 字节），分段已保留在 %s", outBytes, inputBytes, sessionDir)
 	}
 	return true, nil
 }
