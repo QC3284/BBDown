@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QC3284/BBDown/internal/entity"
 )
@@ -187,5 +188,79 @@ func TestMp4boxAddsAudioMaterialTracks(t *testing.T) {
 	}
 	if !named {
 		t.Errorf("the dubbing track was added without its name\nargs: %v", args)
+	}
+}
+
+// TestMergeFLVCleansIntermediatesOnFailure: converting N segments produces N-1
+// throwaway .ts files; when the combine step fails they used to be left behind
+// (gigabytes accumulating across retries). A failure must clean them up.
+func TestMergeFLVCleansIntermediatesOnFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ffmpeg is a POSIX shell script")
+	}
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-ffmpeg")
+	// Writes a non-empty file to the last argument (the .ts output path).
+	body := "#!/bin/sh\nprev=\"\"\nfor a in \"$@\"; do prev=\"$a\"; done\necho data > \"$prev\"\nexit 0\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := FFMPEG
+	FFMPEG = script
+	defer func() { FFMPEG = orig }()
+
+	var inputs []string
+	for _, name := range []string{"seg0.flv", "seg1.flv"} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("flv"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		inputs = append(inputs, p)
+	}
+
+	// The output directory does not exist, so the combine step fails.
+	out := filepath.Join(dir, "missing-dir", "out.mp4")
+	if err := MergeFLV(context.Background(), inputs, out); err == nil {
+		t.Fatal("expected the combine step to fail")
+	}
+
+	left, err := filepath.Glob(filepath.Join(dir, "*.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Errorf("intermediate .ts files survived a failed merge: %v", left)
+	}
+}
+
+// TestCheckFFmpegDOVITimesOutOnHungBinary: the version probe runs on the muxing
+// critical path, so a hung binary must not stall the download.
+func TestCheckFFmpegDOVITimesOutOnHungBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake ffmpeg is a POSIX shell script")
+	}
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "hanging-ffmpeg")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origFFmpeg, origTimeout := FFMPEG, doviProbeTimeout
+	FFMPEG = script
+	doviProbeTimeout = 200 * time.Millisecond
+	defer func() { FFMPEG = origFFmpeg; doviProbeTimeout = origTimeout }()
+
+	done := make(chan bool, 1)
+	go func() { done <- CheckFFmpegDOVI() }()
+	select {
+	case supported := <-done:
+		if supported {
+			t.Error("a hung probe reported Dolby Vision support")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("CheckFFmpegDOVI hung: the probe timeout did not fire")
 	}
 }

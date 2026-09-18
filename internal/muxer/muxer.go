@@ -197,8 +197,24 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 
 // CheckFFmpegDOVI reports whether ffmpeg supports Dolby Vision muxing
 // (libavutil major >= 5, upstream CheckFFmpegDOVI).
+// doviProbeTimeout bounds the ffmpeg version probe. A hung or broken binary
+// must not stall the download: the probe runs before muxing on the critical
+// path (upstream guards CheckFFmpegDOVI with a 5s async timeout).
+var doviProbeTimeout = 5 * time.Second
+
+// doviProbeWaitDelay bounds the drain of the probe's output after the context
+// is done (see the WaitDelay comment in CheckFFmpegDOVI).
+var doviProbeWaitDelay = 2 * time.Second
+
 func CheckFFmpegDOVI() bool {
-	out, err := exec.Command(FFMPEG, "-version").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), doviProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, FFMPEG, "-version")
+	// Killing the process is not enough: a probe that spawned a child (or leaked
+	// its stdout pipe) keeps the pipe open and Wait blocks regardless of the
+	// context. WaitDelay bounds that wait explicitly.
+	cmd.WaitDelay = doviProbeWaitDelay
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
 	}
@@ -365,6 +381,18 @@ func MergeFLV(ctx context.Context, files []string, outPath string) error {
 	}
 
 	var tsFiles []string
+	// Intermediate .ts files must not survive a failure path (upstream wraps the
+	// conversion in try/finally): an error mid-loop used to leave every already
+	// converted segment behind, accumulating gigabytes in the work directory.
+	converted := false
+	defer func() {
+		if converted {
+			return
+		}
+		for _, ts := range tsFiles {
+			os.Remove(ts)
+		}
+	}()
 	for _, file := range files {
 		tsFile := strings.TrimSuffix(file, filepath.Ext(file)) + ".ts"
 		args := []string{"-loglevel", "warning", "-y", "-i", file, "-map", "0", "-c", "copy", "-f", "mpegts", "-bsf:v", "h264_mp4toannexb", tsFile}
@@ -382,6 +410,7 @@ func MergeFLV(ctx context.Context, files []string, outPath string) error {
 	if err := util.CombineMultipleFilesIntoSingleFile(tsFiles, outPath); err != nil {
 		return err
 	}
+	converted = true
 	// All conversions succeeded: clean up .ts intermediates and sources.
 	for _, ts := range tsFiles {
 		os.Remove(ts)
