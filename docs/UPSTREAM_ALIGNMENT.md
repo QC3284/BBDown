@@ -279,6 +279,18 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 ### 4.13 当前剩余队列
 
 - **待决策**（§4.5）：免二压重发（已固化为 \`TestFixtureReparseProtocol\` 跳启用例，波及 5 个夹具）、版本号策略、协作姿态。
-- **P1 未完**：直播分段尾裁剪；上传/下载终结态细分；入档粒度（分 P vs aid，需先核实上游语义）；serve 认证失败限速（RF-9/RF-74）；\`--trusted-proxy\`；登录顶层 \`code\` 校验（RF-37 剩余部分）。
+### 4.14 第八轮：P1 收尾
+
+| 条目 | 改动 | 验证 |
+|---|---|---|
+| **入档粒度**（B，RF-75） | 多P稿件共享同一 aid，原先下完**第一个分P**就写进 \`BBDown.archives\`，下次运行余下分P被判定已下载而跳过。移植上游 \`ArchiveTracker\`：该 aid 全部分P成功才入档，任一页失败即本 run 内不再入档；单P稿件仍立即入档 | \`archive_test.go\` 5 条，对齐上游 \`ArchiveGranularityTests\` |
+| **serve 认证失败限速**（A，RF-9/RF-74） | token 可被无限次尝试；现按客户端计数，10 次失败锁定 5 分钟并带 \`Retry-After\`，成功即清零，跟踪表有硬上限（防自身成为内存增长点） | 单元（锁定/复位/有界）+ 端到端（10×401 → 429 → 正确 token 仍通） |
+| **\`--trusted-proxy\`**（A） | 限速按 IP 归属，而 XFF 可伪造；无条件采信等于给攻击者无限个假身份。现仅当请求确实来自配置的代理时取 XFF 最后一跳 | \`proxy_test.go\` |
+| **直播分段尾裁剪**（C） | 网络中断/取消后段尾可能只剩半个 FLV 标签，concat demuxer 会在该处中止**整场**合成；现合成前逐段裁到最后一个完整标签 | \`trimflv_test.go\`（构造真实 FLV 标签序列） |
+| **登录顶层 \`code\` 校验**（C） | 顶层 code 解析了却从未检查，风控/限流响应会落进 default 成功分支，最终以「回调 URL 为空」这种误导性原因失败 | \`token_test.go\`（login） |
+| **intl 夹具接入** | intl 路径 scheme 改走 \`apiBase\` 使其可注入；新增按 query 分流的回放夹具 | \`TestFixtureIntlMergesTwoPassStreamLists\` —— **两趟 \`prefer_code_type\` 合并本来就是对的**，现有夹具背书 |
+| **bangumi 夹具接入** | \`result\` 根（而非 \`data\`）的轨道映射 | \`TestFixtureBangumiWebDashParsesTracks\` |
+
+**夹具覆盖**：15 个上游夹具中 9 个已接（绿），其余 5 个（\`dash-reparse-pass1/2\`、\`durl-replay-first/empty\`、\`flv-durl\`）统一被「免二压重发」决策阻塞 —— 即 \`TestFixtureReparseProtocol\` 那一条跳启用例。
 - **夹具**：按 query 分流的假服务器 → 接 \`intl-code0/1\`、\`bangumi-web-dash-*\` 四个夹具。
 

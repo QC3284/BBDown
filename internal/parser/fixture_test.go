@@ -131,6 +131,55 @@ func TestFixtureReparseProtocol(t *testing.T) {
 	// assert second request query carries qn=127 and its response took over
 }
 
+// extractFixtureWithEpid is extractFixture plus the episode id, which routes the
+// parse through the bangumi playurl endpoint.
+func extractFixtureWithEpid(t *testing.T, fixture, epID string) (*entity.ParsedResult, error) {
+	t.Helper()
+
+	body, err := os.ReadFile(filepath.Join("testdata", fixture+".json"))
+	if err != nil {
+		t.Fatalf("fixture %s: %v", fixture, err)
+	}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	cfg := config.DefaultAppSettings()
+	cfg.Host = strings.TrimPrefix(srv.URL, "https://")
+	cfg.TvHost = cfg.Host
+	cfg.EpHost = cfg.Host
+	cfg.Wbi = "test_wbi_key"
+	cfg.Cookie = ""
+	cfg.Token = ""
+
+	client := util.NewHTTPClient(func() bool { return true }, func() string { return "" }, nil)
+	return NewParser(client, cfg).ExtractTracks(context.Background(), "ep:"+epID, "170001", "999", epID, false, false, false, "", false, "0")
+}
+
+// TestFixtureBangumiWebDashParsesTracks: the pgc playurl response carries the
+// tracks under a "result" root rather than "data" — a shape the shared parse
+// must still map (upstream F02).
+func TestFixtureBangumiWebDashParsesTracks(t *testing.T) {
+	res, err := extractFixtureWithEpid(t, "bangumi-web-dash-result", "307930")
+	if err != nil {
+		t.Fatalf("bangumi parse: %v", err)
+	}
+	if len(res.VideoTracks) != 1 {
+		t.Fatalf("video tracks = %d, want 1", len(res.VideoTracks))
+	}
+	if res.VideoTracks[0].ID != "80" {
+		t.Errorf("video id = %q, want 80", res.VideoTracks[0].ID)
+	}
+	if len(res.AudioTracks) != 1 {
+		t.Fatalf("audio tracks = %d, want 1", len(res.AudioTracks))
+	}
+	if res.AudioTracks[0].ID != "30216" {
+		t.Errorf("audio id = %q, want 30216", res.AudioTracks[0].ID)
+	}
+}
+
 // extractIntlFixture drives the international parse path against a server that
 // routes by the prefer_code_type query parameter, which is how upstream's
 // FakeBilibiliApiServer distinguishes the two passes.
