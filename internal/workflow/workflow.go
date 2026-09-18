@@ -798,11 +798,24 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if _, err := os.Stat(coverPath); err != nil {
 				coverPath = ""
 			}
-			if err := muxer.MuxAV(ctx, w.Cfg.UseMP4box, page.Bvid(), videoPath, audioPath, savePath,
+			// Mux into a unique temporary file and move it into place only on
+			// success. Writing straight to savePath left a truncated file when the
+			// mux was interrupted or failed, and the "已存在, 跳过下载" check above
+			// then treated that half-file as a finished download forever (upstream
+			// muxes to savePath + ".muxing-{guid}.mp4" and renames).
+			muxPath := fmt.Sprintf("%s.muxing-%d.mp4", savePath, time.Now().UnixNano())
+			muxErr := muxer.MuxAV(ctx, w.Cfg.UseMP4box, page.Bvid(), videoPath, audioPath, muxPath,
 				desc, title, page.OwnerName, episodeTitle, coverPath, lang,
 				downloadedSubs, w.Cfg.AudioOnly, w.Cfg.VideoOnly, w.Cfg.SimplyMux,
-				page.Points, pubTime, isHevc, backgroundMaterial, w.Cfg.MuxerTimeout); err != nil {
-				util.LogError("合并失败: %v", err)
+				page.Points, pubTime, isHevc, backgroundMaterial, w.Cfg.MuxerTimeout)
+			if muxErr != nil {
+				os.Remove(muxPath)
+				util.LogError("合并失败: %v", muxErr)
+				return false
+			}
+			if err := os.Rename(muxPath, savePath); err != nil {
+				os.Remove(muxPath)
+				util.LogError("合并产物落盘失败: %v", err)
 				return false
 			}
 		} else if w.Cfg.AudioOnly && audioPath != "" {
