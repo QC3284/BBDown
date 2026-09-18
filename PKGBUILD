@@ -1,6 +1,6 @@
 # Maintainer: QC3284 <qc3284@github>
 pkgname=bbdown-go-git
-pkgver=1.6.11
+pkgver=1.6.19
 pkgrel=1
 pkgdesc="一款命令行式哔哩哔哩下载器. Bilibili Downloader. (Go 重写)"
 arch=("x86_64" "aarch64")
@@ -16,7 +16,7 @@ sha256sums=('SKIP')
 
 pkgver() {
     cd "$srcdir/BBDown"
-    printf "1.6.11.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    printf "1.6.19.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 build() {

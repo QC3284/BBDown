@@ -2,7 +2,8 @@
 
 命令行式哔哩哔哩下载器。Bilibili Downloader.
 
-> **本分支为 Go 语言重写版本，与上游 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.11）功能一致。**
+> **本分支为 Go 语言重写版本，与上游 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.19）功能一致。**
+> 版本号形如 `<上游版本>-go`，即「已对齐到哪一版上游」的声明；对账基线与逐条判定见 `docs/UPSTREAM_ALIGNMENT.md`。
 > 不主动增加新功能，仅做行为对齐维护。Go 重写由 AI 辅助完成。
 
 ## 安装
@@ -182,7 +183,7 @@ make test        # go test ./...
 
 ## 与上游的关系
 
-基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.11）Go 语言重写，
+基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.19）Go 语言重写，
 CLI 选项、默认值、API 端点、解析/下载/混流行为均已对齐；个别细节以等价方式处理。
 
 | 分支 | 内容 |

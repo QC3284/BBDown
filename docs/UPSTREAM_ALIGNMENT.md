@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | 上游（权威参照） | `upstream` → aliveranme/BBDown | **v1.6.19** | `2d2573b` | 2026-09-18 |
 | 本项目 C# 快照分支 | `origin/master` | v1.6.10 + 2 补丁 | `9fb96f2` | 2026-08-11 |
-| Go 重写（工作分支） | `origin/main` | 1.6.11-go | `f0dc0bf` | — |
+| Go 重写（工作分支） | `origin/main` | **1.6.19-go** | — | — |
 
 同步状态：`origin/master` 是 `upstream/master` 的**严格祖先**（`0 ahead / 122 behind`），可纯快进，无分叉、无本地独有提交。
 
