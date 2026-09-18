@@ -457,7 +457,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		if w.Cfg.Interactive && !selectionAsked {
 			if len(result.VideoTracks) > 0 {
 				fmt.Print("请选择一条视频流(输入序号): ")
-				fmt.Print("\033[36m")
+				fmt.Print(util.AnsiCyan)
 				var ok bool
 				vIndex, ok = readIntSafe(ctx)
 				fmt.Print("\033[0m")
@@ -471,7 +471,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			}
 			if len(result.AudioTracks) > 0 {
 				fmt.Print("请选择一条音频流(输入序号): ")
-				fmt.Print("\033[36m")
+				fmt.Print(util.AnsiCyan)
 				var ok bool
 				aIndex, ok = readIntSafe(ctx)
 				fmt.Print("\033[0m")
@@ -686,9 +686,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					util.LogColorNoTime("%d.%s", i, config.QualityMap[q])
 				}
 				fmt.Print("请选择最想要的清晰度(输入序号): ")
-				fmt.Print("\033[36m")
+				fmt.Print(util.AnsiCyan)
 				qi, ok := readIntSafe(ctx)
-				fmt.Print("\033[0m")
+				fmt.Print(util.AnsiReset)
 				if !ok {
 					return false
 				}

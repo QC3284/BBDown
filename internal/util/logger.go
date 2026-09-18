@@ -13,6 +13,21 @@ import (
 // hostile response cannot flood the terminal or the log file.
 const MaxLogFieldLen = 512
 
+// ANSI sequences mirroring the .NET ConsoleColor names the upstream C# uses.
+//
+// ConsoleColor.Red / Cyan / White are the *bright* variants of their colors, so they
+// map to the 9x SGR codes; printing 31/36/37 would render errors, prompts and the
+// banner darker than upstream on every terminal.
+const (
+	AnsiReset      = "\033[0m"
+	AnsiRed        = "\033[91m" // ConsoleColor.Red        (LogError)
+	AnsiDarkYellow = "\033[33m" // ConsoleColor.DarkYellow (LogWarn)
+	AnsiCyan       = "\033[96m" // ConsoleColor.Cyan       (LogColor / 提示符)
+	AnsiDarkGray   = "\033[90m" // ConsoleColor.DarkGray   (LogDebug)
+	AnsiWhite      = "\033[97m" // ConsoleColor.White      (横幅前景)
+	AnsiBgDarkBlue = "\033[44m" // ConsoleColor.DarkBlue   (横幅背景)
+)
+
 // SanitizeLogString makes a value safe to interpolate into a single log line.
 // Server-controlled text (video titles, uploader names, API messages, values
 // derived from a request URL) can carry CR/LF and ANSI escapes that forge log
@@ -173,7 +188,7 @@ func (l *Logger) LogError(format string, args ...interface{}) {
 	line := timestamp() + " - " + msg
 	l.mu.Lock()
 	fmt.Print(timestamp() + " - ")
-	fmt.Print("\033[31m" + msg + "\033[0m\n")
+	fmt.Print(AnsiRed + msg + AnsiReset + "\n")
 	l.mu.Unlock()
 	l.appendToFile(line)
 }
@@ -184,7 +199,7 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 	line := timestamp() + " - " + msg
 	l.mu.Lock()
 	fmt.Print(timestamp() + " - ")
-	fmt.Print("\033[33m" + msg + "\033[0m\n")
+	fmt.Print(AnsiDarkYellow + msg + AnsiReset + "\n")
 	l.mu.Unlock()
 	l.appendToFile(line)
 }
@@ -193,7 +208,7 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	l.mu.Lock()
-	fmt.Print("                            \033[36m" + msg + "\033[0m\n")
+	fmt.Print("                            " + AnsiCyan + msg + AnsiReset + "\n")
 	l.mu.Unlock()
 	l.appendToFile("                             " + msg)
 }
@@ -204,7 +219,7 @@ func (l *Logger) LogColor(format string, args ...interface{}) {
 	line := timestamp() + " - " + msg
 	l.mu.Lock()
 	fmt.Print(timestamp() + " - ")
-	fmt.Print("\033[36m" + msg + "\033[0m\n")
+	fmt.Print(AnsiCyan + msg + AnsiReset + "\n")
 	l.mu.Unlock()
 	l.appendToFile(line)
 }
@@ -217,7 +232,7 @@ func (l *Logger) LogDebug(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	l.mu.Lock()
-	fmt.Print("\033[90m" + line + "\033[0m\n")
+	fmt.Print(AnsiDarkGray + line + AnsiReset + "\n")
 	l.mu.Unlock()
 	l.appendToFile(line)
 }
