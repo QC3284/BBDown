@@ -133,8 +133,10 @@ func randomVersion(min, max float64) string {
 
 func randomUserAgent() string {
 	browsers := []string{
-		fmt.Sprintf("AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s Safari/537.36", randomVersion(80, 110)),
-		fmt.Sprintf("Gecko/20100101 Firefox/%s", randomVersion(80, 110)),
+		// A current major version: an ancient one is itself a fingerprint, and some
+		// endpoints treat an outdated UA with suspicion.
+		fmt.Sprintf("AppleWebKit/537.36 (KHTML, like Gecko) Chrome/%s Safari/537.36", randomVersion(130, 150)),
+		fmt.Sprintf("Gecko/20100101 Firefox/%s", randomVersion(130, 150)),
 	}
 	platform := platforms[rand.Intn(len(platforms))]
 	return fmt.Sprintf("Mozilla/5.0 (%s) %s", platform, browsers[rand.Intn(len(browsers))])

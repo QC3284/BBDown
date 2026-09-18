@@ -677,7 +677,7 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 		"-x16", "-s16", "-j16", "-k5M",
 	}
 	if cfg.Aria2cArgs != "" {
-		args = append(args, strings.Fields(cfg.Aria2cArgs)...)
+		args = append(args, splitArgs(cfg.Aria2cArgs)...)
 	}
 	args = append(args, "--input-file=-")
 
@@ -709,6 +709,41 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 		return fmt.Errorf("aria2下载可能存在错误: 未找到输出文件")
 	}
 	return nil
+}
+
+// splitArgs splits an argument string the way a shell would: whitespace
+// separates, single and double quotes group. strings.Fields would break a quoted
+// value such as --user-agent="Mozilla/5.0 (X11)" into three tokens, and an
+// unclosed quote must keep the collected tail instead of discarding the whole
+// configuration (upstream behaves the same way).
+func splitArgs(s string) []string {
+	var out []string
+	var cur strings.Builder
+	inSingle, inDouble, started := false, false, false
+
+	for _, r := range s {
+		switch {
+		case r == '\'' && !inDouble:
+			inSingle = !inSingle
+			started = true
+		case r == '"' && !inSingle:
+			inDouble = !inDouble
+			started = true
+		case (r == ' ' || r == '\t' || r == '\n') && !inSingle && !inDouble:
+			if started {
+				out = append(out, cur.String())
+				cur.Reset()
+				started = false
+			}
+		default:
+			cur.WriteRune(r)
+			started = true
+		}
+	}
+	if started {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 // aria2cSanitize strips the line breaks that would let a value break out of its

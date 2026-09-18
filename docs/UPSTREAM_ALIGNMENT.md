@@ -291,12 +291,15 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 | 类别 | 条目 |
 |---|---|
-| 直播 | `LiveRecordResult` 三态（现为 `(bool, error)`）；合成改 staging 临时文件；旧会话分段只提示不删 |
-| 文件与路径 | `article`/`live` 支持 `--work-dir`；专栏与直播文件名接入保留名防护（现用 `live.SanitizeFileName`，未走 `GetValidFileName`） |
-| 订阅 | `SubscriptionStore` 历史每 target 上限 5000 条截断；`RecordDownloaded` 改 Remove+Add 保「最近」语义 |
-| HTTP | 服务器时钟校准（`ServerClock`，本地时钟偏差 >60s 时 WBI 签名被拒）；`SESSDATA` 有效期估算与提前告警；gRPC 帧首字节合法性校验；UA 版本池与按流隔离 |
-| 日志与工具 | `Logger` 改进程内单例 `StreamWriter`（写失败连续 5 次闭锁 + 30s 冷却）；`--aria2c-args` 未闭合引号处理 |
-| 下载 | 下载路径独占锁（`RunWithPathLock`）与败者临时文件清理 |
+| 直播 | 旧会话分段「只提示不删」（现策略是失败一律保留，不做跨会话区分） |
+| HTTP | `SESSDATA` 有效期估算与提前告警（serve 长驻进程跨月运行会静默失效） |
+| 日志与工具 | `Logger` 改进程内单例 `StreamWriter`（写失败连续 5 次闭锁 + 30s 冷却） |
+
+**已在本轮完成**（承接上表）：`LiveRecordResult` 三态、合成 staging 临时文件、`article`/`live` 的 `--work-dir`、
+专栏与直播文件名接入保留名防护、订阅历史「最近」语义与截断、`--aria2c-args` 引号感知切分、
+下载路径独占锁、UA 版本池前移、gRPC 帧首字节校验。
+
+> 判定为「与上游一致、不作为缺口」：`SavePaths` 集合语义、`/health` 无需认证、格式串中的文化敏感项（Go 无此问题）。
 
 **判定为「与上游一致、不作为缺口」**：`SavePaths` 集合语义、`/health` 无需认证、格式串中的文化敏感项（Go 无此问题）。
 
