@@ -191,6 +191,14 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 > **仍未处理**：§4.3 的 P1 队列（约 30 条）与 §4.5 的 5 项待决策。
 
+### 4.8 第三轮：横切设施与测试基座
+
+| 项 | 改动 | 验证 |
+|---|---|---|
+| **日志净化设施** | `internal/util/logger.go`：新增 `SanitizeLogString`（控制字符 → 空格、按 rune 截断到 512）与 `sanitizeLogArgs`，**在 sink 处按参数净化** 6 个日志方法（`Printf` 交互提示保持原样）。一次覆盖 `util.Log*` 的全部调用点，C/A/D/E 四片点名的 RF-54 / RF-70 从此有落点 | 新增 `internal/util/logsanitize_test.go`；变异后伪造的 `[伪造] 我是一整行假日志` 真的成为独立日志行、`\x1b[0m` 打到终端 |
+| **parser 夹具基座** | 落地上游 6 个 `Fixtures/parser/*.json` 到 `internal/parser/testdata/`；新增 `fixture_test.go`：`httptest` TLS 假服务器 + `config.Host` 指向它 + `skipSSL` 客户端，把上游 `ParserFixtureTests` 的回放方式移植过来。**`internal/parser` 首次有测试** | 4 条用例（badkid / 正常 kid / 业务错误 / 缺节点容错），为后续把 15 个夹具全部接上留下了基座 |
+| **顺带修掉两个偏差** | ① UGC playurl **硬编码 `api.bilibili.com`**，导致 `--host`（镜像站）在普通视频路径上失效；改为用 `Cfg.Host` 并新增 `apiBase`（上游 `WithApiScheme` 语义，允许 host 自带 scheme）—— 这同时也是夹具注入的前提。② `bilidrm_uri` 原先取 `//` 之后的**全部内容**当作 kid，畸形 URI 会把 `evil.example/path?x=1` 存成 key id；现仅接受 32 位 hex（`parseKidFromDrmURI`） | 变异回旧解析 → badkid 用例立即红 |
+
 ## 5. 已知缺口（对账前采样，待各片报告确认）
 
 | 上游加固项 | Go 现状 | 初判 |
