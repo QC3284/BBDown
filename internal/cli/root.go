@@ -97,6 +97,7 @@ var (
 	optServeListen        string
 	optServeMaxConcurrent int
 	optServeToken         string
+	optTrustedProxy       string
 
 	// Subcommand options
 	optLiveOutput      string
@@ -282,6 +283,7 @@ func init() {
 	serveCmd.Flags().StringVarP(&optServeListen, "listen", "l", "http://127.0.0.1:23333", "API服务器监听地址")
 	serveCmd.Flags().IntVar(&optServeMaxConcurrent, "max-concurrent", 3, "最大并发下载数")
 	serveCmd.Flags().StringVar(&optServeToken, "serve-token", "", "API认证Token")
+	serveCmd.Flags().StringVar(&optTrustedProxy, "trusted-proxy", "", "信任的反向代理地址（仅此时采用 X-Forwarded-For 判定客户端 IP）")
 	serveCmd.Flags().StringVar(&optNotifyWebhook, "notify-webhook", "", "任务完成通知URL")
 
 	// Subcommand flags

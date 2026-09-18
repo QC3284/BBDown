@@ -90,6 +90,7 @@ var serveCmd = &cobra.Command{
 			serveToken = optServeToken
 		}
 		srv := server.NewAPIServer(listen, optServeMaxConcurrent, serveToken, optNotifyWebhook)
+		srv.SetTrustedProxy(optTrustedProxy)
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()

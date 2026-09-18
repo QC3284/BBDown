@@ -114,6 +114,7 @@ type APIServer struct {
 	taskFile      string
 	taskWG        sync.WaitGroup
 	auth          *authGuard
+	trustedProxy  string
 
 	// persistMu serialises bbdown-tasks.json writes: several tasks finish
 	// concurrently and each calls persistFinishedTasks.
@@ -325,15 +326,40 @@ func (g *authGuard) pruneLocked() {
 	}
 }
 
-// clientKey identifies the caller for the auth guard. RemoteAddr is used rather
-// than a forwarded header: without an explicit --trusted-proxy setting, XFF is
-// attacker-controlled and would let one client forge unlimited identities.
-func clientKey(r *http.Request) string {
+// SetTrustedProxy marks a reverse proxy whose X-Forwarded-For header may be
+// believed when identifying clients.
+func (s *APIServer) SetTrustedProxy(host string) { s.trustedProxy = strings.TrimSpace(host) }
+
+// clientKey identifies the caller for the auth guard. RemoteAddr is authoritative
+// unless the request arrived from an explicitly trusted proxy: without
+// --trusted-proxy the XFF header is attacker-controlled and one client could
+// otherwise forge unlimited identities and bypass the lockout.
+func (s *APIServer) clientKey(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if s.trustedProxy == "" || !hostMatches(s.trustedProxy, host) {
+		return host
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return host
+	}
+	parts := strings.Split(xff, ",")
+	if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+		return last
 	}
 	return host
+}
+
+// hostMatches reports whether a client address is the configured trusted proxy
+// (an IP or hostname, optionally with a port).
+func hostMatches(trusted, host string) bool {
+	if h, _, err := net.SplitHostPort(trusted); err == nil {
+		trusted = h
+	}
+	return strings.EqualFold(trusted, host)
 }
 
 // tokenMatches compares the presented serve token in constant time. A plain
@@ -356,7 +382,7 @@ func (s *APIServer) tokenMiddleware(next http.Handler) http.Handler {
 			segmentHasPrefix(path, "/cancel") ||
 			segmentHasPrefix(path, "/remove-finished")
 		if isAPI && !tokenMatches(r.Header.Get("X-Serve-Token"), s.serveToken) {
-			client := clientKey(r)
+			client := s.clientKey(r)
 			if retry, blocked := s.auth.blocked(client); blocked {
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", int(retry.Seconds())+1))
 				http.Error(w, `{"error":"too many failed attempts"}`, http.StatusTooManyRequests)
@@ -367,7 +393,7 @@ func (s *APIServer) tokenMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		if isAPI && s.serveToken != "" {
-			s.auth.reset(clientKey(r))
+			s.auth.reset(s.clientKey(r))
 		}
 		next.ServeHTTP(w, r)
 	})
