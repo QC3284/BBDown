@@ -93,3 +93,40 @@ func TestFixtureBizErrorIsReported(t *testing.T) {
 func TestFixtureMissingNodesTolerated(t *testing.T) {
 	_, _ = extractFixture(t, "missing-nodes-tolerant", false)
 }
+
+// TestFixtureDolbyAndFlacAudioAppended: dash.dolby.audio[] and dash.flac.audio
+// must be appended to the audio track list, not dropped (upstream F11).
+func TestFixtureDolbyAndFlacAudioAppended(t *testing.T) {
+	result, err := extractFixture(t, "dolby-flac-audio", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.VideoTracks) != 1 {
+		t.Errorf("video tracks = %d, want 1", len(result.VideoTracks))
+	}
+	if len(result.AudioTracks) != 4 {
+		t.Errorf("audio tracks = %d, want 4 (1 normal + 2 dolby + 1 flac)", len(result.AudioTracks))
+	}
+}
+
+// TestFixtureReparseProtocol parks the "no-recompress re-request" protocol.
+//
+// Upstream re-issues the UGC playurl request with qn=127 after a qn=0 pass and
+// lets the second response take over (dash-reparse-pass1/2), falling back to the
+// validated first response when the re-request is refused (durl-replay-first +
+// durl-replay-empty). The Go port has none of that: it issues a single request,
+// so flv-durl (expects 2 requests, the second carrying qn=127) and the four
+// fixtures below cannot pass yet.
+//
+// This is the concrete form of decision 1 in docs/UPSTREAM_ALIGNMENT.md §4.5 —
+// either implement the protocol or record it as a deliberate downgrade. The
+// assertions are already written so implementing it only means deleting the Skip.
+func TestFixtureReparseProtocol(t *testing.T) {
+	t.Skip("免二压重发协议未实现：见 docs/UPSTREAM_ALIGNMENT.md §4.5 待决策 1")
+
+	// first, second := multiRequestFixture(t, "dash-reparse-pass1", "dash-reparse-pass2")
+	// if first+second != 2 {
+	// 	t.Fatalf("requests = %d, want 2 (qn=0 then qn=127)", first+second)
+	// }
+	// assert second request query carries qn=127 and its response took over
+}

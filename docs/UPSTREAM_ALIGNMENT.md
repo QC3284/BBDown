@@ -191,6 +191,17 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 > **仍未处理**：§4.3 的 P1 队列（约 30 条）与 §4.5 的 5 项待决策。
 
+### 4.10 第五轮：夹具基座扩容
+
+上游 15 个 parser 夹具已全部落地到 \`internal/parser/testdata/\`，回放基座覆盖其中 7 个：
+
+- 已接（绿）：\`drm-dash-badkid\`、\`drm-dash\`、\`biz-error\`、\`missing-nodes-tolerant\`、\`dolby-flac-audio\`（1 视频 / 4 音轨 — **DoVi + FLAC 追加在 Go 侧本来就正确**，此前只是静态推断，现有夹具背书）。
+- **已接（跳过）**：\`TestFixtureReparseProtocol\` —— 免二压重发协议（qn=0 首请求 → qn=127 重发 → 失败回退首次响应）在 Go 侧**完全不存在**，单次请求。断言已写好，只等实现后删掉 \`t.Skip\`。
+- 依赖重发协议、暂不可接：\`dash-reparse-pass1/2\`、\`durl-replay-first/empty\`、\`flv-durl\`（期望 2 次请求、第二次带 \`qn=127\`）。
+- 需按 query 分流的假服务器：\`intl-code0/1\`、\`bangumi-web-dash-*\`。
+
+> 该测试即 §4.5 待决策 1 的**具体形态**：决策不再是纸面讨论，而是一个断言写好的跳启用例。
+
 ### 4.9 第四轮：P1 起步
 
 | 条目 | 改动 | 验证 |
