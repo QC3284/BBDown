@@ -117,8 +117,10 @@ func buildBangumiPages(pages []interface{}, epID string) ([]entity.Page, string,
 		if !ok {
 			continue
 		}
-		// Skip trailers (预告).
-		if gs(em, "badge") == "预告" {
+		// Skip trailers (预告) — unless the caller explicitly asked for this very
+		// episode. A requested episode must never be dropped, or the request fails
+		// with "未找到指定的剧集" even though it exists (upstream keeps it).
+		if gs(em, "badge") == "预告" && gs(em, "id") != epID {
 			continue
 		}
 		res := dimensionRes(em)

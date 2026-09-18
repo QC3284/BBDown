@@ -38,3 +38,29 @@ func TestBuildBangumiPagesSkipsPreviewsAndLocatesEpisode(t *testing.T) {
 		t.Error("an unmatched requested episode must error instead of silently downloading the season")
 	}
 }
+
+// TestBuildBangumiPagesKeepsExplicitlyRequestedTrailer: asking for a 预告 by its
+// episode id must return it — dropping it made the request fail as "not found"
+// even though the episode exists.
+func TestBuildBangumiPagesKeepsExplicitlyRequestedTrailer(t *testing.T) {
+	raw := []interface{}{
+		map[string]interface{}{"badge": "预告", "id": "1", "title": "PV"},
+		map[string]interface{}{"id": "100", "title": "第一话"},
+	}
+	pages, index, err := buildBangumiPages(raw, "1")
+	if err != nil {
+		t.Fatalf("an explicitly requested 预告 must resolve: %v", err)
+	}
+	if len(pages) != 2 || index != "1" {
+		t.Errorf("pages = %d, index = %q; want the trailer kept at index 1", len(pages), index)
+	}
+
+	// Without an explicit request the trailer is still filtered out.
+	pages, _, err = buildBangumiPages(raw, "")
+	if err != nil {
+		t.Fatalf("whole-season request: %v", err)
+	}
+	if len(pages) != 1 {
+		t.Errorf("pages = %d, want the 预告 filtered out", len(pages))
+	}
+}

@@ -40,7 +40,6 @@ func (f *IntlBangumiInfoFetcher) Fetch(ctx context.Context, id string) (*entity.
 	if err != nil {
 		return nil, err
 	}
-	resp = strings.ReplaceAll(resp, "\\/", "/")
 
 	var root map[string]interface{}
 	if err := json.Unmarshal([]byte(resp), &root); err != nil {

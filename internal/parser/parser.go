@@ -55,7 +55,11 @@ func parseKidFromDrmURI(uri string) string {
 	return rest
 }
 
-var baseURLRegex = regexp.MustCompile(`http.*:\d+`)
+// baseURLRegex matches a direct host URL carrying an explicit port. It must be
+// anchored: the previous `http.*:\d+` also matched a ':port' appearing inside a
+// query string, which picked the wrong base_url (upstream tightened it to
+// ^https?://[^/:]+:\d+).
+var baseURLRegex = regexp.MustCompile(`^https?://[^/:]+:\d+`)
 var playerJSONRegex = regexp.MustCompile(`window\.__playinfo__=([\s\S]*?)<\/script>`)
 
 // Parser handles video stream URL extraction.
