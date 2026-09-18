@@ -57,6 +57,10 @@ go build ./... && go vet ./... && go test ./...
 - 计时相关的用例把超时做成变量（如 `readStallTimeout`、`downloadStallTimeout`）以便测试收窄。
 - **不要用固定 `time.Sleep` 等待异步副作用**：慢速 CI runner（尤其 windows-latest）上会变成时序竞态。
   改为轮询可观测的状态（磁盘字节数、channel 信号）并设上限。
+- **断言失败前先释放资源**：若被测协程还挂在网络上，`t.Fatal` 会走 defer（如 `srv.Close()`）等待挂起的 handler，
+  失败看起来像超时。先用 `cancel()` 断开再断言。
+- `internal/live` 的回环流式 harness 在 GitHub 的 windows-latest 上不可靠（刷出的字节收不到，读挂到 60s 看门狗），
+  该用例按平台跳过；跨平台逻辑请另找不依赖 socket 时序的断言方式。
 
 ## 提交与分支
 
