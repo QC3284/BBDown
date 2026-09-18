@@ -16,7 +16,11 @@ sha256sums=('SKIP')
 
 pkgver() {
     cd "$srcdir/BBDown"
-    printf "1.6.19.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    # Track the release tag (v1.6.19-go.1 -> 1.6.19.go.1; "-" is not allowed in
+    # an Arch version) and append the commit distance so VCS builds stay ordered.
+    tag=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//; s/-/./g')
+    [ -n "$tag" ] || tag="1.6.19"
+    printf "%s.r%s.%s" "$tag" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
 }
 
 build() {
