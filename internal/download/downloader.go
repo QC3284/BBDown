@@ -93,6 +93,37 @@ type resumeManifest struct {
 
 // DownloadFile downloads a URL to a local file, with optional multi-threading,
 // resume support and retries (mirrors upstream BBDownDownloadUtil).
+// downloadStallTimeout bounds how long a media download may go without
+// receiving a single byte. It is a variable so tests can shrink it.
+var downloadStallTimeout = 60 * time.Second
+
+// stallGuard aborts a body read that has stopped producing data. Media
+// downloads use a client without an overall timeout (a large file legitimately
+// takes minutes), so a connection that neither resets nor EOFs — a network
+// black hole — blocked io.Copy forever and hung the task. Closing the body is
+// what unblocks the pending Read.
+type stallGuard struct {
+	body  io.ReadCloser
+	timer *time.Timer
+}
+
+func newStallGuard(body io.ReadCloser, d time.Duration) *stallGuard {
+	g := &stallGuard{body: body}
+	g.timer = time.AfterFunc(d, func() { body.Close() })
+	return g
+}
+
+func (g *stallGuard) Read(p []byte) (int, error) {
+	n, err := g.body.Read(p)
+	if n > 0 {
+		g.timer.Reset(downloadStallTimeout)
+	}
+	return n, err
+}
+
+// Stop releases the watchdog; the underlying body keeps its own Close.
+func (g *stallGuard) Stop() { g.timer.Stop() }
+
 func DownloadFile(ctx context.Context, url, destPath string, cfg DownloadConfig) error {
 	if cfg.UseAria2c {
 		return downloadWithAria2c(ctx, url, destPath, cfg)
@@ -321,12 +352,14 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 
 			// 小于 1MiB 的辅助资源（封面/字幕等）不显示进度条：
 			// 它们在百毫秒内完成，进度条只会留下一行 100% 噪声。
+			guard := newStallGuard(resp.Body, downloadStallTimeout)
+			defer guard.Stop()
 			if isTerminalOut() && pr.size >= 1<<20 && resp.ContentLength > 0 {
-				pr2 := newProgressReader(resp.Body, resp.ContentLength+offset)
+				pr2 := newProgressReader(guard, resp.ContentLength+offset)
 				defer pr2.Close()
 				_, err = io.Copy(out, pr2)
 			} else {
-				_, err = io.Copy(out, resp.Body)
+				_, err = io.Copy(out, guard)
 			}
 			return err
 		}()
