@@ -655,21 +655,8 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 	}
 	go func() {
 		defer stdin.Close()
-		var sb strings.Builder
-		sb.WriteString(url + "\n")
-		if needsBilibiliReferer(url) {
-			sb.WriteString("  header=Referer: https://www.bilibili.com\n")
-		}
-		sb.WriteString("  header=User-Agent: Mozilla/5.0\n")
-		if cfg.Cookie != "" {
-			// aria2c input-file lines cannot contain newlines: sanitize so a
-			// malicious --cookie value cannot inject extra options.
-			cookie := strings.NewReplacer("\r", "", "\n", "").Replace(cfg.Cookie)
-			sb.WriteString("  header=Cookie: " + cookie + "\n")
-		}
-		sb.WriteString("  dir=" + filepath.Dir(destPath) + "\n")
-		sb.WriteString("  out=" + filepath.Base(destPath) + "\n")
-		io.WriteString(stdin, sb.String())
+		io.WriteString(stdin, buildAria2cInputFile(
+			url, needsBilibiliReferer(url), cfg.Cookie, filepath.Dir(destPath), filepath.Base(destPath)))
 	}()
 
 	if err := cmd.Run(); err != nil {
@@ -682,6 +669,32 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 		return fmt.Errorf("aria2下载可能存在错误: 未找到输出文件")
 	}
 	return nil
+}
+
+// aria2cSanitize strips the line breaks that would let a value break out of its
+// aria2c input-file line and inject extra options.
+func aria2cSanitize(v string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(v)
+}
+
+// buildAria2cInputFile renders one aria2c input-file entry. Every interpolated
+// value is forced onto a single line: the URL comes straight from the API
+// response (base_url), so a mirror or an --insecure MITM could otherwise append
+// "\n  out=..." and make aria2c write to an arbitrary path. The Cookie already
+// had this guard while the URL — the one value that is never local — did not.
+func buildAria2cInputFile(url string, needsReferer bool, cookie, dir, out string) string {
+	var sb strings.Builder
+	sb.WriteString(aria2cSanitize(url) + "\n")
+	if needsReferer {
+		sb.WriteString("  header=Referer: https://www.bilibili.com\n")
+	}
+	sb.WriteString("  header=User-Agent: Mozilla/5.0\n")
+	if cookie != "" {
+		sb.WriteString("  header=Cookie: " + aria2cSanitize(cookie) + "\n")
+	}
+	sb.WriteString("  dir=" + aria2cSanitize(dir) + "\n")
+	sb.WriteString("  out=" + aria2cSanitize(out) + "\n")
+	return sb.String()
 }
 
 // SortVideoTracks sorts video tracks by encoding and quality priority
