@@ -477,27 +477,18 @@ func trimFLVTail(path string) (int64, error) {
 	return int64(len(data) - last), nil
 }
 
-// SanitizeFileName replaces invalid filename characters and control chars.
+// SanitizeFileName produces a usable product name. The shared rules (invalid
+// characters, Windows reserved names, trailing dots/spaces, length) live in
+// util.GetValidFileName; only the "nothing usable left" fallback is specific to
+// live recordings.
 func SanitizeFileName(name string) string {
-	invalid := []rune{'\\', '/', ':', '*', '?', '"', '<', '>', '|'}
-	result := []rune(name)
-	for i, r := range result {
-		if r <= 31 {
-			result[i] = '_'
-			continue
-		}
-		for _, inv := range invalid {
-			if r == inv {
-				result[i] = '_'
-				break
-			}
-		}
+	if strings.TrimSpace(name) == "" {
+		return "直播"
 	}
-	s := strings.TrimSpace(string(result))
-	if s == "" {
-		s = "直播"
+	if s := strings.TrimSpace(util.GetValidFileName(name, "_", true)); s != "" {
+		return s
 	}
-	return s
+	return "直播"
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {

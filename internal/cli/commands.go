@@ -23,6 +23,7 @@ import (
 	"github.com/QC3284/BBDown/internal/util"
 	"github.com/QC3284/BBDown/internal/workflow"
 	"github.com/spf13/cobra"
+	"path/filepath"
 )
 
 // Batch-command WBI presets: fetched once per command, reused per item to
@@ -107,6 +108,17 @@ var serveCmd = &cobra.Command{
 	},
 }
 
+// resolveUnderWorkDir resolves a product path against --work-dir: an absolute
+// path is used as-is, a relative one is joined with the work dir, and an unset
+// work dir leaves it relative to the process directory. Subcommands that produce
+// a single artefact (article, live) follow the download pipeline here.
+func resolveUnderWorkDir(workDir, path string) string {
+	if path == "" || workDir == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(workDir, path)
+}
+
 var liveCmd = &cobra.Command{
 	Use:   "live [room_id]",
 	Short: "录制B站直播流",
@@ -155,6 +167,8 @@ var liveCmd = &cobra.Command{
 		if outPath == "" {
 			outPath = fmt.Sprintf("%s_直播录制_%s.flv", live.SanitizeFileName(title), time.Now().Format("20060102_150405"))
 		}
+		// Both the default name and the .segs directory follow --work-dir.
+		outPath = resolveUnderWorkDir(optWorkDir, outPath)
 		util.Log("开始录制直播流: %s (Ctrl+C 停止，断流自动重连)", outPath)
 
 		result, err := live.DownloadToFile(ctx, roomID, outPath, client)
@@ -198,8 +212,13 @@ var articleCmd = &cobra.Command{
 		}
 		path := optArticleOutput
 		if path == "" {
-			path = live.SanitizeFileName(a.Title) + ".md"
+			name := util.GetValidFileName(a.Title, "_", true)
+			if strings.TrimSpace(name) == "" {
+				name = "专栏"
+			}
+			path = name + ".md"
 		}
+		path = resolveUnderWorkDir(optWorkDir, path)
 		if err := article.SaveAsMarkdown(a, path); err != nil {
 			return fmt.Errorf("专栏保存失败: %w", err)
 		}
