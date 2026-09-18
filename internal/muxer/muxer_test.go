@@ -264,3 +264,50 @@ func TestCheckFFmpegDOVITimesOutOnHungBinary(t *testing.T) {
 		t.Fatal("CheckFFmpegDOVI hung: the probe timeout did not fire")
 	}
 }
+
+// TestEscapeStringFoldsLineBreaks: the value is embedded in mp4box's own
+// -itags/-add token syntax, where a raw newline breaks the token.
+func TestEscapeStringFoldsLineBreaks(t *testing.T) {
+	if got := escapeString("a\nb"); got != "a b" {
+		t.Errorf("newline = %q, want a folded space", got)
+	}
+	if got := escapeString("C:\\cover.jpg"); got != "C:\\\\cover.jpg" {
+		t.Errorf("backslash = %q", got)
+	}
+	if got := escapeString("say \"hi\""); got != "say \\\"hi\\\"" {
+		t.Errorf("quote = %q", got)
+	}
+}
+
+// TestMp4boxEscapesCoverPath: a Windows cover path reached -itags verbatim, so a
+// backslash was consumed as an escape sequence and the cover silently vanished
+// (upstream RF-6).
+func TestMp4boxEscapesCoverPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake mp4box is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args.txt")
+	script := filepath.Join(dir, "fake-mp4box")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\nexit 0\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := MP4BOX
+	MP4BOX = script
+	defer func() { MP4BOX = orig }()
+
+	if err := MuxAV(context.Background(), true, "BV1xx411c7mD",
+		filepath.Join(dir, "v.mp4"), "", filepath.Join(dir, "out.mp4"),
+		"desc", "title", "author", "ep1", "C:\\cover.jpg", "zh-CN", nil,
+		false, false, false, nil, 1700000000, false, nil, 5); err != nil {
+		t.Fatalf("MuxAV: %v", err)
+	}
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "cover=\"C:\\\\cover.jpg\"") {
+		t.Errorf("the cover path was not escaped in -itags:\n%s", raw)
+	}
+}

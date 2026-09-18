@@ -38,12 +38,18 @@ func MuxAV(ctx context.Context, useMp4box bool, bvid, videoPath, audioPath, outP
 }
 
 // escapeString escapes backslashes and double quotes (upstream EscapeString).
+// escapeString escapes backslashes and double quotes and folds line breaks away
+// (upstream EscapeString). The value is embedded into mp4box's own -itags/-add
+// token syntax, where a raw newline would break the token and a lone backslash
+// would be consumed as an escape sequence.
 func escapeString(s string) string {
 	if s == "" {
 		return s
 	}
 	s = strings.ReplaceAll(s, "\\", "\\\\")
-	return strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.ReplaceAll(s, "\n", " ")
 }
 
 func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, title, author, episodeID, pic, lang string, subs []entity.Subtitle, audioOnly, videoOnly, simplyMux bool, points []entity.ViewPoint, pubTime int64, isHevc bool, audioMaterial []entity.AudioMaterial, timeoutMinutes int) error {
@@ -311,7 +317,10 @@ func muxByMp4box(ctx context.Context, url, videoPath, audioPath string, audioMat
 	metaArg.WriteString("tool=")
 	if pic != "" {
 		metaArg.WriteString(":cover=\"")
-		metaArg.WriteString(pic)
+		// The cover path goes through the same escaping as the other values: on
+		// Windows a "\" in the path was consumed as an escape sequence and the
+		// cover was silently dropped (upstream RF-6).
+		metaArg.WriteString(escapeString(pic))
 		metaArg.WriteString("\"")
 	}
 	if episodeID != "" {

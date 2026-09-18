@@ -112,3 +112,21 @@ func TestSaveDanmakuAsASS(t *testing.T) {
 		t.Fatalf("expected 2 dialogue lines:\n%s", text)
 	}
 }
+
+// TestEscapeAssTextNeutralizesBackslash: a literal backslash would start an ASS
+// override tag (\N, \h, \move), letting a comment inject layout commands.
+func TestEscapeAssTextNeutralizesBackslash(t *testing.T) {
+	got := escapeAssText("{\\an8}hello\\Nworld")
+	if strings.Contains(got, "\\") {
+		t.Errorf("escapeAssText left a real backslash: %q", got)
+	}
+	if !strings.Contains(got, "＼") {
+		t.Errorf("escapeAssText should use the full-width backslash: %q", got)
+	}
+	if strings.ContainsAny(got, "{}") {
+		t.Errorf("escapeAssText left override braces: %q", got)
+	}
+	if got := escapeAssText("a\nb"); got != "a\\Nb" {
+		t.Errorf("newline = %q, want the ASS line break", got)
+	}
+}

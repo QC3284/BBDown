@@ -271,9 +271,15 @@ func SanitizeSRT(content string) string {
 	var kept []string
 	for _, l := range lines {
 		l = strings.TrimRight(l, " \t")
-		if len(l) > 0 {
-			kept = append(kept, l)
+		if len(l) == 0 {
+			continue
 		}
+		// A "-->" inside the cue text is read as a timing separator and shifts
+		// every following cue (upstream SanitizeSrtContent).
+		if strings.Contains(l, "-->") {
+			l = strings.ReplaceAll(l, "-->", "->")
+		}
+		kept = append(kept, l)
 	}
 	return strings.Join(kept, "\n")
 }

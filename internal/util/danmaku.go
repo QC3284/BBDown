@@ -270,6 +270,11 @@ func escapeAssText(content string) string {
 			sb.WriteString("｛")
 		case '}':
 			sb.WriteString("｝")
+		case '\\':
+			// A literal backslash starts an ASS override tag (\N, \h, \move...):
+			// substitute the full-width form, which renders identically but is not an
+			// escape character (upstream EscapeAssText).
+			sb.WriteString("＼")
 		case '\r':
 			if i+1 < len(content) && content[i+1] == '\n' {
 				i++
