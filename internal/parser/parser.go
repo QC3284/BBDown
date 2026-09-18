@@ -247,7 +247,7 @@ func (p *Parser) getIntlPlayJSON(ctx context.Context, aid, cid, epid, qn, code s
 	}
 	parts = append(parts, "s_locale=zh_SG")
 	params := strings.Join(parts, "&")
-	api := fmt.Sprintf("https://%s/intl/gateway/v2/ogv/playurl?", host)
+	api := apiBase(host) + "/intl/gateway/v2/ogv/playurl?"
 	if isBiliPlus {
 		api += params + "&sign=" + util.GetSign(params, true)
 	} else {

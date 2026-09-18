@@ -130,3 +130,59 @@ func TestFixtureReparseProtocol(t *testing.T) {
 	// }
 	// assert second request query carries qn=127 and its response took over
 }
+
+// extractIntlFixture drives the international parse path against a server that
+// routes by the prefer_code_type query parameter, which is how upstream's
+// FakeBilibiliApiServer distinguishes the two passes.
+func extractIntlFixture(t *testing.T, routes map[string]string) (*entity.ParsedResult, []string, error) {
+	t.Helper()
+
+	var seen []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Query().Get("prefer_code_type")
+		seen = append(seen, key)
+		name, ok := routes[key]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		body, err := os.ReadFile(filepath.Join("testdata", name+".json"))
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	cfg := config.DefaultAppSettings()
+	cfg.Host = strings.TrimPrefix(srv.URL, "https://")
+	cfg.TvHost = cfg.Host
+	cfg.Wbi = "test_wbi_key"
+	cfg.Cookie = ""
+	cfg.Token = ""
+
+	client := util.NewHTTPClient(func() bool { return true }, func() string { return "" }, nil)
+	res, err := NewParser(client, cfg).ExtractTracks(context.Background(), "av170001", "170001", "999", "", false, true, false, "", false, "0")
+	return res, seen, err
+}
+
+// TestFixtureIntlMergesTwoPassStreamLists: the international endpoint is queried
+// twice (prefer_code_type=0 then 1) and both stream lists are merged, so a codec
+// offered only in the second pass stays selectable.
+func TestFixtureIntlMergesTwoPassStreamLists(t *testing.T) {
+	res, seen, err := extractIntlFixture(t, map[string]string{"0": "intl-code0", "1": "intl-code1"})
+	if err != nil {
+		t.Fatalf("intl parse: %v", err)
+	}
+	if len(seen) != 2 || seen[0] != "0" || seen[1] != "1" {
+		t.Errorf("prefer_code_type sequence = %v, want [0 1]", seen)
+	}
+	if len(res.VideoTracks) != 2 {
+		t.Errorf("video tracks = %d, want 2 (one per pass)", len(res.VideoTracks))
+	}
+	if len(res.AudioTracks) != 2 {
+		t.Errorf("audio tracks = %d, want 2 (one per pass)", len(res.AudioTracks))
+	}
+}
