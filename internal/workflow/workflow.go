@@ -1362,8 +1362,11 @@ func parsePageSelection(expr string) ([]string, error) {
 		if s > e {
 			return nil, fmt.Errorf("起始值大于结束值: %q", part)
 		}
-		if e-s+1 > maxExpandedPages {
-			return nil, fmt.Errorf("展开后超过 %d 项: %q", maxExpandedPages, part)
+		// Cumulative, not per segment: "1-60000,1-60000" used to pass the per-range
+		// check twice and expand to 120000 entries (a serve-side memory/CPU
+		// amplification).
+		if len(result)+e-s+1 > maxExpandedPages {
+			return nil, fmt.Errorf("展开后总项数超过 %d 项: %q", maxExpandedPages, expr)
 		}
 		for i := s; i <= e; i++ {
 			result = append(result, strconv.Itoa(i))

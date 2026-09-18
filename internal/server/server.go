@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"crypto/subtle"
+	"errors"
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/entity"
 	"github.com/QC3284/BBDown/internal/util"
@@ -405,7 +406,18 @@ func (s *APIServer) handleAddTask(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL string `json:"url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// An oversized body is a 413, not a generic 400: clients need to tell
+		// "too big" from "malformed" to decide whether to retry.
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, `{"error":"invalid request body, 'url' required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.URL == "" {
 		http.Error(w, `{"error":"invalid request body, 'url' required"}`, http.StatusBadRequest)
 		return
 	}
