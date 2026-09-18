@@ -862,7 +862,11 @@ func (w *Workflow) decryptDrm(ctx context.Context, result *entity.ParsedResult, 
 					wvdPath = filepath.Join(appDirFunc(), "device.wvd")
 				}
 				if fileExists(wvdPath) {
-					kp, err := drm.GetKeyWidevine(result.PsshBase64, wvdPath)
+					// The key window can last minutes (license request + retries); bound it
+					// so serve /cancel and Ctrl+C are honoured (upstream RF-35).
+					keyCtx, cancelKey := context.WithTimeout(ctx, 2*time.Minute)
+					kp, err := drm.GetKeyWidevine(keyCtx, result.PsshBase64, wvdPath)
+					cancelKey()
 					if err != nil {
 						util.LogWarn("自动密钥提取异常: %v", err)
 					} else {

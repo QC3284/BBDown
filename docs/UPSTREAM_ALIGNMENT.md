@@ -202,6 +202,14 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 > 该测试即 §4.5 待决策 1 的**具体形态**：决策不再是纸面讨论，而是一个断言写好的跳启用例。
 
+### 4.11 第六轮：DRM 取钥链贯通 context
+
+| 条目 | 改动 | 验证 |
+|---|---|---|
+| **E2 DRM 取钥不可取消**（上游 RF-35）+ RF-4 + RF-79 | 取钥链是线性的 `GetKeyWidevine → GetKeys → getKeysInternal → sendRequest`，一次贯通：`sendRequest` 改 `http.NewRequestWithContext`；`http.DefaultClient` 换成 `licenseClient`（**禁跟随重定向** —— 请求体是从设备密钥签出的 challenge，不能跳到别的主机，上游 RF-4）；响应体加 64MB 上限（RF-79）；`workflow.go` 调用点包 `context.WithTimeout(ctx, 2*time.Minute)` 给出整体上限 | 取钥窗口（最长约 6 分钟）现在随 ctx 取消 —— serve `/cancel` 与 Ctrl+C 生效；15 个包全绿 |
+
+> 至此取钥链的三个问题（无取消 / 跟随重定向 / 无上限）一并收口。**剩余**：§4.3 的 P1 队列其余条目（serve 关停取消、解析层静默整季下载、直播韧性与 `qn=30000`、`sub check` 失败计数等）与 §4.5 的 5 项待决策。
+
 ### 4.9 第四轮：P1 起步
 
 | 条目 | 改动 | 验证 |

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"context"
 	drmproto "github.com/QC3284/BBDown/internal/drm/proto"
 	"github.com/QC3284/BBDown/internal/util"
 )
@@ -43,14 +44,14 @@ func NewWidevineCdm(device *WvdDevice) *WidevineCdm {
 }
 
 // GetKeys acquires decryption keys from Widevine license server.
-func GetKeys(psshB64, wvdPath string) ([]KeyPair, error) {
+func GetKeys(ctx context.Context, psshB64, wvdPath string) ([]KeyPair, error) {
 	device, err := LoadWvdDevice(wvdPath)
 	if err != nil {
 		return nil, fmt.Errorf("load device.wvd failed: %w", err)
 	}
 
 	cdm := NewWidevineCdm(device)
-	return cdm.getKeysInternal(psshB64)
+	return cdm.getKeysInternal(ctx, psshB64)
 }
 
 // KeyPair represents a (kid, key) pair in hex.
@@ -59,7 +60,7 @@ type KeyPair struct {
 	KeyHex string
 }
 
-func (c *WidevineCdm) getKeysInternal(psshB64 string) ([]KeyPair, error) {
+func (c *WidevineCdm) getKeysInternal(ctx context.Context, psshB64 string) ([]KeyPair, error) {
 	psshPayload, keyIDs := parsePsshBox(psshB64)
 	if len(keyIDs) == 0 {
 		return nil, fmt.Errorf("PSSH 中未找到 key ID")
@@ -70,7 +71,7 @@ func (c *WidevineCdm) getKeysInternal(psshB64 string) ([]KeyPair, error) {
 		return nil, fmt.Errorf("build challenge: %w", err)
 	}
 
-	responseBytes, err := c.sendRequest(challenge)
+	responseBytes, err := c.sendRequest(ctx, challenge)
 	if err != nil {
 		return nil, fmt.Errorf("license request failed: %w", err)
 	}
@@ -243,8 +244,21 @@ func (c *WidevineCdm) buildChallenge(keyIDs [][]byte, psshPayload []byte) (chall
 
 // ---- HTTP request ----
 
-func (c *WidevineCdm) sendRequest(body []byte) ([]byte, error) {
-	req, err := http.NewRequest("POST", licenseURL, bytes.NewReader(body))
+// licenseClient serves the Widevine license POST. The request body embeds a
+// signed challenge built from the device key, so it must not follow a redirect
+// to another host (upstream RF-4 routes it through the no-redirect client pool).
+// The overall deadline comes from the caller's context.
+var licenseClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// maxLicenseResponseBytes bounds the license response body (upstream RF-79).
+const maxLicenseResponseBytes = 64 << 20
+
+func (c *WidevineCdm) sendRequest(ctx context.Context, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", licenseURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +267,7 @@ func (c *WidevineCdm) sendRequest(body []byte) ([]byte, error) {
 	req.Header.Set("Referer", "https://www.bilibili.com")
 	req.Header.Set("Accept", "*/*")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := licenseClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +277,7 @@ func (c *WidevineCdm) sendRequest(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("license server returned HTTP %d", resp.StatusCode)
 	}
 
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(io.LimitReader(resp.Body, maxLicenseResponseBytes))
 }
 
 // ---- Response parser ----
