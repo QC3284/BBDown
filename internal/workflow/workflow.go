@@ -791,7 +791,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		}
 
 		// Dolby Vision with ffmpeg < 5.0: switch to mp4box (upstream).
-		if selectedVideo != nil && selectedVideo.Dfn == config.QualityMap["126"] && !w.Cfg.UseMP4box && !muxer.CheckFFmpegDOVI() {
+		// --skip-mux performs no muxing at all, so the Dolby Vision probe cannot change
+		// anything and must not run (upstream skips it).
+		if selectedVideo != nil && selectedVideo.Dfn == config.QualityMap["126"] && !w.Cfg.UseMP4box && !w.Cfg.SkipMux && !muxer.CheckFFmpegDOVI() {
 			util.LogWarn("检测到杜比视界清晰度且您的ffmpeg版本小于5.0,将使用mp4box混流...")
 			w.Cfg.UseMP4box = true
 		}

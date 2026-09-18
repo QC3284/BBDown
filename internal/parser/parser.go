@@ -17,6 +17,20 @@ import (
 	"github.com/QC3284/BBDown/internal/util"
 )
 
+// isVipRestricted reports whether a playurl response is the 大会员专享限制 business
+// error. The JSON root "message" is authoritative; a raw substring check only
+// backs up non-JSON bodies, so a wording or encoding change cannot silently
+// disable the web-page fallback (upstream IsVipRestrictedResponse).
+func isVipRestricted(jsonStr string) bool {
+	var doc map[string]interface{}
+	if json.Unmarshal([]byte(jsonStr), &doc) == nil {
+		if msg, ok := doc["message"].(string); ok && msg != "" {
+			return strings.Contains(msg, "大会员专享限制")
+		}
+	}
+	return strings.Contains(jsonStr, "大会员专享限制")
+}
+
 // apiBase returns the scheme-qualified base URL for an API host. A host that
 // already carries a scheme is used as-is (upstream WithApiScheme), which is what
 // lets --host point at a plain-http mirror or a local test server.
@@ -280,9 +294,16 @@ func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, ep
 	}
 
 	// Fallback: if response indicates VIP-only content, try parsing from webpage source
-	if strings.Contains(resp, "\"大会员专享限制\"") && epid != "" {
+	if isVipRestricted(resp) && epid != "" {
 		util.Log("此视频需要大会员，您大概率需要登录一个有大会员的账号才可以下载，尝试从网页源码解析")
-		webURL := "https://www.bilibili.com/bangumi/play/ep" + epid
+		// Follow the configured mirror: only the default api host falls back to the
+		// official web host, otherwise a mirror user would be pulled back to a
+		// domain that may be unreachable for them (upstream EpHost handling).
+		webHost := p.Cfg.EpHost
+		if webHost == "" || webHost == "api.bilibili.com" {
+			webHost = "www.bilibili.com"
+		}
+		webURL := apiBase(webHost) + "/bangumi/play/ep" + epid
 		webSource, err := p.HTTPClient.GetWebSource(ctx, webURL)
 		if err != nil {
 			return "", fmt.Errorf("大会员回退请求失败: %w", err)

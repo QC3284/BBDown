@@ -93,6 +93,9 @@ type resumeManifest struct {
 
 // DownloadFile downloads a URL to a local file, with optional multi-threading,
 // resume support and retries (mirrors upstream BBDownDownloadUtil).
+// aria2cHardTimeout is the outer ceiling for one aria2c invocation.
+const aria2cHardTimeout = 6 * time.Hour
+
 // downloadStallTimeout bounds how long a media download may go without
 // receiving a single byte. It is a variable so tests can shrink it.
 var downloadStallTimeout = 60 * time.Second
@@ -678,7 +681,11 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 	}
 	args = append(args, "--input-file=-")
 
-	cmd := exec.CommandContext(ctx, bin, args...)
+	// A hung aria2c would hold a concurrency slot forever. The task context already
+	// carries user cancellation; this adds a hard ceiling on top (upstream 6h).
+	aria2cCtx, cancelAria2c := context.WithTimeout(ctx, aria2cHardTimeout)
+	defer cancelAria2c()
+	cmd := exec.CommandContext(aria2cCtx, bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
