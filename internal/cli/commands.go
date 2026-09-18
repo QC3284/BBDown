@@ -113,10 +113,21 @@ var serveCmd = &cobra.Command{
 // work dir leaves it relative to the process directory. Subcommands that produce
 // a single artefact (article, live) follow the download pipeline here.
 func resolveUnderWorkDir(workDir, path string) string {
-	if path == "" || workDir == "" || filepath.IsAbs(path) {
+	if path == "" || workDir == "" || isRootedPath(path) {
 		return path
 	}
 	return filepath.Join(workDir, path)
+}
+
+// isRootedPath reports whether a product path decides its own location. On
+// Windows filepath.IsAbs rejects a root-relative path such as "\\dir\\file" or
+// "/dir/file" (it wants a drive letter), yet such a path is clearly not meant to
+// land under the work directory — upstream uses Path.IsPathRooted, which accepts it.
+func isRootedPath(path string) bool {
+	if filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
+		return true
+	}
+	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\\\")
 }
 
 var liveCmd = &cobra.Command{
