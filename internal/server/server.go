@@ -144,19 +144,12 @@ func validateListenURL(listenURL, serveToken string) error {
 }
 
 // Run starts the API server.
-func (s *APIServer) Run(ctx context.Context) error {
-	if err := validateListenURL(s.listenURL, s.serveToken); err != nil {
-		return err
-	}
-
-	s.loadFinishedTasks()
-
+// buildHandler wires the API routes plus the token and guard middlewares. It is
+// a method so tests can assert the guards are actually installed — the exact
+// regression that left the default loopback deployment (no token) with no host
+// check and no cross-origin protection at all.
+func (s *APIServer) buildHandler() http.Handler {
 	mux := http.NewServeMux()
-	var handler http.Handler = mux
-	if s.serveToken != "" {
-		handler = s.tokenMiddleware(mux)
-	}
-
 	mux.HandleFunc("/get-tasks", s.handleGetTasks)
 	mux.HandleFunc("/get-tasks/", s.handleGetTasks)
 	mux.HandleFunc("/add-task", s.handleAddTask)
@@ -165,12 +158,29 @@ func (s *APIServer) Run(ctx context.Context) error {
 	mux.HandleFunc("/remove-finished/", s.handleRemoveFinished)
 	mux.HandleFunc("/health", s.handleHealth)
 
+	var handler http.Handler = mux
+	if s.serveToken != "" {
+		handler = s.tokenMiddleware(handler)
+	}
+	// The guard is installed unconditionally: the default loopback deployment
+	// has no token, and without it a browser could reach the API through DNS
+	// rebinding or a cross-origin "simple request".
+	return s.guardMiddleware(handler)
+}
+
+func (s *APIServer) Run(ctx context.Context) error {
+	if err := validateListenURL(s.listenURL, s.serveToken); err != nil {
+		return err
+	}
+
+	s.loadFinishedTasks()
+
 	util.Log("API服务器已启动: %s", s.listenURL)
 	util.Log("最大并发: %d", s.maxConcurrent)
 
 	server := &http.Server{
 		Addr:              strings.TrimPrefix(s.listenURL, "http://"),
-		Handler:           handler,
+		Handler:           s.buildHandler(),
 		ReadHeaderTimeout: 30 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
@@ -232,6 +242,79 @@ func (s *APIServer) tokenMiddleware(next http.Handler) http.Handler {
 
 func segmentHasPrefix(path, prefix string) bool {
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+// guardMiddleware enforces request-level boundaries that must hold even when no
+// token is configured. Two independent holes are closed here (upstream RF-15
+// DNS rebinding and the v1.6.14 CSRF fix):
+//
+//   - Host: a public page can resolve its own hostname to 127.0.0.1 so the
+//     browser sends the request to this loopback server. Requiring the Host
+//     header to name a loopback address blocks that without affecting LAN
+//     deployments (which require a token and bind a non-loopback address).
+//   - Origin/Content-Type: a cross-origin fetch with Content-Type text/plain
+//     is a CORS "simple request" sent without a preflight, which would let any
+//     web page drive /add-task and /cancel.
+func (s *APIServer) guardMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+
+		if isLoopbackHost(hostOfListenURL(s.listenURL)) && !s.hostAllowed(r.Host) {
+			http.Error(w, `{"error":"invalid host"}`, http.StatusForbidden)
+			return
+		}
+		if isWriteEndpoint(r.URL.Path) {
+			if !s.originAllowed(r) {
+				http.Error(w, `{"error":"cross-origin request rejected"}`, http.StatusForbidden)
+				return
+			}
+			if !isJSONContentType(r) {
+				http.Error(w, `{"error":"content-type must be application/json"}`, http.StatusUnsupportedMediaType)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hostAllowed reports whether a Host header may be served. Only loopback names
+// and the configured listen host are accepted.
+func (s *APIServer) hostAllowed(hostHeader string) bool {
+	host := strings.ToLower(strings.TrimSpace(hostHeader))
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" || host == "localhost" || isLoopbackHost(host) {
+		return true
+	}
+	return host == strings.ToLower(hostOfListenURL(s.listenURL))
+}
+
+// originAllowed accepts requests without an Origin header (CLI clients) and
+// same-origin browser requests only.
+func (s *APIServer) originAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
+func isJSONContentType(r *http.Request) bool {
+	ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	return strings.HasPrefix(ct, "application/json")
+}
+
+func isWriteEndpoint(path string) bool {
+	return segmentHasPrefix(path, "/add-task") ||
+		segmentHasPrefix(path, "/cancel") ||
+		segmentHasPrefix(path, "/remove-finished")
 }
 
 func (s *APIServer) handleGetTasks(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +383,7 @@ func (s *APIServer) handleAddTask(w http.ResponseWriter, r *http.Request) {
 	select {
 	case s.acceptLimiter <- struct{}{}:
 	default:
+		w.Header().Set("Retry-After", "5")
 		http.Error(w, `{"error":"任务队列已满，请稍后再试"}`, http.StatusTooManyRequests)
 		return
 	}
