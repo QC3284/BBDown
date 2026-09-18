@@ -342,6 +342,13 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		title = "_" + title
 	}
 
+	// The product lock is taken once for the whole page and released when this
+	// function returns. Acquiring it per attempt deadlocked the retry path: the
+	// lock is held until the page finishes, sync.Mutex is not reentrant, and a
+	// mutex wait ignores context cancellation — so Ctrl+C could not interrupt it.
+	var productLock pageLock
+	defer productLock.unlock()
+
 	// Page-level retry is fixed at 3 (upstream); per-request retries live in the
 	// downloader and honor --retry-count/--retry-delay.
 	const pageRetryLimit = 3
@@ -374,7 +381,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				util.LogError("P%d 解析失败（重试%d次后）: %v", page.Index, attempt, err)
 				return false
 			}
-			util.LogWarn("解析异常, %v 后重试... (%d/%d)", retryDelay, attempt, pageRetryLimit)
+			util.LogWarn("解析异常(%v), %v 后重试... (%d/%d)", err, retryDelay, attempt, pageRetryLimit)
 			select {
 			case <-ctx.Done():
 				return false
@@ -505,11 +512,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		}
 		util.LogDebug("SavePath: %s", savePath)
 
-		// Hold the product lock across the existence check, the download and the
-		// mux: releasing it earlier would let a concurrent task decide to download
-		// the same file and then overwrite this one's finished output.
-		unlockPath := lockPath(savePath)
-		defer unlockPath()
+		// Hold the product lock across the existence check, the download and the mux
+		// (acquired once for the page; see the declaration above).
+		productLock.acquire(savePath)
 
 		// Skip if exists
 		if info, err := os.Stat(savePath); err == nil && info.Size() > 0 {
@@ -748,7 +753,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					util.LogError("P%d 视频下载失败: %v", page.Index, err)
 					return false
 				}
-				util.LogWarn("下载异常, %v 后重试... (%d/%d)", retryDelay, attempt, pageRetryLimit)
+				util.LogWarn("下载异常(%v), %v 后重试... (%d/%d)", err, retryDelay, attempt, pageRetryLimit)
 				if !sleepCtxLocal(ctx, retryDelay) {
 					return false
 				}
@@ -767,7 +772,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					util.LogError("P%d 音频下载失败: %v", page.Index, err)
 					return false
 				}
-				util.LogWarn("下载异常, %v 后重试... (%d/%d)", retryDelay, attempt, pageRetryLimit)
+				util.LogWarn("下载异常(%v), %v 后重试... (%d/%d)", err, retryDelay, attempt, pageRetryLimit)
 				if !sleepCtxLocal(ctx, retryDelay) {
 					return false
 				}
@@ -1572,6 +1577,26 @@ func (t *ArchiveTracker) OnProcessed(aid string, ok bool) bool {
 		t.pending[aid]--
 	}
 	return t.pending[aid] == 0 && !t.failed[aid]
+}
+
+// pageLock guards one page's output for the whole attempt sequence. Acquiring it
+// per attempt deadlocked: the lock is held until the page finishes, so a retry
+// (which runs in the same goroutine after a failed download) blocked forever on
+// a lock it already owned. sync.Mutex is not reentrant, and a mutex wait does not
+// observe context cancellation — which is why Ctrl+C could not interrupt it.
+type pageLock struct{ release func() }
+
+func (p *pageLock) acquire(path string) {
+	if p.release == nil && path != "" {
+		p.release = lockPath(path)
+	}
+}
+
+func (p *pageLock) unlock() {
+	if p.release != nil {
+		p.release()
+		p.release = nil
+	}
 }
 
 // pathLocks serialise downloads that target the same product. Two concurrent

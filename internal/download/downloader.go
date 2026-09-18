@@ -257,7 +257,9 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 	for attempt := 0; attempt < cfg.retryCount(); attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(attempt) * cfg.retryDelay()
-			util.LogWarn("下载异常, %v 后重试... (%d/%d)", backoff, attempt, cfg.retryCount())
+			// The error belongs in the log: without it a failing retry ladder is
+			// undiagnosable from the output alone.
+			util.LogWarn("下载异常(%v), %v 后重试... (%d/%d)", lastErr, backoff, attempt, cfg.retryCount())
 			if !sleepCtx(ctx, backoff) {
 				return ctx.Err()
 			}
