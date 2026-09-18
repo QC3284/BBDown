@@ -83,7 +83,13 @@ var serveCmd = &cobra.Command{
 			return fmt.Errorf("参数有误：--max-concurrent 需 >= 1，当前为 %d", optServeMaxConcurrent)
 		}
 
-		srv := server.NewAPIServer(listen, optServeMaxConcurrent, optServeToken, optNotifyWebhook)
+		// BBDOWN_SERVE_TOKEN takes precedence over the flag: it keeps the secret out
+		// of the process command line and of the container invocation.
+		serveToken := os.Getenv("BBDOWN_SERVE_TOKEN")
+		if serveToken == "" {
+			serveToken = optServeToken
+		}
+		srv := server.NewAPIServer(listen, optServeMaxConcurrent, serveToken, optNotifyWebhook)
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
@@ -122,6 +128,21 @@ var liveCmd = &cobra.Command{
 		defer cancel()
 
 		client := buildHTTPClient(config.MyOption{})
+		// Load credentials BEFORE resolving the stream: getRoomPlayInfo answers an
+		// anonymous request with the guest tier only, so a logged-in recording was
+		// silently capped and could never reach the qn=30000 tier asked for below.
+		// An explicit --cookie wins over the local BBDown.data file (upstream runs
+		// InitializeRequestSessionAsync before recording).
+		sessOpt := config.DefaultMyOption()
+		sessOpt.Cookie = optCookie
+		if _, err := workflow.InitSession(ctx, &sessOpt, client); err != nil {
+			util.LogWarn("读取登录凭据失败，将以游客身份录制: %v", err)
+		} else {
+			client.SetCookieFn(func() string { return sessOpt.Cookie })
+			if sessOpt.Cookie != "" {
+				util.Log("已加载登录凭据，将按账号权限请求画质")
+			}
+		}
 		util.Log("正在解析直播间 %s...", roomID)
 		_, title, uname, err := live.ResolveLive(ctx, roomID, client)
 		if err != nil {

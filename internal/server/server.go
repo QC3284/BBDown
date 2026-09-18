@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"crypto/subtle"
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/entity"
 	"github.com/QC3284/BBDown/internal/util"
@@ -243,6 +244,16 @@ func isLoopbackHost(host string) bool {
 	return ip.IsLoopback()
 }
 
+// tokenMatches compares the presented serve token in constant time. A plain
+// "!=" leaks the shared secret through response timing, which is measurable
+// across a loopback or LAN connection.
+func tokenMatches(presented, expected string) bool {
+	if expected == "" {
+		return true
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) == 1
+}
+
 // tokenMiddleware guards API paths with the X-Serve-Token header, using
 // path-segment boundary matching (upstream StartsWithSegments).
 func (s *APIServer) tokenMiddleware(next http.Handler) http.Handler {
@@ -252,7 +263,7 @@ func (s *APIServer) tokenMiddleware(next http.Handler) http.Handler {
 			segmentHasPrefix(path, "/add-task") ||
 			segmentHasPrefix(path, "/cancel") ||
 			segmentHasPrefix(path, "/remove-finished")
-		if isAPI && r.Header.Get("X-Serve-Token") != s.serveToken {
+		if isAPI && !tokenMatches(r.Header.Get("X-Serve-Token"), s.serveToken) {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
