@@ -68,3 +68,32 @@ func GetValidFileName(input string, replacement string, filterSlash bool) string
 
 	return result
 }
+
+// SanitizePathSegment neutralises a server-controlled value before it is
+// interpolated into a file-name placeholder (<aid>, <cid>, <dfn>, <res>,
+// <fps>, <videoCodecs>, <audioCodecs>, subtitle lan ...). Those values come
+// from API responses, so a mirror or a --insecure MITM can inject path
+// separators or ".." and write outside the target directory (upstream
+// PathUtil.SanitizePathSegment, RF-48/58/63/73). Legitimate values are
+// returned byte-for-byte unchanged.
+func SanitizePathSegment(s string) string {
+	if s == "" {
+		return s
+	}
+	dirty := false
+	for _, r := range s {
+		if r == '/' || r == '\\' || r < 0x20 || r == 0x7f {
+			dirty = true
+			break
+		}
+	}
+	if !dirty && s != "." && s != ".." {
+		return s
+	}
+	out := GetValidFileName(s, "_", true)
+	out = strings.Trim(out, " .")
+	if out == "" || out == "." || out == ".." {
+		return "_"
+	}
+	return out
+}

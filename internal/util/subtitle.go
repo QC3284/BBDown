@@ -69,7 +69,7 @@ func getSubAPI1(ctx context.Context, client *HTTPClient, aid, cid string) []enti
 		subs = append(subs, entity.Subtitle{
 			Lan:  s.Lan,
 			URL:  s.SubtitleURL,
-			Path: fmt.Sprintf("%s/%s.%s.%s.srt", aid, aid, cid, s.Lan),
+			Path: fmt.Sprintf("%s/%s.%s.%s.srt", aid, aid, cid, SanitizePathSegment(s.Lan)),
 		})
 	}
 	return subs
@@ -101,7 +101,7 @@ func getSubAPI2(ctx context.Context, client *HTTPClient, aid, cid string) []enti
 		subs = append(subs, entity.Subtitle{
 			Lan:  s.Lan,
 			URL:  s.SubtitleURL,
-			Path: fmt.Sprintf("%s/%s.%s.%s.srt", aid, aid, cid, s.Lan),
+			Path: fmt.Sprintf("%s/%s.%s.%s.srt", aid, aid, cid, SanitizePathSegment(s.Lan)),
 		})
 	}
 	return subs
@@ -133,7 +133,7 @@ func getSubAPI3(ctx context.Context, client *HTTPClient, aid, cid string) []enti
 		subs = append(subs, entity.Subtitle{
 			Lan:  s.Lan,
 			URL:  s.SubtitleURL,
-			Path: fmt.Sprintf("%s/%s.%s.%s.srt", aid, aid, cid, s.Lan),
+			Path: fmt.Sprintf("%s/%s.%s.%s.srt", aid, aid, cid, SanitizePathSegment(s.Lan)),
 		})
 	}
 	return subs
@@ -167,7 +167,7 @@ func getIntlSubAPI1(ctx context.Context, client *HTTPClient, aid, cid, epid stri
 		subs = append(subs, entity.Subtitle{
 			Lan:  s.LangKey,
 			URL:  s.URL,
-			Path: fmt.Sprintf("%s/%s.%s.%s%s", aid, aid, cid, s.LangKey, ext),
+			Path: fmt.Sprintf("%s/%s.%s.%s%s", aid, aid, cid, SanitizePathSegment(s.LangKey), ext),
 		})
 	}
 	return subs
@@ -212,7 +212,7 @@ func getIntlSubAPI2(ctx context.Context, client *HTTPClient, aid, cid, epid stri
 		subs = append(subs, entity.Subtitle{
 			Lan:  s.Key,
 			URL:  u,
-			Path: fmt.Sprintf("%s/%s.%s.%s%s", aid, aid, cid, s.Key, ext),
+			Path: fmt.Sprintf("%s/%s.%s.%s%s", aid, aid, cid, SanitizePathSegment(s.Key), ext),
 		})
 	}
 	return subs

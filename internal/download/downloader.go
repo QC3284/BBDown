@@ -843,22 +843,22 @@ func FormatSavePath(pattern, title string, video *entity.Video, audio *entity.Au
 	result = strings.ReplaceAll(result, "<pageNumber>", fmt.Sprintf("%d", page.Index))
 	result = strings.ReplaceAll(result, "<pageNumberWithZero>", fmt.Sprintf("%0*d", digits(pagesCount), page.Index))
 	result = strings.ReplaceAll(result, "<pageTitle>", pageTitle)
-	result = strings.ReplaceAll(result, "<aid>", page.Aid)
-	result = strings.ReplaceAll(result, "<cid>", page.Cid)
+	result = strings.ReplaceAll(result, "<aid>", util.SanitizePathSegment(page.Aid))
+	result = strings.ReplaceAll(result, "<cid>", util.SanitizePathSegment(page.Cid))
 	result = strings.ReplaceAll(result, "<bvid>", page.Bvid())
 	result = strings.ReplaceAll(result, "<ownerName>", ownerName)
-	result = strings.ReplaceAll(result, "<ownerMid>", page.OwnerMid)
+	result = strings.ReplaceAll(result, "<ownerMid>", util.SanitizePathSegment(page.OwnerMid))
 	result = strings.ReplaceAll(result, "<apiType>", apiType)
 
 	if video != nil {
-		result = strings.ReplaceAll(result, "<dfn>", video.Dfn)
-		result = strings.ReplaceAll(result, "<videoCodecs>", video.Codecs)
-		result = strings.ReplaceAll(result, "<res>", video.Res)
-		result = strings.ReplaceAll(result, "<fps>", video.FPS)
+		result = strings.ReplaceAll(result, "<dfn>", util.SanitizePathSegment(video.Dfn))
+		result = strings.ReplaceAll(result, "<videoCodecs>", util.SanitizePathSegment(video.Codecs))
+		result = strings.ReplaceAll(result, "<res>", util.SanitizePathSegment(video.Res))
+		result = strings.ReplaceAll(result, "<fps>", util.SanitizePathSegment(video.FPS))
 		result = strings.ReplaceAll(result, "<videoBandwidth>", fmt.Sprintf("%d", video.Bandwidth))
 	}
 	if audio != nil {
-		result = strings.ReplaceAll(result, "<audioCodecs>", audio.Codecs)
+		result = strings.ReplaceAll(result, "<audioCodecs>", util.SanitizePathSegment(audio.Codecs))
 		result = strings.ReplaceAll(result, "<audioBandwidth>", fmt.Sprintf("%d", audio.Bandwidth))
 	}
 	result = replaceDatePlaceholder(result, "<publishDate:", pubTime, "yyyy-MM-dd_HH-mm-ss")
