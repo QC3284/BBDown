@@ -242,3 +242,37 @@ func TestLiveRecordStateClassification(t *testing.T) {
 		}
 	}
 }
+
+// TestStaleSessionsListsOtherSessions: leftovers from earlier runs are reported
+// so the user knows they exist, but never deleted — they may be the only copy of
+// a recording whose merge failed.
+func TestStaleSessionsListsOtherSessions(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "room.flv.segs")
+	current := filepath.Join(root, "session-20260101_000000")
+	for _, name := range []string{"session-20250101_000000", "session-20260101_000000", "session-20250202_000000"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "stray.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := staleSessions(root, current)
+	if len(stale) != 2 {
+		t.Fatalf("stale sessions = %v, want the two earlier ones", stale)
+	}
+	for _, s := range stale {
+		if s == "session-20260101_000000" {
+			t.Error("the current session must not be reported as stale")
+		}
+		if s == "stray.txt" {
+			t.Error("files must not be reported as sessions")
+		}
+	}
+
+	// A missing root is not an error.
+	if got := staleSessions(filepath.Join(t.TempDir(), "nope"), current); got != nil {
+		t.Errorf("missing root = %v, want nil", got)
+	}
+}

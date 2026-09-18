@@ -210,6 +210,12 @@ func DownloadToFile(ctx context.Context, roomID, path string, client *util.HTTPC
 		os.Remove(segRoot) // succeeds only when it is now empty
 	}()
 
+	// Recordings left behind by earlier sessions are reported, never deleted: they
+	// may be the only copy of a session whose merge failed.
+	if stale := staleSessions(segRoot, sessionDir); len(stale) > 0 {
+		util.LogWarn("检测到 %d 个此前保留的录制会话（不会自动清理，可手动合成）: %s", len(stale), strings.Join(stale, ", "))
+	}
+
 	var segFiles []string
 	var total int64
 	reconnect := 0
@@ -475,6 +481,24 @@ func trimFLVTail(path string) (int64, error) {
 		return 0, err
 	}
 	return int64(len(data) - last), nil
+}
+
+// staleSessions lists session directories under root other than the current one.
+func staleSessions(root, current string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var stale []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if p := filepath.Join(root, e.Name()); p != current {
+			stale = append(stale, e.Name())
+		}
+	}
+	return stale
 }
 
 // SanitizeFileName produces a usable product name. The shared rules (invalid

@@ -1060,6 +1060,15 @@ func (w *Workflow) initRequestSession(ctx context.Context) {
 	// The HTTP client was built with the CLI-provided cookie; switch it to the
 	// effective credentials (CLI flag or BBDown.data file).
 	w.HTTPClient.SetCookieFn(func() string { return w.Cfg.Cookie })
+	// Warn before the login lapses: a long-running serve process would otherwise
+	// start failing weeks later with no hint about the cause.
+	if days := util.EstimateSessdataExpiryDays(w.Cfg.Cookie); days != nil && *days <= 7 {
+		if *days <= 0 {
+			util.LogWarn("本地 SESSDATA 已过期，请重新执行登录")
+		} else {
+			util.LogWarn("本地 SESSDATA 约 %d 天后过期，建议提前重新登录", *days)
+		}
+	}
 	// Tell the client which hosts may receive them: the official domains, or the
 	// mirrors the user opted into. A redirect target or an unconfigured host must
 	// never see SESSDATA.

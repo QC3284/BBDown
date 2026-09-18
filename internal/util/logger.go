@@ -86,6 +86,9 @@ type Logger struct {
 	mu          sync.Mutex
 	logFilePath string
 	debugMode   func() bool // callback to check if debug is enabled
+
+	logFailures       int
+	logSuspendedUntil time.Time
 }
 
 // NewLogger creates a new Logger.
@@ -102,19 +105,54 @@ func (l *Logger) SetLogFile(path string) {
 	l.logFilePath = path
 }
 
+// logFailureCooldown is how long file logging is suspended after
+// maxLogFailures consecutive write failures: a full or read-only volume would
+// otherwise retry (and fail) on every single line.
+const (
+	maxLogFailures     = 5
+	logFailureCooldown = 30 * time.Second
+)
+
 func (l *Logger) appendToFile(line string) {
 	l.mu.Lock()
 	path := l.logFilePath
-	l.mu.Unlock()
-	if path == "" {
+	if path == "" || time.Now().Before(l.logSuspendedUntil) {
+		l.mu.Unlock()
 		return
 	}
+	l.mu.Unlock()
+
+	// The file is opened per line rather than kept open: Go already opens with
+	// FILE_SHARE_READ|WRITE|DELETE, so a second instance is not locked out, and a
+	// long-lived handle would go stale if the file is rotated or removed.
+	if err := writeLine(path, line); err != nil {
+		l.mu.Lock()
+		l.logFailures++
+		if l.logFailures >= maxLogFailures {
+			l.logSuspendedUntil = time.Now().Add(logFailureCooldown)
+			l.logFailures = 0
+			fmt.Fprintf(os.Stderr, "日志文件写入连续失败，已暂停 %v: %s\n", logFailureCooldown, path)
+		}
+		l.mu.Unlock()
+		return
+	}
+
+	l.mu.Lock()
+	l.logFailures = 0
+	l.mu.Unlock()
+}
+
+// writeLine appends one line, flushing before close.
+func writeLine(path, line string) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return
+		return err
 	}
 	defer f.Close()
-	fmt.Fprintln(f, line)
+	if _, err := fmt.Fprintln(f, line); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 func timestamp() string {
