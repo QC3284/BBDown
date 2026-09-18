@@ -26,6 +26,17 @@ const (
 )
 
 // LoginWeb performs WEB account login via QR code scanning.
+// checkLoginPollCode rejects an API-level failure of the QR poll. The top-level
+// code was parsed but never inspected, so a risk-control or rate-limit response
+// (-412, ...) fell through to the success branch and surfaced as a confusing
+// "登录成功但回调 URL 为空" instead of the real cause (upstream validates code == 0).
+func checkLoginPollCode(code int) error {
+	if code != 0 {
+		return fmt.Errorf("登录轮询失败: 接口返回 code=%d", code)
+	}
+	return nil
+}
+
 // validateAccessToken rejects an empty token before it is persisted. Writing
 // "access_token=" produced a BBDownTV.data that reads as logged-in and then
 // fails everywhere with confusing errors instead of reporting the login problem
@@ -98,6 +109,9 @@ func LoginWeb(ctx context.Context, client *util.HTTPClient) error {
 		}
 		if err := json.Unmarshal([]byte(pollResp), &pollResult); err != nil {
 			continue
+		}
+		if err := checkLoginPollCode(pollResult.Code); err != nil {
+			return err
 		}
 
 		switch pollResult.Data.Code {
