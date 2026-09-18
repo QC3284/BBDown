@@ -17,6 +17,44 @@ import (
 	"github.com/QC3284/BBDown/internal/util"
 )
 
+// apiBase returns the scheme-qualified base URL for an API host. A host that
+// already carries a scheme is used as-is (upstream WithApiScheme), which is what
+// lets --host point at a plain-http mirror or a local test server.
+func apiBase(host string) string {
+	h := strings.TrimRight(strings.TrimSpace(host), "/")
+	if strings.HasPrefix(h, "http://") || strings.HasPrefix(h, "https://") {
+		return h
+	}
+	if h == "" {
+		return "https://api.bilibili.com"
+	}
+	return "https://" + h
+}
+
+// parseKidFromDrmURI extracts the key id from a bilidrm:// URI. Only a bare
+// 32-hex value is accepted: a malformed URI carrying a host, path or query must
+// not be mistaken for a key id (the upstream drm-dash-badkid fixture expects no kid).
+func parseKidFromDrmURI(uri string) string {
+	rest := uri
+	if i := strings.Index(rest, "://"); i >= 0 {
+		rest = rest[i+3:]
+	}
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	if len(rest) != 32 {
+		return ""
+	}
+	for i := 0; i < len(rest); i++ {
+		c := rest[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') {
+			continue
+		}
+		return ""
+	}
+	return rest
+}
+
 var baseURLRegex = regexp.MustCompile(`http.*:\d+`)
 var playerJSONRegex = regexp.MustCompile(`window\.__playinfo__=([\s\S]*?)<\/script>`)
 
@@ -99,18 +137,20 @@ func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, ep
 	prefix := ""
 
 	if tvAPI {
-		host := p.Cfg.TvHost
+		base := apiBase(p.Cfg.TvHost)
 		if bangumi {
-			prefix = fmt.Sprintf("https://%s/pgc/player/api/playurltv?", host)
+			prefix = base + "/pgc/player/api/playurltv?"
 		} else {
-			prefix = fmt.Sprintf("https://%s/x/tv/playurl?", host)
+			prefix = base + "/x/tv/playurl?"
 		}
 	} else {
-		host := p.Cfg.Host
+		base := apiBase(p.Cfg.Host)
 		if bangumi {
-			prefix = fmt.Sprintf("https://%s/pgc/player/web/v2/playurl?", host)
+			prefix = base + "/pgc/player/web/v2/playurl?"
 		} else {
-			prefix = "https://api.bilibili.com/x/player/wbi/playurl?"
+			// Cfg.Host, not a hardcoded api.bilibili.com: --host must apply to
+			// the UGC playurl path too (upstream uses Config.Current.Host here).
+			prefix = base + "/x/player/wbi/playurl?"
 		}
 	}
 
@@ -327,9 +367,8 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 			if result.IsDrm && result.KidHex == "" && len(videos) > 0 {
 				if firstV, ok := videos[0].(map[string]interface{}); ok {
 					if drmURI, ok := firstV["bilidrm_uri"].(string); ok {
-						idx := strings.LastIndex(drmURI, "//")
-						if idx >= 0 {
-							result.KidHex = drmURI[idx+2:]
+						if kid := parseKidFromDrmURI(drmURI); kid != "" {
+							result.KidHex = kid
 						}
 					}
 					if pssh, ok := firstV["widevine_pssh"].(string); ok && pssh != "" {
