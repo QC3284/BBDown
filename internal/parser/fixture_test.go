@@ -109,26 +109,95 @@ func TestFixtureDolbyAndFlacAudioAppended(t *testing.T) {
 	}
 }
 
-// TestFixtureReparseProtocol parks the "no-recompress re-request" protocol.
-//
-// Upstream re-issues the UGC playurl request with qn=127 after a qn=0 pass and
-// lets the second response take over (dash-reparse-pass1/2), falling back to the
-// validated first response when the re-request is refused (durl-replay-first +
-// durl-replay-empty). The Go port has none of that: it issues a single request,
-// so flv-durl (expects 2 requests, the second carrying qn=127) and the four
-// fixtures below cannot pass yet.
-//
-// This is the concrete form of decision 1 in docs/UPSTREAM_ALIGNMENT.md §4.5 —
-// either implement the protocol or record it as a deliberate downgrade. The
-// assertions are already written so implementing it only means deleting the Skip.
-func TestFixtureReparseProtocol(t *testing.T) {
-	t.Skip("免二压重发协议未实现：见 docs/UPSTREAM_ALIGNMENT.md §4.5 待决策 1")
+// extractFixturePasses drives a parse against a server that answers the qn=0
+// pass with first and the qn=127 re-request with second, recording the qn of
+// every request.
+func extractFixturePasses(t *testing.T, first, second string) (*entity.ParsedResult, []string, error) {
+	t.Helper()
 
-	// first, second := multiRequestFixture(t, "dash-reparse-pass1", "dash-reparse-pass2")
-	// if first+second != 2 {
-	// 	t.Fatalf("requests = %d, want 2 (qn=0 then qn=127)", first+second)
-	// }
-	// assert second request query carries qn=127 and its response took over
+	load := func(name string) []byte {
+		body, err := os.ReadFile(filepath.Join("testdata", name+".json"))
+		if err != nil {
+			t.Fatalf("fixture %s: %v", name, err)
+		}
+		return body
+	}
+	firstBody, secondBody := load(first), load(second)
+
+	var qns []string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		qn := r.URL.Query().Get("qn")
+		qns = append(qns, qn)
+		w.Header().Set("Content-Type", "application/json")
+		if qn == maxQn {
+			_, _ = w.Write(secondBody)
+			return
+		}
+		_, _ = w.Write(firstBody)
+	}))
+	defer srv.Close()
+
+	cfg := config.DefaultAppSettings()
+	cfg.Host = strings.TrimPrefix(srv.URL, "https://")
+	cfg.TvHost = cfg.Host
+	cfg.Wbi = "test_wbi_key"
+	cfg.Cookie = ""
+	cfg.Token = ""
+
+	client := util.NewHTTPClient(func() bool { return true }, func() string { return "" }, nil)
+	res, err := NewParser(client, cfg).ExtractTracks(context.Background(), "av170001", "170001", "999", "", false, false, false, "", false, "0")
+	return res, qns, err
+}
+
+// TestFixtureReparseSecondPassTakesOver: the qn=127 document replaces the first
+// one wholesale, so the tracks come from the re-request (upstream F09).
+func TestFixtureReparseSecondPassTakesOver(t *testing.T) {
+	res, qns, err := extractFixturePasses(t, "dash-reparse-pass1", "dash-reparse-pass2")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(qns) != 2 || qns[0] != "0" || qns[1] != maxQn {
+		t.Fatalf("qn sequence = %v, want [0 %s]", qns, maxQn)
+	}
+	if len(res.VideoTracks) != 1 || res.VideoTracks[0].ID != "127" {
+		t.Errorf("video tracks = %+v, want exactly the 127 track from the second pass", res.VideoTracks)
+	}
+	if !strings.Contains(res.WebJSONString, "repass-127.m4s") {
+		t.Error("WebJSONString must point at the document that took over")
+	}
+}
+
+// TestFixtureDurlReplayFallsBackOnRefusal: when the re-request comes back with
+// no dash.video, the validated first response stays in place (upstream F10).
+func TestFixtureDurlReplayFallsBackOnRefusal(t *testing.T) {
+	res, qns, err := extractFixturePasses(t, "durl-replay-first", "durl-replay-empty")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(qns) != 2 || qns[1] != maxQn {
+		t.Fatalf("qn sequence = %v, want a re-request at %s", qns, maxQn)
+	}
+	if len(res.Clips) != 2 || res.Clips[0] != "https://upos.example.com/replay-seg1.flv" {
+		t.Errorf("clips = %v, want the first pass's durl segments", res.Clips)
+	}
+	if !strings.Contains(res.WebJSONString, "replay-seg1.flv") {
+		t.Error("the first document must remain the one in effect")
+	}
+}
+
+// TestFixtureFlvDurlStillReparses: an FLV/durl document also triggers the
+// qn=127 re-request (upstream expects two requests for this fixture).
+func TestFixtureFlvDurlStillReparses(t *testing.T) {
+	res, qns, err := extractFixturePasses(t, "flv-durl", "flv-durl")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(qns) != 2 || qns[1] != maxQn {
+		t.Errorf("qn sequence = %v, want exactly [0 %s]", qns, maxQn)
+	}
+	if len(res.Clips) != 2 {
+		t.Errorf("clips = %v, want the 2 durl segments", res.Clips)
+	}
 }
 
 // extractFixtureWithEpid is extractFixture plus the episode id, which routes the

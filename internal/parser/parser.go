@@ -107,12 +107,83 @@ func (p *Parser) ExtractTracks(ctx context.Context, aidOri, aid, cid, epid strin
 	}
 	result.WebJSONString = jsonStr
 
+	// 免二压重发 (upstream ParseDash, reparsePass 1): the first pass asks for
+	// qn=0, which can omit tracks the maximum tier would offer. A second pass at
+	// qn=127 is issued for every non-APP, non-INTL request; only a document that
+	// actually carries dash.video takes over — a refusal or a failure leaves the
+	// first document in place ("降级沿用第一轮结果").
+	if !intlAPI && !appAPI {
+		better, err := p.reparseMaxQn(ctx, encoding, aidOri, aid, cid, epid, tvAPI, wantDrm)
+		if err != nil {
+			return nil, err
+		}
+		if better != "" {
+			jsonStr = better
+			result.WebJSONString = better
+		}
+	}
+
 	// Handle intl API (two-pass: code=0 and code=1)
 	if intlAPI {
 		return p.parseIntlStreams(ctx, result, aid, cid, epid, qn)
 	}
 
 	return p.parseDomesticStreams(ctx, result, aidOri, aid, cid, epid, tvAPI, appAPI, encoding, wantDrm)
+}
+
+// maxQn is the highest quality id the API accepts (upstream GetMaxQn).
+const maxQn = "127"
+
+// reparseMaxQn re-requests the playurl document at the maximum quality and
+// returns it only when it may take over: the document must parse and carry a
+// non-empty dash.video list. An empty string with a nil error means "keep the
+// first pass"; a non-nil error is a user cancellation, which must propagate
+// rather than be downgraded into the first response (upstream RF-17).
+func (p *Parser) reparseMaxQn(ctx context.Context, encoding, aidOri, aid, cid, epid string, tvAPI, wantDrm bool) (string, error) {
+	appAPI := false
+	next, err := p.getPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, false, &appAPI, wantDrm, maxQn)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		util.LogDebug("免二压重新请求失败（降级沿用第一轮结果）: %v", err)
+		return "", nil
+	}
+	if !hasDashVideo(next) {
+		util.LogDebug("免二压重新请求未返回轨道（降级沿用第一轮结果）")
+		return "", nil
+	}
+	return next, nil
+}
+
+// hasDashVideo reports whether a playurl document offers a usable DASH video
+// list, walking the same root variants the parser accepts (result.video_info,
+// result, data, or the document itself).
+func hasDashVideo(jsonStr string) bool {
+	var doc map[string]interface{}
+	if json.Unmarshal([]byte(jsonStr), &doc) != nil {
+		return false
+	}
+	roots := []map[string]interface{}{doc}
+	if res, ok := doc["result"].(map[string]interface{}); ok {
+		if vi, ok := res["video_info"].(map[string]interface{}); ok {
+			roots = append([]map[string]interface{}{vi}, roots...)
+		}
+		roots = append([]map[string]interface{}{res}, roots...)
+	}
+	if data, ok := doc["data"].(map[string]interface{}); ok {
+		roots = append([]map[string]interface{}{data}, roots...)
+	}
+	for _, r := range roots {
+		dash, ok := r["dash"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if videos, ok := dash["video"].([]interface{}); ok && len(videos) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Parser) getPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, epid string, tvAPI, intlAPI bool, appAPI *bool, wantDrm bool, qn string) (string, error) {
