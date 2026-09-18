@@ -38,6 +38,29 @@ func IsSubCommandInvocation(args []string, aliasMap map[string]string, boolFlags
 	return false
 }
 
+// positionalTokens returns the CLI tokens that are neither an option nor the
+// value consumed by one. The URL heuristic must only look at these: scanning the
+// whole argv misreads an option value such as "--aria2c-proxy http://127.0.0.1:1080"
+// or "--work-dir av123" as the target URL, which then silently drops the real URL
+// from BBDown.config and fails with "缺少参数" (upstream RF-7 GetPositionalTokens).
+func positionalTokens(args []string, aliasMap map[string]string, boolFlags map[string]bool) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			out = append(out, arg)
+			continue
+		}
+		if strings.Contains(arg, "=") {
+			continue // value embedded in the token
+		}
+		if canonical, ok := aliasMap[arg]; ok && !boolFlags[canonical] {
+			i++ // this option consumes the next token as its value
+		}
+	}
+	return out
+}
+
 // MergeWithConfig merges a line-based BBDown.config file into the CLI args
 // (upstream BBDownConfigParser): config options act as defaults, explicit CLI
 // options win, and the config URL is dropped when the CLI already has one.
@@ -86,7 +109,7 @@ func MergeWithConfig(cliArgs []string, aliasMap map[string]string, boolFlags map
 	}
 
 	cliHasURL := false
-	for _, a := range cliArgs {
+	for _, a := range positionalTokens(cliArgs, aliasMap, boolFlags) {
 		if urlLikeToken.MatchString(a) {
 			cliHasURL = true
 			break

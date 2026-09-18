@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -66,4 +67,40 @@ func joinLines(lines []string) string {
 		out += l + "\n"
 	}
 	return out
+}
+
+func TestMergeWithConfigKeepsURLWhenOptionValueLooksLikeURL(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "BBDown.config")
+	if err := os.WriteFile(cfgPath, []byte("--encoding-priority\nhevc,avc\n# 目标\nhttps://www.bilibili.com/video/BV1xx411c7mD\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	aliasMap := map[string]string{
+		"--config-file":  "config-file",
+		"--aria2c-proxy": "aria2c-proxy",
+		"--work-dir":     "work-dir",
+		"--audio-only":   "audio-only",
+	}
+	boolFlags := map[string]bool{"audio-only": true}
+
+	// Both option values look like a target (a proxy URL and "av123"), but both
+	// are consumed by their option, so the config URL must survive (upstream RF-7).
+	args := []string{"--config-file", cfgPath, "--aria2c-proxy", "http://127.0.0.1:1080", "--work-dir", "av123"}
+	merged, err := MergeWithConfig(args, aliasMap, boolFlags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(merged, " "), "BV1xx411c7mD") {
+		t.Errorf("config URL was dropped because an option value looked like a URL: %v", merged)
+	}
+
+	// A real CLI target must still suppress the config one.
+	merged, err = MergeWithConfig([]string{"--config-file", cfgPath, "BV1yy411c7mD", "--audio-only"}, aliasMap, boolFlags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(merged, " "), "BV1xx411c7mD") {
+		t.Errorf("config URL should be dropped when the CLI already carries one: %v", merged)
+	}
 }
