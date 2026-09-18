@@ -586,7 +586,14 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				for _, s := range subs {
 					if _, err := os.Stat(s.Path); err == nil {
 						outPath := download.FormatSavePath(savePathFormat, title, nil, nil, page, pagesCount, apiType, pubTime)
-						outPath = strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "." + s.Lan + ".srt"
+						// Keep the extension of the file that was actually downloaded: forcing
+						// ".srt" onto an ASS or JSON track produced a file whose contents
+						// contradict its name (upstream RF-18).
+						ext := filepath.Ext(s.Path)
+						if ext == "" {
+							ext = ".srt"
+						}
+						outPath = strings.TrimSuffix(outPath, filepath.Ext(outPath)) + "." + util.SanitizePathSegment(s.Lan) + ext
 						os.MkdirAll(filepath.Dir(outPath), 0755)
 						os.Rename(s.Path, outPath)
 					}

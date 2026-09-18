@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -76,6 +77,14 @@ func SaveCommentsJSON(items []CommentItem, path string) error {
 	data, err := json.MarshalIndent(items, "", "  ")
 	if err != nil {
 		return err
+	}
+	// The export path follows the save-path template, which may point into a
+	// directory that does not exist yet; without this the write failed with a
+	// bare "no such file or directory".
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
 	}
 	return os.WriteFile(path, data, 0o644)
 }
