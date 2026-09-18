@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // Invalid characters for file names, matching Windows restrictions.
@@ -59,18 +60,16 @@ func GetValidFileName(input string, replacement string, filterSlash bool) string
 
 	result := sb.String()
 
-	// Windows rejects a trailing dot or space ("video." / "video ") and silently
-	// drops it, so the file lands under an unexpected name. The basename is capped
-	// too: template-built names such as "<videoTitle>_<dfn>_<fps>" can exceed the
-	// per-component budget, and cutting one mid-rune would produce invalid UTF-8.
-	trimmed := strings.TrimRight(result, " .")
-	if trimmed == "" && result != "" {
-		// Nothing but dots and spaces: Windows rejects that outright, so fall back to
-		// a usable component. An empty input stays empty — callers use it to mean
-		// "no value".
-		trimmed = replacement
+	// 基名+扩展名截断（上游 PathUtil.GetValidFileName 的同一分支）：只在超长时生效，
+	// 扩展名（≤10 字符）保留、只截基名——混流与播放器靠扩展名识别类型，把 ".mp4" 截掉
+	// 会产出无法识别的文件；基名未超限时整名不动（总长略超上限但单组件仍在 Windows
+	// 255 的预算内）。按 rune 计数，避免把多字节字符切成无效 UTF-8。
+	//
+	// 顺序与上游一致：截断 → 保留名 → 裁剪尾随点/空格——这样「截断后才出现在末尾的点」
+	// 也会被裁掉。
+	if utf8.RuneCountInString(result) > maxFileNameRunes {
+		result = truncateFileName(result, maxFileNameRunes)
 	}
-	result = truncateRunes(trimmed, maxFileNameRunes)
 
 	// Handle reserved names: Windows treats CON/PRN/AUX/NUL/COM1..9/LPT1..9 as
 	// reserved even WITH an extension (CON.txt), so match the basename too.
@@ -82,7 +81,39 @@ func GetValidFileName(input string, replacement string, filterSlash bool) string
 		result = "_" + result
 	}
 
-	return result
+	// Windows rejects a trailing dot or space ("video." / "video ") and silently
+	// drops it, so the file lands under an unexpected name.
+	trimmed := strings.TrimRight(result, " .")
+	if trimmed == "" {
+		// Nothing but dots and spaces: Windows rejects that outright, so fall back to
+		// a usable component. An empty input stays empty — callers use it to mean
+		// "no value"（本仓对空串的既有契约，与上游的 "_" 不同，已记入对齐文档）。
+		if result == "" {
+			return ""
+		}
+		trimmed = replacement
+	}
+	return trimmed
+}
+
+// truncateFileName 把超长文件名截到 max 个 rune，保留 ≤10 字符的扩展名
+// （上游 PathUtil.GetValidFileName 的截断语义：不加省略号，长度严格等于上限）。
+func truncateFileName(name string, max int) string {
+	runes := []rune(name)
+	if len(runes) <= max {
+		return name
+	}
+	if ext := filepath.Ext(name); ext != "" {
+		extRunes := []rune(ext)
+		if len(extRunes) <= 10 {
+			base := runes[:len(runes)-len(extRunes)]
+			if len(base) > max {
+				return string(base[:max-len(extRunes)]) + ext
+			}
+			return name
+		}
+	}
+	return string(runes[:max])
 }
 
 // SanitizePathSegment neutralises a server-controlled value before it is

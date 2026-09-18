@@ -97,7 +97,7 @@ var serveCmd = &cobra.Command{
 		defer cancel()
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v1.6.19-go.4")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v1.6.19-go.5")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {

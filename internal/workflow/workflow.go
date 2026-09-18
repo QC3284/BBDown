@@ -208,17 +208,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 	// Save path format
 	pagesCount := len(pagesInfo)
 	bangumi := vInfo.IsBangumi
-	savePathFormat := w.Cfg.FilePattern
-	if savePathFormat == "" {
-		savePathFormat = "<videoTitle>"
-	}
-	if pagesCount > 1 || (bangumi && !vInfo.IsBangumiEnd) {
-		if w.Cfg.MultiFilePattern != "" {
-			savePathFormat = w.Cfg.MultiFilePattern
-		} else {
-			savePathFormat = "<videoTitle>/[P<pageNumberWithZero>]<pageTitle>"
-		}
-	}
+	savePathFormat := resolveSavePathFormat(w.Cfg.FilePattern, w.Cfg.MultiFilePattern, pagesCount, bangumi && !vInfo.IsBangumiEnd)
 
 	// Download config
 	dlCfg := download.DownloadConfig{
@@ -1488,26 +1478,31 @@ func parsePageSelection(expr string) ([]string, error) {
 			// only failed later with a confusing error; a clear message is the
 			// same effect for invalid input).
 			if err != nil || n < 1 {
-				return nil, fmt.Errorf("无法识别的分P范围 %q", part)
+				return nil, fmt.Errorf("无法识别的分P %q", part)
 			}
 			result = append(result, part)
 			continue
 		}
-		var s, e int
-		if _, err := fmt.Sscanf(part, "%d-%d", &s, &e); err != nil || fmt.Sprintf("%d-%d", s, e) != part {
-			return nil, fmt.Errorf("无法识别的分P范围 %q", part)
-		}
-		if s < 1 || e < 1 {
+		// 连字符两侧允许空白：上游用 int.TryParse，它容忍两侧空白，
+		// 所以 "1 - 3" 是合法范围；此前用 Sscanf("%d-%d") 解析会直接报错。
+		dash := dashIdx + 1
+		s, errS := strconv.Atoi(strings.TrimSpace(part[:dash]))
+		e, errE := strconv.Atoi(strings.TrimSpace(part[dash+1:]))
+		if errS != nil || errE != nil || s < 1 || e < 1 {
 			return nil, fmt.Errorf("无法识别的分P范围 %q", part)
 		}
 		if s > e {
-			return nil, fmt.Errorf("起始值大于结束值: %q", part)
+			return nil, fmt.Errorf("分P范围 %q 的起始值大于结束值", part)
 		}
 		// Cumulative, not per segment: "1-60000,1-60000" used to pass the per-range
 		// check twice and expand to 120000 entries (a serve-side memory/CPU
 		// amplification).
+		// 单段上限与累计上限分开报错（上游 MaxExpandedPages 的两种措辞），便于用户区分。
+		if e-s+1 > maxExpandedPages {
+			return nil, fmt.Errorf("分P范围 %q 展开后超过 %d 项", part, maxExpandedPages)
+		}
 		if len(result)+e-s+1 > maxExpandedPages {
-			return nil, fmt.Errorf("展开后总项数超过 %d 项: %q", maxExpandedPages, expr)
+			return nil, fmt.Errorf("分P选择表达式展开后总量超过 %d 项", maxExpandedPages)
 		}
 		for i := s; i <= e; i++ {
 			result = append(result, strconv.Itoa(i))
@@ -1569,6 +1564,26 @@ func (w *Workflow) findBinaries() error {
 		}
 	}
 	return nil
+}
+
+// resolveSavePathFormat 选择单P/多P模板（上游 PathHelper.ResolveSavePathFormat）：
+// 实际分P数 >1 或需要多P模板时用 multiFilePattern（空则用默认多P模板），
+// 否则用 filePattern（空则用默认单P模板）。
+func resolveSavePathFormat(filePattern, multiFilePattern string, actualPageCount int, useMultiWhenSingle bool) string {
+	const singlePageDefault = "<videoTitle>"
+	const multiPageDefault = "<videoTitle>/[P<pageNumberWithZero>]<pageTitle>"
+
+	single := filePattern
+	if single == "" {
+		single = singlePageDefault
+	}
+	if actualPageCount > 1 || useMultiWhenSingle {
+		if multiFilePattern != "" {
+			return multiFilePattern
+		}
+		return multiPageDefault
+	}
+	return single
 }
 
 // handleDeprecatedOptions maps deprecated flags to their replacements (upstream).

@@ -118,7 +118,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "1.6.19-go.4",
+	Version: "1.6.19-go.5",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 }
@@ -332,6 +332,13 @@ func init() {
 	// Subcommand flags
 	liveCmd.Flags().StringVarP(&optLiveOutput, "output", "o", "", "输出文件路径(默认: 直播间标题_直播录制_时间.flv)")
 	articleCmd.Flags().StringVarP(&optArticleOutput, "output", "o", "", "输出 Markdown 文件路径(默认: 专栏标题.md)")
+	// 上游 ArticleSettings / LiveSettings 各自声明了 -w|--work-dir（根命令的 --work-dir 没有简写），
+	// 少了这个简写，照上游文档敲 `BBDown article -w <dir>` 会直接报 unknown shorthand flag。
+	liveCmd.Flags().StringVarP(&optWorkDir, "work-dir", "w", "", "设置工作目录(所有相对路径的根目录)")
+	articleCmd.Flags().StringVarP(&optWorkDir, "work-dir", "w", "", "设置工作目录(所有相对路径的根目录)")
+	// 上游 ArticleSettings / LiveSettings 各自声明了 -w|--work-dir（根命令的 --work-dir 没有简写），
+	// 少了这个简写，照上游文档敲 `BBDown article -w <dir>` 会直接报 unknown shorthand flag。
+
 	watchLaterCmd.Flags().IntVar(&optWatchLaterLimit, "limit", 0, "最多下载前 N 个稍后再看视频(默认 0=全部)")
 	subAddCmd.Flags().StringVar(&optSubName, "name", "", "订阅显示名称(默认使用目标字符串)")
 
@@ -378,7 +385,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand).
-	util.CheckUpdateAsync(context.Background(), client, "v1.6.19-go.4")
+	util.CheckUpdateAsync(context.Background(), client, "v1.6.19-go.5")
 
 	wf := workflow.New(cfg, client)
 

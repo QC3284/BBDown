@@ -290,14 +290,20 @@ func escapeAssText(content string) string {
 }
 
 // FormatFileSize formats a file size in human-readable form.
+//
+// 与上游 BBDownUtil.FormatFileSize 逐档一致：<1KB 输出 "{n} bytes"（不是 "0.00 B"），
+// 且上游**没有 TB 档**——再大也按 GB 显示，多一档会让大盘的显示与上游不同。
 func FormatFileSize(size float64) string {
-	units := []string{"B", "KB", "MB", "GB", "TB"}
-	unitIdx := 0
-	for size >= 1024 && unitIdx < len(units)-1 {
-		size /= 1024
-		unitIdx++
+	switch {
+	case size >= 1024*1024*1024:
+		return fmt.Sprintf("%.2f GB", size/(1024*1024*1024))
+	case size >= 1024*1024:
+		return fmt.Sprintf("%.2f MB", size/(1024*1024))
+	case size >= 1024:
+		return fmt.Sprintf("%.2f KB", size/1024)
+	default:
+		return fmt.Sprintf("%v bytes", size)
 	}
-	return fmt.Sprintf("%.2f %s", size, units[unitIdx])
 }
 
 // FormatTime converts seconds to duration string.

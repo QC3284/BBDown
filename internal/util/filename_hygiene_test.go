@@ -29,8 +29,9 @@ func TestGetValidFileNameHygiene(t *testing.T) {
 	// Long names are capped, counted in runes so UTF-8 stays valid.
 	long := strings.Repeat("あ", maxFileNameRunes*2)
 	got := GetValidFileName(long, "_", false)
-	if len([]rune(got)) > maxFileNameRunes+1 {
-		t.Errorf("length = %d runes, want <= %d", len([]rune(got)), maxFileNameRunes+1)
+	// 上游 PathUtilTests 钉的是「截断后长度恰好等于上限」（不带省略号）
+	if len([]rune(got)) != maxFileNameRunes {
+		t.Errorf("length = %d runes, want exactly %d", len([]rune(got)), maxFileNameRunes)
 	}
 	if !utf8.ValidString(got) {
 		t.Errorf("truncation produced invalid UTF-8: %q", got)

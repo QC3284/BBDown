@@ -37,12 +37,14 @@ func TestFormatFileSize(t *testing.T) {
 		size float64
 		want string
 	}{
-		{0, "0.00 B"},
-		{1023, "1023.00 B"},
+		// 对齐上游 BBDownUtil.FormatFileSize：<1KB 是 "{n} bytes"，且没有 TB 档
+		// （再大也按 GB 显示）。旧期望 "0.00 B" / "1.00 TB" 是本仓自造的格式。
+		{0, "0 bytes"},
+		{1023, "1023 bytes"},
 		{1024, "1.00 KB"},
 		{1048576, "1.00 MB"},
 		{1073741824, "1.00 GB"},
-		{1099511627776, "1.00 TB"},
+		{1099511627776, "1024.00 GB"},
 	}
 	for _, c := range cases {
 		if got := FormatFileSize(c.size); got != c.want {

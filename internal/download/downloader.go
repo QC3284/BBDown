@@ -849,8 +849,8 @@ func SortVideoTracks(tracks []entity.Video, dfnPriority, encodingPriority map[st
 		if dpI != dpJ {
 			return dpI < dpJ
 		}
-		idI, _ := strconv.Atoi(sorted[i].ID)
-		idJ, _ := strconv.Atoi(sorted[j].ID)
+		idI := parseTrackQuality(sorted[i].ID)
+		idJ := parseTrackQuality(sorted[j].ID)
 		if idI != idJ {
 			return idI > idJ
 		}
@@ -860,6 +860,19 @@ func SortVideoTracks(tracks []entity.Video, dfnPriority, encodingPriority map[st
 		return sorted[i].Bandwidth > sorted[j].Bandwidth
 	})
 	return sorted
+}
+
+// parseTrackQuality 解析清晰度 id：失败或超 Int32 一律降级为 0。
+//
+// 上游用 int.TryParse（Int32）——"999999999999" 这类服务器可控的畸形值在那边是 0，
+// 用 Go 的 Atoi（64 位）会把它当合法值参与排序，位次与上游不同（RF-31 的降级语义）。
+// NumberStyles.Integer 容忍两侧空白，这里一并 TrimSpace。
+func parseTrackQuality(id string) int {
+	v, err := strconv.ParseInt(strings.TrimSpace(id), 10, 32)
+	if err != nil {
+		return 0
+	}
+	return int(v)
 }
 
 // SortAudioTracks sorts audio tracks by encoding priority (upstream uses the

@@ -181,7 +181,9 @@ func ResolveURL(ctx context.Context, client *util.HTTPClient, input string) (str
 		return "", fmt.Errorf("输入有误：无法从页面解析出目标视频")
 	}
 
-	return input, nil
+	// 上游 UrlResolver 对无法识别的输入直接抛错（ArgumentException「输入有误：无法识别的视频 URL 或 ID」）。
+	// 此前这里原样透传，非法输入会带着一个毫无线索的字符串流到解析层，报错信息与真实原因无关。
+	return "", fmt.Errorf("输入有误：无法识别的视频 URL 或 ID")
 }
 
 // normalizeAvDigits validates a pure-digit av string.
