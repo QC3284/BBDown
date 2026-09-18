@@ -304,6 +304,9 @@ func walkFields(data []byte, fn func(fieldNum, wireType int, val []byte, varint 
 		switch wireType {
 		case 0:
 			v, n := decodeVarint(data[pos:])
+			if n == 0 {
+				return
+			}
 			pos += n
 			if !fn(fieldNum, wireType, nil, v) {
 				return
@@ -318,7 +321,9 @@ func walkFields(data []byte, fn func(fieldNum, wireType int, val []byte, varint 
 			pos += 8
 		case 2:
 			length, n := decodeVarint(data[pos:])
-			if n == 0 || pos+n+int(length) > len(data) {
+			// Compare as uint64: converting a huge length to int wraps negative
+			// and used to slip past this bound check.
+			if n == 0 || length > uint64(len(data)-pos-n) {
 				return
 			}
 			pos += n

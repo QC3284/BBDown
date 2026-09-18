@@ -80,3 +80,46 @@ func TestGetVideoCodeType(t *testing.T) {
 		}
 	}
 }
+
+// TestWalkFieldsRejectsMalformedInput guards the protobuf walker against
+// attacker-controlled gRPC frames. A length-delimited field whose varint
+// length exceeds MaxInt64 used to wrap negative in the int conversion, slip
+// past the bounds check and slice out of range.
+func TestWalkFieldsRejectsMalformedInput(t *testing.T) {
+	noop := func(fieldNum, wireType int, val []byte, v uint64) bool { return true }
+
+	// field 1, wire type 2, length = 0xFFFFFFFFFFFFFFFF
+	overflowing := []byte{0x0a, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01}
+	called := 0
+	walkFields(overflowing, func(fieldNum, wireType int, val []byte, v uint64) bool {
+		called++
+		return true
+	})
+	if called != 0 {
+		t.Errorf("overflowing length: fn called %d times, want 0", called)
+	}
+
+	// A varint field with no terminating byte must return, not spin forever.
+	truncated := 0
+	walkFields([]byte{0x08, 0x80, 0x80}, func(fieldNum, wireType int, val []byte, v uint64) bool {
+		truncated++
+		return true
+	})
+	if truncated != 0 {
+		t.Errorf("truncated varint: fn called %d times, want 0", truncated)
+	}
+
+	// A well-formed field must still be delivered.
+	ok := 0
+	walkFields([]byte{0x0a, 0x02, 0xaa, 0xbb}, func(fieldNum, wireType int, val []byte, v uint64) bool {
+		ok++
+		if fieldNum != 1 || wireType != 2 || len(val) != 2 {
+			t.Errorf("unexpected field: num=%d wire=%d val=%v", fieldNum, wireType, val)
+		}
+		return true
+	})
+	if ok != 1 {
+		t.Errorf("well-formed field: fn called %d times, want 1", ok)
+	}
+	_ = noop
+}

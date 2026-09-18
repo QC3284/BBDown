@@ -24,6 +24,9 @@ func LoadWvdDevice(path string) (*WvdDevice, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read wvd file: %w", err)
 	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("WVD 文件为空: %s", filepath.Base(path))
+	}
 
 	// Format 1: "WVD" magic header (first 3 bytes)
 	if len(data) >= 4 && data[0] == 'W' && data[1] == 'V' && data[2] == 'D' {
@@ -59,10 +62,16 @@ func parseWvd(data []byte) (*WvdDevice, error) {
 	}
 
 	privateKeyLen := int(binary.BigEndian.Uint16(data[4:6]))
+	if privateKeyLen == 0 || 6+privateKeyLen+2 > len(data) {
+		return nil, fmt.Errorf("WVD 数据截断: 私钥长度 %d 超出可用 %d 字节", privateKeyLen, len(data)-6)
+	}
 	privateKeyBytes := data[6 : 6+privateKeyLen]
 	offset := 6 + privateKeyLen
 
 	clientIDLen := int(binary.BigEndian.Uint16(data[offset : offset+2]))
+	if offset+2+clientIDLen > len(data) {
+		return nil, fmt.Errorf("WVD 数据截断: client id 长度 %d 超出可用 %d 字节", clientIDLen, len(data)-offset-2)
+	}
 	clientIDBytes := data[offset+2 : offset+2+clientIDLen]
 
 	return createDevice(privateKeyBytes, clientIDBytes)

@@ -408,6 +408,20 @@ func decodeVarint(data []byte) (uint64, int) {
 	return 0, 0
 }
 
+// readDelimited decodes one length-delimited protobuf field body starting at
+// pos, returning the body and the next position. ok is false when the field is
+// malformed or runs past the end of data. These buffers come from the network
+// (license responses, gRPC frames, wvd files), so malformed input must not
+// panic: a huge uint64 length used to wrap negative in the int conversion and
+// slice out of range.
+func readDelimited(data []byte, pos int) (body []byte, next int, ok bool) {
+	length, n := decodeVarint(data[pos:])
+	if n == 0 || length > uint64(len(data)-pos-n) {
+		return nil, 0, false
+	}
+	return data[pos+n : pos+n+int(length)], pos + n + int(length), true
+}
+
 // parseSignedMessage extracts fields from a protobuf-encoded SignedMessage.
 func parseSignedMessage(data []byte) (msgType *int32, msg, sig, sessionKey, oem []byte) {
 	pos := 0
@@ -423,16 +437,20 @@ func parseSignedMessage(data []byte) (msgType *int32, msg, sig, sessionKey, oem 
 		switch wireType {
 		case 0: // varint
 			val, n := decodeVarint(data[pos:])
+			if n == 0 {
+				return
+			}
 			pos += n
 			if fieldNum == 1 {
 				v := int32(val)
 				msgType = &v
 			}
 		case 2: // length-delimited
-			length, n := decodeVarint(data[pos:])
-			pos += n
-			val := data[pos : pos+int(length)]
-			pos += int(length)
+			val, next, ok := readDelimited(data, pos)
+			if !ok {
+				return
+			}
+			pos = next
 			switch fieldNum {
 			case 2:
 				msg = val
@@ -462,10 +480,11 @@ func parseLicenseKeys(data []byte) []*drmproto.License_KeyContainer {
 		wireType := int(fieldKey & 0x7)
 
 		if wireType == 2 {
-			length, n := decodeVarint(data[pos:])
-			pos += n
-			subData := data[pos : pos+int(length)]
-			pos += int(length)
+			subData, next, ok := readDelimited(data, pos)
+			if !ok {
+				break
+			}
+			pos = next
 
 			if fieldNum == 3 { // key field
 				kc := parseKeyContainer(subData)
@@ -475,7 +494,13 @@ func parseLicenseKeys(data []byte) []*drmproto.License_KeyContainer {
 			}
 		} else if wireType == 0 {
 			_, n := decodeVarint(data[pos:])
+			if n == 0 {
+				break
+			}
 			pos += n
+		} else {
+			// Unknown wire type: without this the loop would never advance.
+			break
 		}
 	}
 	return keys
@@ -496,16 +521,20 @@ func parseKeyContainer(data []byte) *drmproto.License_KeyContainer {
 		switch wireType {
 		case 0:
 			val, n := decodeVarint(data[pos:])
+			if n == 0 {
+				return kc
+			}
 			pos += n
 			if fieldNum == 4 {
 				v := int32(val)
 				kc.Type = &v
 			}
 		case 2:
-			length, n := decodeVarint(data[pos:])
-			pos += n
-			val := data[pos : pos+int(length)]
-			pos += int(length)
+			val, next, ok := readDelimited(data, pos)
+			if !ok {
+				return kc
+			}
+			pos = next
 			switch fieldNum {
 			case 1:
 				kc.Id = val
@@ -514,6 +543,9 @@ func parseKeyContainer(data []byte) *drmproto.License_KeyContainer {
 			case 3:
 				kc.Key = val
 			}
+		default:
+			// Unknown wire type: without this the loop would never advance.
+			return kc
 		}
 	}
 	return kc
