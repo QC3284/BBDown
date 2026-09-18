@@ -191,6 +191,14 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 
 > **仍未处理**：§4.3 的 P1 队列（约 30 条）与 §4.5 的 5 项待决策。
 
+### 4.9 第四轮：P1 起步
+
+| 条目 | 改动 | 验证 |
+|---|---|---|
+| **D#2 配置合并 `cliHasUrl` 误判**（上游 RF-7，v1.6.14 已修） | `internal/config/parser.go`：URL 启发式原先**全量扫描 argv**，`--aria2c-proxy http://127.0.0.1:1080`、`--work-dir av123` 这类**选项值**会被当成目标 URL，进而丢弃 `BBDown.config` 里的真实 URL，表现为「缺少参数」。新增 `positionalTokens`（复用已有的 `aliasMap`/`boolFlags` 判断选项是否吃值，与 `IsSubCommandInvocation` 同一套规则），只对**位置参数**做 URL 判定 | 新增用例先红后绿：修复前合并结果把配置 URL 丢掉并留下悬空的 `--encoding-priority`；修复后保留配置 URL、且命令行真给出目标时仍然压制配置 |
+
+> **下一步（明确起点）**：A 方案 —— 把剩余 9 个上游夹具（`dash-reparse-pass1/2`、`durl-replay-first/empty`、`dolby-flac-audio`、`intl-code0/1`、`bangumi-*`）接上同一个回放基座。其中 `dash-reparse-pass1/2` 正是「免二压重发机制整体缺失」那条待决策，接上后决策就从纸面讨论变成一个有红测试支撑的具体选择。因此**该做在 DRM 取钥传 context 之前**：基座就位后，后续 P1 每条都能顺手带一条回归用例。
+
 ### 4.8 第三轮：横切设施与测试基座
 
 | 项 | 改动 | 验证 |
