@@ -509,23 +509,39 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			}
 		}
 
-		// Cover-only: download cover with output naming (matching C#: no early return)
+		// Cover-only: save the cover under the output name and stop right there.
+		// The previous code carried a "matching C#: no early return" comment, but
+		// upstream does return: "封面保存成功后必须立即 return，否则会继续执行下方
+		// 轨道解析、视频/音频下载与混流——用户只要封面却白白下载完整视频".
 		if w.Cfg.CoverOnly {
 			coverURL := pic
 			if coverURL == "" {
 				coverURL = page.Cover
 			}
-			if coverURL != "" {
-				coverExt := filepath.Ext(coverURL)
-				if idx := strings.Index(coverExt, "?"); idx >= 0 {
-					coverExt = coverExt[:idx]
-				}
-				newCover := strings.TrimSuffix(savePath, filepath.Ext(savePath)) + coverExt
-				os.MkdirAll(filepath.Dir(newCover), 0755)
-				if err := download.DownloadFile(ctx, coverURL, newCover, dlCfg); err != nil {
-					util.LogWarn("封面下载失败: %v", err)
-				}
+			if coverURL == "" {
+				// No cover resource: fail the page instead of reporting a zero-output
+				// success whose SavePath points at a file that was never created.
+				util.LogWarn("CoverOnly 模式无封面资源可下载")
+				return false
 			}
+			coverExt := filepath.Ext(coverURL)
+			if idx := strings.Index(coverExt, "?"); idx >= 0 {
+				coverExt = coverExt[:idx]
+			}
+			newCover := strings.TrimSuffix(savePath, filepath.Ext(savePath)) + coverExt
+			os.MkdirAll(filepath.Dir(newCover), 0755)
+			if err := download.DownloadFile(ctx, coverURL, newCover, dlCfg); err != nil {
+				util.LogWarn("封面下载失败: %v", err)
+				return false
+			}
+			// Only drop the work dir when nothing else is in it.
+			if entries, err := os.ReadDir(page.Aid); err == nil && len(entries) == 0 {
+				os.Remove(page.Aid)
+			}
+			if w.OnSaved != nil {
+				w.OnSaved(newCover)
+			}
+			return true
 		}
 
 		// Danmaku
