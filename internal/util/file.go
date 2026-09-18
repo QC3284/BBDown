@@ -31,6 +31,9 @@ func ExecutableDir() string {
 	return filepath.Dir(exe)
 }
 
+// maxFileNameRunes bounds a single path component produced from a template.
+const maxFileNameRunes = 100
+
 // GetValidFileName replaces invalid filename characters and handles reserved names.
 func GetValidFileName(input string, replacement string, filterSlash bool) string {
 	if replacement == "" {
@@ -55,6 +58,18 @@ func GetValidFileName(input string, replacement string, filterSlash bool) string
 	}
 
 	result := sb.String()
+
+	// Windows rejects a trailing dot or space ("video." / "video ") and silently
+	// drops it, so the file lands under an unexpected name (upstream trims both).
+	result = strings.TrimRight(result, " .")
+
+	// Cap the basename: template-built names such as "<videoTitle>_<dfn>_<fps>"
+	// can exceed the per-component budget on every filesystem, and a component
+	// cut mid-rune would produce invalid UTF-8.
+	result = truncateRunes(result, maxFileNameRunes)
+	if result == "" {
+		result = replacement
+	}
 
 	// Handle reserved names: Windows treats CON/PRN/AUX/NUL/COM1..9/LPT1..9 as
 	// reserved even WITH an extension (CON.txt), so match the basename too.
