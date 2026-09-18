@@ -265,6 +265,12 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 	}
 	defer resp.Body.Close()
 
+	// Calibrate the clock from the server's own Date header: WBI signing rejects
+	// a drifted clock, which would break every download on that machine.
+	if c.mayCalibrateClock(url) {
+		NoteServerDate(resp.Header.Get("Date"))
+	}
+
 	// Upstream accepts any 2xx (EnsureSuccessStatusCode).
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "", nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, MaskUrl(url))

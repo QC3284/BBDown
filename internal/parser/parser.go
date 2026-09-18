@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/QC3284/BBDown/internal/appapi"
 	"github.com/QC3284/BBDown/internal/config"
@@ -108,7 +107,9 @@ func VideoCodec(code string) string {
 }
 
 func timeStamp() string {
-	return strconv.FormatInt(time.Now().Unix(), 10)
+	// Corrected by the observed server clock offset: a drifted local clock makes
+	// the signed request look stale and the API rejects it.
+	return strconv.FormatInt(util.UnixNow(), 10)
 }
 
 // ExtractTracks parses video/audio track information from Bilibili playurl API.
