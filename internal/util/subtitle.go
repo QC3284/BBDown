@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/QC3284/BBDown/internal/entity"
 )
@@ -251,15 +253,31 @@ func ConvertSubFromJSON(jsonStr string) string {
 	return sb.String()
 }
 
-// FormatSubTime formats seconds to SRT timestamp.
+// FormatSubTime formats seconds to an SRT timestamp (上游 SubUtil.FormatTime 的同一契约)：
+//
+//   - NaN 与负数一律归 0（-1 秒曾被格式化成 00:00:01，符号被静默丢弃）；
+//   - 毫秒按四舍五入取整，不是截断：1.001 秒的差值 0.000999… 会被截成 0ms，
+//     与上游 TimeSpan.FromSeconds 的取整结果差 1ms；
+//   - 小时数可以超过 24（SRT 允许；用 hh 会丢掉整天数，超长视频的字幕整体跳回开头）；
+//   - 极大值先夹到 TimeSpan.MaxValue 量级，避免 double→int64 溢出让整个格式转换出错。
 func FormatSubTime(sec float64) string {
-	if sec < 0 {
+	if math.IsNaN(sec) || sec < 0 {
 		sec = 0
 	}
-	h := int(sec) / 3600
-	m := (int(sec) % 3600) / 60
-	s := int(sec) % 60
-	ms := int((sec - float64(int(sec))) * 1000)
+	// 上游先夹到 TimeSpan.MaxValue 量级再格式化；这里取略低一点的同量级常数，
+	// 保证下面的 tick 换算不越过 int64 上限。
+	const maxSeconds = 922337203685.477
+	if sec > maxSeconds {
+		sec = maxSeconds
+	}
+	// TimeSpan.FromSeconds 按 tick 四舍五入，而 Milliseconds 属性再截断到毫秒——
+	// 直接对毫秒四舍五入会在 1.001s 这类取值上多 1ms（0.000999… 进位）。
+	ticks := int64(sec*1e7 + 0.5)
+	totalMS := ticks / 10000
+	h := totalMS / 3600000
+	m := (totalMS % 3600000) / 60000
+	s := (totalMS % 60000) / 1000
+	ms := totalMS % 1000
 	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, s, ms)
 }
 
@@ -270,7 +288,8 @@ func SanitizeSRT(content string) string {
 	lines := strings.Split(content, "\n")
 	var kept []string
 	for _, l := range lines {
-		l = strings.TrimRight(l, " \t")
+		// 上游用 TrimEnd()（Unicode 空白，含全角空格），不是只裁 ASCII 空格/制表符。
+		l = strings.TrimRightFunc(l, unicode.IsSpace)
 		if len(l) == 0 {
 			continue
 		}
