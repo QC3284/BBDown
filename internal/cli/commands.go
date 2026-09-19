@@ -257,7 +257,7 @@ var subCmd = &cobra.Command{
 var subAddCmd = &cobra.Command{
 	Use:   "add [target]",
 	Short: "添加订阅",
-	Args:  cobra.MinimumNArgs(1),
+	Args:  usageArgs(cobra.MinimumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := substore.Add(args[0], optSubName); err != nil {
 			return err
@@ -290,7 +290,7 @@ var subListCmd = &cobra.Command{
 var subRemoveCmd = &cobra.Command{
 	Use:   "remove [target]",
 	Short: "移除订阅",
-	Args:  cobra.MinimumNArgs(1),
+	Args:  usageArgs(cobra.MinimumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := substore.Remove(args[0]); err != nil {
 			return err

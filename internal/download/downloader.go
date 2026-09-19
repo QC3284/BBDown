@@ -276,9 +276,10 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 	for attempt := 0; attempt < cfg.retryCount(); attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(attempt) * cfg.retryDelay()
-			// The error belongs in the log: without it a failing retry ladder is
-			// undiagnosable from the output alone.
-			util.LogWarn("下载异常(%v), %v 后重试... (%d/%d)", lastErr, backoff, attempt, cfg.retryCount())
+			// 轨道级重试（上游 BBDownDownloadUtil.DownloadFileCoreAsync）记 Debug：
+			// 终端默认只该看到页面级那条 Warn。两级此前用同一句话，日志读起来像
+			// 「3×3=9 次连续重试」——用户实测就是这么被绕进去的。
+			util.LogDebug("下载失败(第%d次重试, %dms后): %v", attempt, backoff.Milliseconds(), lastErr)
 			if !sleepCtx(ctx, backoff) {
 				return ctx.Err()
 			}
@@ -600,6 +601,8 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 				onProgress(0) // 分片从头重下，聚合总量随之回退
 			}
 			backoff := time.Duration(attempt) * cfg.retryDelay()
+			// 上游多线程分片重试用同一口径的 Debug（分段下载失败(第N次重试, Xms后)）。
+			util.LogDebug("分段下载失败(第%d次重试, %dms后): %v", attempt, backoff.Milliseconds(), lastErr)
 			if !sleepCtx(ctx, backoff) {
 				return 0, ctx.Err()
 			}

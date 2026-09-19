@@ -364,7 +364,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				util.LogError("P%d 解析失败（重试%d次后）: %v", page.Index, attempt, err)
 				return false
 			}
-			util.LogWarn("解析异常(%v), %v 后重试... (%d/%d)", err, retryDelay, attempt, pageRetryLimit)
+			logPageRetry(err, retryDelay)
 			select {
 			case <-ctx.Done():
 				return false
@@ -754,7 +754,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					util.LogError("P%d 视频下载失败: %v", page.Index, err)
 					return false
 				}
-				util.LogWarn("下载异常(%v), %v 后重试... (%d/%d)", err, retryDelay, attempt, pageRetryLimit)
+				logPageRetry(err, retryDelay)
 				if !sleepCtxLocal(ctx, retryDelay) {
 					return false
 				}
@@ -773,7 +773,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					util.LogError("P%d 音频下载失败: %v", page.Index, err)
 					return false
 				}
-				util.LogWarn("下载异常(%v), %v 后重试... (%d/%d)", err, retryDelay, attempt, pageRetryLimit)
+				logPageRetry(err, retryDelay)
 				if !sleepCtxLocal(ctx, retryDelay) {
 					return false
 				}
@@ -1062,6 +1062,14 @@ func sleepCtxLocal(ctx context.Context, d time.Duration) bool {
 	case <-time.After(d):
 		return true
 	}
+}
+
+// logPageRetry 打印页面级重试（上游 DownloadPageAsync 的两行：先给原因，再给
+// 「X 秒后将进行自动重试...」）。轨道级重试是另一条独立阶梯、按上游口径记 Debug——
+// 两级此前用同一句话同一个级别，日志读起来像「3×3=9 次连续重试」。
+func logPageRetry(err error, delay time.Duration) {
+	util.LogError("[%T] %v", err, err)
+	util.LogWarn("下载出现异常, %v 秒后将进行自动重试...", strconv.FormatFloat(delay.Seconds(), 'f', -1, 64))
 }
 
 // getStr / getInt are small JSON helpers for map[string]interface{} data.

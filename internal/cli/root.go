@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -121,6 +122,18 @@ Examples:
 	Version: "1.6.19-go.11",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
+
+	SilenceUsage:  true,
+	SilenceErrors: true,
+
+	// 上游 Spectre.Console.Cli 只为「参数解析失败」打印帮助文本，运行期异常走
+	// SetExceptionHandler——只打异常消息。cobra 默认对任何错误都打 usage 与
+	// "Error: xxx"，这里全部关掉，改由 Execute/reportError 按上游语义分类打印。
+}
+
+func init() {
+	// 未知标志、标志取值非法都走这里：标记成用法错误，这是唯一需要附带 usage 的一类。
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageError{err} })
 }
 
 // Execute adds all child commands and runs root.
@@ -143,9 +156,42 @@ func Execute() {
 			util.LogWarn("Force Exit...")
 			os.Exit(0)
 		}
-		fmt.Fprintln(os.Stderr, err)
+		reportError(err, os.Stderr)
 		os.Exit(1)
 	}
+}
+
+// usageError 标记「参数/用法错误」：只有这类错误才连带打印 usage。
+//
+// 上游用 Spectre.Console.Cli：解析参数失败时给帮助文本，运行期异常走
+// SetExceptionHandler——只打印异常消息与一句升级提示，绝不打印帮助。
+type usageError struct{ err error }
+
+func (e usageError) Error() string { return e.err.Error() }
+
+func (e usageError) Unwrap() error { return e.err }
+
+// usageArgs 把 cobra 的参数校验器包成 usageError：参数个数不对与标志解析失败同属用法错误。
+func usageArgs(v cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := v(cmd, args); err != nil {
+			return usageError{err}
+		}
+		return nil
+	}
+}
+
+// reportError 按上游 SetExceptionHandler 的语义打印失败：消息 + 一句升级提示；
+// 只有用法错误才附 usage（Spectre 在解析失败时打印帮助文本）。失败细节（堆栈）不进
+// 终端——上游同样只把它写进日志文件。
+func reportError(err error, w io.Writer) {
+	fmt.Fprintln(w, err)
+	var ue usageError
+	if errors.As(err, &ue) {
+		fmt.Fprintln(w, rootCmd.UsageString())
+		return
+	}
+	fmt.Fprintln(w, "请尝试升级到最新版本后重试!")
 }
 
 // silenceOnCancel 在错误是用户 Ctrl+C 取消时，屏蔽 cobra 自带的 "Error: ..."
