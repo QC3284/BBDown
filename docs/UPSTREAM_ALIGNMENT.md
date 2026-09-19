@@ -494,6 +494,22 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 |---|---|
 | `DownloadPipelineTests` | **一处整块缺失**：上游 `Parser.cs` 会读 `data.dubbing_info`（`background_audio` 与 `role_audio_list`，门控为 **APP API + 番剧**），本仓**完全没有这段解析**——于是 `ParsedResult.BackgroundAudioTracks` / `RoleAudioList` 永远是空的，工作流里那两段下载循环（背景音轨、配音）等同于死代码。现补上同名提取（含 `backup_url` 选择、带宽 /1000、`audio_id` 净化后拼路径），并为**配音**接上下载与混流物料（`ClampRoleAudioIndex` 按 role 自己的列表夹取，越界钳末位、空列表跳过——上游同款表已接入）。`entity.AudioMaterialInfo` 增加 `AudioID` 字段承载该 role 的 `audio_id`。 |
 
+### 4.30 第二十六轮（目标轮 10）：收尾盘点 · 61 个上游测试文件全部定性
+
+| 上游测试文件 | 定性 |
+|---|---|
+| `BBDownLoginUtilMergeTests` | 无差异（**已接**）：新版协议 Set-Cookie 才是真凭据来源，本仓 `MergeLoginCookies` 的合并/属性剥离/`;` 连接/名称归一语义一致 |
+| `WidevineCryptoTests` | 无差异（**已接**）：AES-CMAC 用 RFC 4493 四组已知答案向量 + 子密钥 L + PKCS7 往返/畸形填充 |
+| `ProgramArgumentTests` | 已覆盖：`NormalizeCliArgs` 的 `-help`/`-?`/`-version` 映射由 `internal/cli/normalize_test.go` 逐字钉住 |
+| `DownloadPathLockTests` | 已覆盖：`pathlock_test.go` / `pagelock_test.go` / `deadlock_test.go`（含用户报的 Ctrl+C 死锁） |
+| `ParserTests` | 已覆盖：`fixture_test.go` 回放 15 个上游夹具 + `upstream_playlimit_test.go` |
+| `ServeApiHttpTests` | 已覆盖：`internal/server` 10 个测试文件（guard/token/authguard/proxy/querylimit/body/tasks/shutdown/cancel） |
+| `WidevineCdmTests` | 不适用：端到端需要真实 `device.wvd` 与 B 站 DRM 服务器；错误路径已由 `upstream_wvd_test.go`、`upstream_sslpolicy_test.go` 覆盖 |
+| `ConfigIsolationTests`、`AotCliBindingTests`、`AssemblyInfo`、`FakeBilibiliApiServer` | 不适用：分别是 C# `AsyncLocal` 隔离、AOT 反射绑定、程序集元数据、C# 假服务器夹具——Go 侧无对应机制或已用 httptest 替代 |
+
+**总账**：上游 `BBDown.Tests` 61 个文件——**接入差分 40 个**（`internal/*/upstream_*_test.go` 20 个文件承载）、
+**同契约已覆盖 6 个**、**确认不适用 7 个**、其余为夹具/元数据。
+目标是把这些文件当规格逐条对照，因此「无差异」与「已覆盖」同样是结果：它们把『本来就对、但没人守』的地方变成了有守卫的。
 **方法论收获**：这是本目标里最深的一处——不是某个分支写错，而是**整条数据链断在解析层**：
 下载、混流、封面/章节清理都写好了，上游也给这些循环写了用例，但我们从来没读过那个 JSON 节点。
 差分表之所以能撞到它，是因为上游用例的名字（`ClampRoleAudioIndex`）指向了一个我们根本没有的函数。
