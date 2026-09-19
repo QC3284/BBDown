@@ -8,6 +8,26 @@
 上游（aliveranme/BBDown）的同名版本条目仍是行为的权威描述；本文件只记录 Go 重写侧
 **相对上游的落地情况**。逐条对账基线与判定见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md)。
 
+## [1.6.19-go.10] - 2026-09-19
+
+补丁版本：本轮差分撞出并补齐**整条缺失的数据链**——背景音频与角色配音。
+
+### 新增
+
+- **解析 `dubbing_info` 并下载配音轨**：上游 `Parser.cs` 会读 `data.dubbing_info` 的
+  `background_audio` 与 `role_audio_list`（门控为 APP API + 番剧），本仓此前**完全没有这段解析**
+  ——两个列表永远为空，工作流里「背景音轨下载」「配音下载」两段循环等同于死代码，有配音的稿件
+  产物里会缺背景音轨与全部配音轨。现补齐：解析（含 `backup_url` 选择、带宽 /1000、`audio_id`
+  净化后按上游规则拼 `<aid>/<aid>.<cid>.<seg>.m4a`）、下载、混流物料。
+- 配音的下标按每个 role 自己的音频列表夹取（上游 `ClampRoleAudioIndex`：越界钳末位、空列表跳过），
+  `entity.AudioMaterialInfo` 增加 `AudioID` 承载该 role 的 `audio_id`。
+
+### 说明
+
+- 本轮同时接入 `BBDownLoginUtilMergeTests`（新版协议 Set-Cookie 合并）与 `WidevineCryptoTests`
+  （AES-CMAC 的 RFC 4493 已知答案向量、子密钥 L、PKCS7 往返与畸形填充）。
+- 上游 `BBDown.Tests` 61 个测试文件至此全部定性：接入差分 40 个、同契约已覆盖 6 个、
+  不适用 7 个（C# `AsyncLocal`/AOT 反射/程序集元数据/假服务器夹具等），其余为夹具与元数据。
 ## [1.6.19-go.9] - 2026-09-19
 
 补丁版本：差分续跑（目标轮 5~8）撞出的六处不一致，含两处「整块能力缺失」。
