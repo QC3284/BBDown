@@ -497,6 +497,15 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		if w.Cfg.ForceReplaceHost && w.Cfg.UposHost == "" {
 			w.Cfg.UposHost = backupHost
 		}
+		// 先记下替换前的原地址：替换后的目标返回 404 时下载器用它回退一次
+		// （本仓有意差异，见 docs/UPSTREAM_ALIGNMENT.md §4.33）。
+		var origVideoURL, origAudioURL string
+		if selectedVideo != nil {
+			origVideoURL = selectedVideo.BaseURL
+		}
+		if selectedAudio != nil {
+			origAudioURL = selectedAudio.BaseURL
+		}
 		handlePcdn(&w.Cfg, selectedVideo, selectedAudio)
 
 		util.Log("已选择的流:")
@@ -745,7 +754,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			videoPath = filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.mp4", page.Aid, page.Index, page.Cid))
 			os.MkdirAll(page.Aid, 0755)
 			util.Log("开始下载P%d视频...", page.Index)
-			if err := download.DownloadFile(ctx, selectedVideo.BaseURL, videoPath, dlCfg); err != nil {
+			if err := download.DownloadFile(ctx, selectedVideo.BaseURL, videoPath, withFallback(dlCfg, selectedVideo.BaseURL, origVideoURL)); err != nil {
 				// Per-request retries already happened inside the downloader;
 				// the remaining page-level retry re-parses playurl and retries
 				// the whole page (upstream retries the page body up to 3 times).
@@ -767,7 +776,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			audioPath = filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.m4a", page.Aid, page.Index, page.Cid))
 			os.MkdirAll(page.Aid, 0755)
 			util.Log("开始下载P%d音频...", page.Index)
-			if err := download.DownloadFile(ctx, selectedAudio.BaseURL, audioPath, dlCfg); err != nil {
+			if err := download.DownloadFile(ctx, selectedAudio.BaseURL, audioPath, withFallback(dlCfg, selectedAudio.BaseURL, origAudioURL)); err != nil {
 				attempt := retry + 1
 				if attempt >= pageRetryLimit {
 					util.LogError("P%d 音频下载失败: %v", page.Index, err)
@@ -1062,6 +1071,16 @@ func sleepCtxLocal(ctx context.Context, d time.Duration) bool {
 	case <-time.After(d):
 		return true
 	}
+}
+
+// withFallback 给这次下载附上「host 被替换前的原地址」：替换后的目标返回 404 时，下载器
+// 改用它重试（本仓有意差异，见 docs/UPSTREAM_ALIGNMENT.md §4.33）。地址没被替换时不附，
+// 免得同一个地址被白白重试一次。
+func withFallback(cfg download.DownloadConfig, current, original string) download.DownloadConfig {
+	if original != "" && original != current {
+		cfg.FallbackURL = original
+	}
+	return cfg
 }
 
 // logPageRetry 打印页面级重试（上游 DownloadPageAsync 的两行：先给原因，再给

@@ -3,6 +3,7 @@ package download
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,31 @@ type DownloadConfig struct {
 	// UserAgent 留空时取 HTTPClient 的 UA（显式 --user-agent 或进程级随机默认）。
 	UserAgent string
 	Client    *util.HTTPClient
+	// FallbackURL 是 host 被强制替换（--force-replace-host / --upos-host）之前的原地址：
+	// 替换后的目标返回 404 时改用它重试。镜像不保证覆盖所有对象，而 404 是确定性的——
+	// 重试同一个地址只会再 404 几次，换回原站才有意义（本仓有意差异，§4.33）。
+	FallbackURL string
+}
+
+// httpStatusError 携带 HTTP 状态码：回退原地址只针对 404，字符串匹配既脆又会被脱敏后的
+// URL 干扰。Error() 文本与改前逐字相同，日志与既有用例不受影响。
+type httpStatusError struct {
+	code int
+	msg  string
+}
+
+func (e *httpStatusError) Error() string { return e.msg }
+
+// fallbackURL 在「404 且配置了替换前原地址」时给出新目标，否则返回空串。
+func (c DownloadConfig) fallbackURL(cur string, err error) string {
+	var se *httpStatusError
+	if !errors.As(err, &se) || se.code != http.StatusNotFound {
+		return ""
+	}
+	if c.FallbackURL == "" || cur == c.FallbackURL {
+		return ""
+	}
+	return c.FallbackURL
 }
 
 // userAgent 返回本次下载使用的 UA。
@@ -279,6 +305,8 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 	}
 
 	lastErr := fmt.Errorf("download failed")
+	// activeURL 只在「目标 404 且配置了替换前原地址」时切回原站（本仓有意差异，§4.33）。
+	activeURL := url
 	for attempt := 0; attempt < cfg.retryCount(); attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(attempt) * cfg.retryDelay()
@@ -325,11 +353,11 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 
 		err := func() error {
 			client := cfg.Client.DownloadClient()
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, activeURL, nil)
 			if err != nil {
 				return err
 			}
-			if needsBilibiliReferer(url) {
+			if needsBilibiliReferer(activeURL) {
 				req.Header.Set("Referer", "https://www.bilibili.com")
 			}
 			req.Header.Set("User-Agent", cfg.userAgent())
@@ -369,7 +397,7 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 					return err
 				}
 			default:
-				return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+				return &httpStatusError{code: resp.StatusCode, msg: fmt.Sprintf("download failed: HTTP %d", resp.StatusCode)}
 			}
 
 			out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY, 0o644)
@@ -398,6 +426,12 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 			lastErr = err
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			// 404 是确定性的：镜像没有这个对象时，重试同一个地址只会再 404 几次；
+			// 换回替换前的原地址才有意义（本仓有意差异，见 §4.33）。
+			if next := cfg.fallbackURL(activeURL, err); next != "" {
+				util.LogWarn("目标返回 404（镜像可能未覆盖该对象），改用替换前的地址重试: %s", util.MaskUrl(next))
+				activeURL = next
 			}
 			continue
 		}
@@ -600,6 +634,8 @@ func clipPath(dest string, idx int) string {
 func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cfg DownloadConfig, onProgress func(int64)) (int64, error) {
 	tmpPath := clipPath(destPath, clip.idx)
 
+	// activeURL 只在「分片 404 且配置了替换前原地址」时切回原站（本仓有意差异，§4.33）。
+	activeURL := url
 	var lastErr error
 	for attempt := 0; attempt < cfg.retryCount(); attempt++ {
 		if attempt > 0 {
@@ -616,11 +652,11 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 
 		n, err := func() (int64, error) {
 			client := cfg.Client.DownloadClient()
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, activeURL, nil)
 			if err != nil {
 				return 0, err
 			}
-			if needsBilibiliReferer(url) {
+			if needsBilibiliReferer(activeURL) {
 				req.Header.Set("Referer", "https://www.bilibili.com")
 			}
 			req.Header.Set("User-Agent", cfg.userAgent())
@@ -644,7 +680,7 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 				// Server sent the full body: it does not support ranges.
 				return 0, ErrRangeNotSupported
 			default:
-				return 0, fmt.Errorf("range request failed: HTTP %d", resp.StatusCode)
+				return 0, &httpStatusError{code: resp.StatusCode, msg: fmt.Sprintf("range request failed: HTTP %d", resp.StatusCode)}
 			}
 
 			out, err := os.Create(tmpPath)
@@ -666,6 +702,11 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 		}
 		lastErr = err
 		os.Remove(tmpPath)
+		// 分片 404 同样换回替换前的原地址（镜像覆盖不全时会整片 404）。
+		if next := cfg.fallbackURL(activeURL, err); next != "" {
+			util.LogWarn("分片返回 404（镜像可能未覆盖该对象），改用替换前的地址重试: %s", util.MaskUrl(next))
+			activeURL = next
+		}
 	}
 	return 0, lastErr
 }
