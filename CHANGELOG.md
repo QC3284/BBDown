@@ -8,6 +8,32 @@
 上游（aliveranme/BBDown）的同名版本条目仍是行为的权威描述；本文件只记录 Go 重写侧
 **相对上游的落地情况**。逐条对账基线与判定见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md)。
 
+## [1.6.19-go.12] - 2026-09-19
+
+补丁版本：两处**用户可见输出**的对齐（都是用户实测报出来的），判定与证据见
+[docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4.32。
+
+### 修复
+
+- **运行期失败不再打印帮助**：上游 Spectre.Console.Cli 只在参数解析失败时给帮助文本，
+  运行期异常走 `SetExceptionHandler`——只有异常消息 + 一句升级提示。本仓此前用的是 cobra 的默认
+  行为：任何 `RunE` 错误都打印整篇 usage，且 `Execute()` 又把错误打印了一遍——`BBDown notaurl`
+  的 stderr 有 95 行，其中 90 行是帮助、错误消息出现两次。现在按 `usageError` 分类：未知标志
+  （`SetFlagErrorFunc`）与参数个数（`usageArgs`）仍给出帮助，其余只打印消息与升级提示。
+- **两级重试的日志分级**：页面级（`--retry-count` 次）与轨道级（同一取值）是两条独立阶梯，
+  合计 3×3 = 9 次请求——这与上游一致（实测 GET = 9 / HEAD = 3）。但两级此前用**同一句话、同一个
+  级别**，读起来像一次 9 连试。现按上游拆开：轨道级记 `LogDebug(下载失败(第N次重试, Xms后))`
+  （多线程分片同口径，此前完全没有日志），页面级记 `LogError([Type] msg)` +
+  `LogWarn(下载出现异常, X 秒后将进行自动重试...)`。
+
+### 测试
+
+- 新增 `internal/cli/error_report_test.go`：运行期错误不带 usage、用法错误带 usage、未知标志与
+  缺参数被归类为用法错误，且 cobra 不再自行打印（`Silence*` 的守卫）。
+- 新增 `internal/workflow/retry_ladder_test.go`：用恒 404 的假 CDN 计数，钉住 GET = 9 / HEAD = 3
+  与「默认级别下重试日志恰好 2 条」。
+- 变异验证：撤掉 `Silence*` → 红；`reportError` 无条件打 usage → 红；撤掉标志错误分类 → 红；
+  页面级 3→2 → GET=6 红；轨道级退回 Warn → 8 条日志红。
 ## [1.6.19-go.11] - 2026-09-19
 
 补丁版本：用户要求的**特性**——进度条改为实时。这一条**有意偏离上游**（上游是 1/8 秒定时器驱动），

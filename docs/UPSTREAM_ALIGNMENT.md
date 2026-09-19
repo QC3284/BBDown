@@ -590,5 +590,48 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 改成 1ms（消费者能立刻跟上、缓冲不积压）之后，帧数上限才只能由 `minFrameInterval` 保证。
 **变异验证要用「被撤掉的那一层真正负责的场景」，否则测得再绿也只是测了别人的兜底。**
 
+### 4.32 第二十八轮：失败时的用户可见输出（用户报「非命令错误也会弹出帮助」+「重试 3×3=9 次」）
+
+#### 4.32.1 运行期失败不再打印帮助
+
+上游用 Spectre.Console.Cli：**只有参数解析失败**才打印帮助文本；运行期异常走
+`Program.cs` 的 `SetExceptionHandler`——打印异常消息 + 一句「请尝试升级到最新版本后重试!」，
+返回 1，**绝不打印帮助**。本仓用 cobra，默认对**任何** `RunE` 错误都打印 `Error: xxx` 与整篇 usage，
+而且 `Execute()` 自己又把错误打印了一遍。
+
+用户实测（`BBDown notaurl`）：stderr **95 行**，其中 90 行是帮助文本，错误消息出现两次。
+
+| 项 | 上游 | 本仓（修复前） | 修复后 |
+|---|---|---|---|
+| 运行期失败 | 消息 + 升级提示，无帮助 | 消息 ×2 + 整篇 usage | 消息 + 升级提示（2 行，exit 1） |
+| 参数/用法失败 | 错误 + 帮助文本 | 错误 + usage（同） | 错误 + usage（不变） |
+
+实现：`rootCmd.SilenceUsage/SilenceErrors = true`（关掉 cobra 的自动输出），`Execute()` 统一走
+`reportError`：用 `usageError` 区分两类错误——未知标志经 `SetFlagErrorFunc`、参数个数经 `usageArgs`
+包装成用法错误（唯一附带 usage 的一类），其余按上游打印消息 + 升级提示。
+
+#### 4.32.2 两级重试的日志分级
+
+上游对同一个失败轨道就是**两级阶梯**：页面级 `DownloadPageAsync`（`while (retryCount < maxRetry)`，
+`maxRetry = --retry-count`）× 轨道级 `DownloadFileCoreAsync`（`while (retry < maxRetry)`，
+`MaxRetryCount` 同源），合计 3×3 = 9 次请求。本仓结构相同，实测
+（`internal/workflow/retry_ladder_test.go` 用恒 404 的假 CDN 计数）：**GET = 9，HEAD = 3**。
+
+但两级此前的日志**文案与级别完全相同**（都是 `下载异常(err), X 后重试... (n/3)` 的 Warn），
+读起来像一次 9 连试——用户就是这么被绕进去的。上游是分开的：
+
+| 级别 | 上游 | 本仓（修复后） |
+|---|---|---|
+| 轨道级（单线程） | `LogDebug(下载失败(第N次重试, Xms后): msg)` | 同 |
+| 轨道级（多线程分片） | `LogDebug(分段下载失败(第N次重试, Xms后): msg)` | 同（此前无日志） |
+| 页面级 | `LogError([Type] msg)` + `LogWarn(下载出现异常, X 秒后将进行自动重试...)` | 同 |
+
+**测试**：`TestRetryLadderAttemptsMatchUpstream` 同时钉住「GET = 9 / HEAD = 3」与「默认级别下重试日志
+恰好 2 条」。变异验证：页面级 3→2 → GET=6，红；轨道级退回 Warn → 8 条日志，红。
+
+**方法论收获**：这次两个问题都出在「输出层」而不是功能层——下载、重试、帮助文本各自都对，
+但**同一句话说给两个不同的对象**（两级重试）与**一次失败说两遍**（cobra + Execute）把用户绕进去了。
+对齐检查不能只看「有没有这条输出」，还要看「这条输出在什么级别、说几遍」。
+
 
 
