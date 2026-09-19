@@ -554,5 +554,41 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 实际是**一次渲染 + 一次竞态**：末帧残影被日志压掉左半边，紧接着又画出最后一帧。
 定位靠的是把终端里的回车切开逐帧还原，而不是盯着代码猜。
 
+### 4.31 第二十七轮：进度条改为实时（用户要求的新特性 · **有意偏离上游**）
+
+> 用户请求：「新特性：进度条改为实时」。上游的重绘**完全由定时器驱动**——`ProgressBar.cs` 的
+> `animationInterval = TimeSpan.FromSeconds(1.0 / 8)`，`TimerHandler` 画完再 `ResetTimer()` 续一次；
+> 本仓此前同样是 `time.NewTicker(125 * time.Millisecond)`。这一条与「行为对齐」相反，
+> 属于用户明确要求的功能差异，按 §7 维护约定登记在此。
+
+| 项 | 上游 / 本仓（改前） | 本仓（改后） |
+|---|---|---|
+| 重绘触发 | 125ms 定时器，每帧无条件画（与有没有新数据无关） | 数据到达即重绘：多线程 `countingWriter` 每 32KB 块、单线程每次 `Read` 打点 |
+| 帧率上限 | 8 帧/秒 | `minFrameInterval = 16ms`（≈60fps）节流，窗口内的信号合并 |
+| 停滞时（无数据） | 定时器照转，转圈继续动 | `idleHeartbeat = 125ms` 心跳补帧，只推进转圈——保留上游这一可见表现 |
+| 首帧 | 构造后等第一个 tick | 进入渲染循环立即画（下载一开始进度条就在） |
+| 字节计数 | 已实时（`ProgressAggregator` 分片累计差值） | 不变 |
+| 收尾 | `Dispose` → 整行擦除，先于后续日志 | 不变（`done` → `line.clear()` → `stopped`/`finished`） |
+| 速度显示 | 每 1 秒结算一次的平均速度 | 不变（未采纳「瞬时速度」，用户选了 A 方案） |
+
+**实现**：`internal/download/pacer.go` 新增 `progressPacer`（非阻塞、缓冲 1 的合并信号）与
+`runProgressLoop`（首帧 + 事件帧 + 节流 + 心跳 + 收尾），两条下载路径共用。`Signal()` 从下载协程
+同步调用，必须非阻塞，否则会把下载拖慢；零值 pacer 退化为「不打点」而不是崩溃。
+
+**测试**（五处变异均验证「撤掉实现即变红」）：
+
+| 用例 | 钉住的行为 | 变异 → 红 |
+|---|---|---|
+| `TestProgressLoopDrawsOnDataNotOnTimer` | 无数据不出帧、数据一到立刻出帧 | 退回 125ms 定时器 → 安静窗口内画了 4 帧 |
+| `TestProgressLoopThrottlesFrameRate` | 1ms 间隔的 100 个信号 ≤ `历时/16ms+3` 帧 | 信号到达即画 → 100 帧 |
+| `TestProgressLoopHeartbeatKeepsSpinnerAlive` | 停滞时转圈仍在转 | 关掉心跳 → 500ms 只有 1 帧 |
+| `TestProgressReaderDrawsOnDataArrival` | 单线程路径帧跟着数据走（10% → 20%） | 删 `Read` 里的 `Signal()` → 只有 10.00% |
+| `TestMultiThreadDownloadSignalsRendererOnDataArrival` | 多线程路径数据到达唤醒渲染器 | 删 `reportProgress` 里的 `Signal()` → 全程没唤醒 |
+
+**方法论收获**：第一版节流用例只发了 200 次连续信号，撤掉节流**仍然全绿**——因为 `Signal()` 的
+发送侧合并（缓冲 1 + 非阻塞丢弃）已经替节流兜了底，那个用例实际测的是合并，不是帧率。把信号间隔
+改成 1ms（消费者能立刻跟上、缓冲不积压）之后，帧数上限才只能由 `minFrameInterval` 保证。
+**变异验证要用「被撤掉的那一层真正负责的场景」，否则测得再绿也只是测了别人的兜底。**
+
 
 

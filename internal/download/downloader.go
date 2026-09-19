@@ -461,13 +461,18 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 	// 进度条以分片数为台阶跳变。
 	aggregate := newProgressAggregator(len(clips))
 	var totalBytes atomic.Int64
+	pacer := newProgressPacer()
 	reportProgress := func(idx int) func(int64) {
-		return func(cumulative int64) { totalBytes.Store(aggregate.Report(idx, cumulative)) }
+		return func(cumulative int64) {
+			totalBytes.Store(aggregate.Report(idx, cumulative))
+			// 数据到达即打点（合并式、不阻塞）：进度帧不再等 125ms 定时器（见 pacer.go）。
+			pacer.Signal()
+		}
 	}
 
 	progressDone := make(chan struct{})
 	progressStopped := make(chan struct{})
-	go renderProgressBar(&totalBytes, size, progressDone, progressStopped)
+	go renderProgressBar(&totalBytes, size, pacer, progressDone, progressStopped)
 
 	sem := make(chan struct{}, maxConcurrentClips())
 	var wg sync.WaitGroup
@@ -664,14 +669,12 @@ var renderProgressBar = renderAggregateProgress
 //
 // 返回前关闭 stopped：调用方据此保证「进度行已擦干净」先于后续日志（上游用 using
 // 作用域表达同一件事——ProgressBar 的 Dispose 必须在合并日志之前完成）。
-func renderAggregateProgress(counter *atomic.Int64, total int64, done <-chan struct{}, stopped chan<- struct{}) {
+func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressPacer, done <-chan struct{}, stopped chan<- struct{}) {
 	defer close(stopped)
 	line := newProgressLine()
 	if !line.enabled {
 		return
 	}
-	ticker := time.NewTicker(125 * time.Millisecond)
-	defer ticker.Stop()
 	chars := "|/-\\"
 	animIdx := 0
 	lastBytes := int64(0)
@@ -698,17 +701,9 @@ func renderAggregateProgress(counter *atomic.Int64, total int64, done <-chan str
 		animIdx++
 	}
 
-	// 立即绘制首帧；结束时擦掉整行（上游 ProgressBar.Dispose 的 UpdateText(string.Empty)）。
-	render()
-	for {
-		select {
-		case <-done:
-			line.clear()
-			return
-		case <-ticker.C:
-			render()
-		}
-	}
+	// 首帧、节流、静默心跳与收尾擦行统一在 runProgressLoop 里（见 pacer.go）：
+	// 上游此处是 125ms 定时器，本仓按「数据到达即重绘」的节奏驱动。
+	runProgressLoop(pacer.Signals(), done, true, line, render)
 }
 
 // isTerminalOut 是变量而非函数：用例需要在不依赖真实终端的前提下驱动进度条绘制。

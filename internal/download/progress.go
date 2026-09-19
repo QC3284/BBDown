@@ -19,13 +19,15 @@ const (
 
 // progressReader wraps an io.Reader and shows a progress bar.
 type progressReader struct {
-	reader     io.Reader
-	total      int64
-	current    int64
-	lastBytes  int64
-	lastTime   time.Time
-	speed      string
-	started    int32
+	reader    io.Reader
+	total     int64
+	current   int64
+	lastBytes int64
+	lastTime  time.Time
+	speed     string
+	started   int32
+	// pacer 由数据路径（Read）打点、渲染协程消费：重绘不再等定时器（见 pacer.go）。
+	pacer      progressPacer
 	done       chan struct{}
 	finished   chan struct{}
 	closeOnce  sync.Once
@@ -38,6 +40,7 @@ func newProgressReader(r io.Reader, total int64) *progressReader {
 		total:      total,
 		lastTime:   time.Now(),
 		isTerminal: term.IsTerminal(int(os.Stdout.Fd())),
+		pacer:      newProgressPacer(),
 		done:       make(chan struct{}),
 		finished:   make(chan struct{}),
 	}
@@ -51,6 +54,8 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 		if pr.isTerminal && atomic.CompareAndSwapInt32(&pr.started, 0, 1) {
 			go pr.renderLoop()
 		}
+		// 数据到达即打点（合并式、不阻塞）：进度帧由数据驱动，不再等 125ms 定时器。
+		pr.pacer.Signal()
 	}
 	return n, err
 }
@@ -72,8 +77,6 @@ func (pr *progressReader) renderLoop() {
 		return
 	}
 	line := newProgressLine()
-	ticker := time.NewTicker(125 * time.Millisecond)
-	defer ticker.Stop()
 	animIdx := 0
 
 	render := func() {
@@ -105,18 +108,9 @@ func (pr *progressReader) renderLoop() {
 		line.draw(fmt.Sprintf("                            [%s] %6.2f%% %c%s", bar, pct*100, anim, pr.speed))
 	}
 
-	// 立即绘制首帧：下载若在首个 tick(125ms) 前完成，进度条也不至于完全不可见。
-	render()
-	for {
-		select {
-		case <-pr.done:
-			// 收尾擦除整行（上游 Dispose 语义），把这一行还给紧随其后的日志。
-			line.clear()
-			return
-		case <-ticker.C:
-			render()
-		}
-	}
+	// 首帧、节流、静默心跳与收尾擦行统一在 runProgressLoop 里（见 pacer.go）：
+	// 上游此处是 125ms 定时器，本仓按「数据到达即重绘」的节奏驱动。
+	runProgressLoop(pr.pacer.Signals(), pr.done, true, line, render)
 }
 
 func formatSpeed(size float64) string {

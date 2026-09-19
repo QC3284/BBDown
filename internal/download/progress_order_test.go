@@ -23,7 +23,7 @@ import (
 func TestMultiThreadDownloadFinishesProgressLineBeforeLogging(t *testing.T) {
 	orig := renderProgressBar
 	t.Cleanup(func() { renderProgressBar = orig })
-	renderProgressBar = func(_ *atomic.Int64, _ int64, done <-chan struct{}, stopped chan<- struct{}) {
+	renderProgressBar = func(_ *atomic.Int64, _ int64, _ progressPacer, done <-chan struct{}, stopped chan<- struct{}) {
 		<-done
 		// 模拟末帧擦除的耗时：不放慢的话，主协程即使不等也几乎总是先写日志，测不出时序。
 		time.Sleep(100 * time.Millisecond)
@@ -103,7 +103,7 @@ func TestAggregateProgressClearsLineOnFinish(t *testing.T) {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	out := captureStdout(t, func() {
-		go renderAggregateProgress(&counter, 100, done, stopped)
+		go renderAggregateProgress(&counter, 100, newProgressPacer(), done, stopped)
 		close(done)
 		<-stopped
 	})
