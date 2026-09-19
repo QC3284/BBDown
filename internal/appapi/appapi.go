@@ -238,8 +238,16 @@ func readMessage(data []byte) ([]byte, error) {
 	if payloadLen > len(data)-5 {
 		payloadLen = len(data) - 5
 	}
-	if payloadLen <= 0 {
+	if payloadLen < 0 {
 		return nil, fmt.Errorf("invalid gRPC payload length: %d", payloadLen)
+	}
+	if payloadLen < 0 {
+		return nil, fmt.Errorf("invalid gRPC payload length: %d", payloadLen)
+	}
+	if payloadLen == 0 {
+		// 空载荷是合法的（上游对 0 长度未压缩帧返回空数组）；
+		// 只有 flag=gzip 且载荷为 0 才算畸形帧。
+		return []byte{}, nil
 	}
 	return data[5 : 5+payloadLen], nil
 }

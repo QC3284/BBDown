@@ -481,6 +481,15 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 | `ParserPlayLimitTests` | **一处差异**：本仓播放受限只报「播放受限: limit_play_reason=…, play_detail=…」，**不给原因**；上游按 `limit_play_reason` 映射为「区域限制 / 付费限制 / 需要大会员 / 尚未到可播放时间 / 存在播放限制」，用户据此才知道是哪种限制。现抽出与上游同名的 `throwIfPlayLimited` / `throwIfBizError`（后者只在根是对象且 `code` 是 **JSON 数字**且非 0 时报错，字符串 code 不算）并对齐文案。`isVipRestricted` 与上游一致（JSON message 优先、非 JSON 回落裸子串）。 |
 | `ServeCommandTests` | **一处差异**：官方域名白名单少一个 **`biliapi.com`**——上游 `HTTPUtil.OfficialHostSuffixes` 是 9 项，本仓 8 项。该域是官方 API 镜像，漏掉会让凭据校验误判「非可信主机」拒绝发 Cookie、重定向守卫也会误拦。补齐后白名单逐项一致（含子域匹配与否定的 4 例）。token 解析（`BBDOWN_SERVE_TOKEN` 优先、空串回落旗标）抽成 `resolveServeToken` 并钉住 7 例，无差异。 |
 
+### 4.28 第二十四轮（目标轮 8）：gRPC 帧 / .wvd 加载
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `AppHelperMessageTests` | **一处差异**：gRPC **空载荷**帧（flag=0、length=0）本仓报 `invalid gRPC payload length: 0`，上游返回空数组——空载荷是合法响应。其余（帧头不足 5 字节、压缩标志只能 0/1、gzip 往返、解压上限）与上游一致。 |
+| `WvdDeviceKeyTests` | **一处差异**：**无 magic 的 v2 .wvd 被误判为「无法识别的 WVD 文件格式 (首字节: 2)」**——本仓探测只放行首字节 1（v1），而上游探测放行 1/2（`ParseWvd` 本身两种都支持）。上游注释里专门记了这个坑（RF-78），我们踩的是同一个。此外空文件、截断、加密 v2、垃圾数据的诊断与上游一致。 |
+
+**方法论收获**：这轮两处都是「合法性判断过严」——空载荷与 v2 文件本来都合法，我们却把它们当成畸形输入报错。
+对照上游时要专门看**边界值属于合法集还是非法集**：把合法的挡在外面，用户得到的是一条无从下手的错误。
 **方法论收获**：白名单这类「枚举」最容易少一项——它不报错、只在特定镜像站场景下静默少发凭据。
 差分表的做法是把上游的**枚举值逐个搬过来比对**，比读代码「看起来对」可靠得多。
 **方法论收获**：这次差异藏在「看起来对」的一行 `ctx.Err() != nil` 里——它覆盖了两种语义

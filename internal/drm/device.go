@@ -33,8 +33,10 @@ func LoadWvdDevice(path string) (*WvdDevice, error) {
 		return parseWvd(data[3:])
 	}
 
-	// Format 2: pywidevine v1 standard format (version byte = 1)
-	if len(data) >= 1 && data[0] == 1 {
+	// Format 2: pywidevine standard format without the magic (first byte = version = 1/2)。
+	// parseWvd 本身支持 v1/v2，探测也必须放行 v2——否则无 magic 的 v2 文件会被误判成
+	// 「无法识别的 WVD 文件格式 (首字节: 2)」（上游 RF-78 的同一处探测）。
+	if len(data) >= 1 && (data[0] == 1 || data[0] == 2) {
 		return parseWvd(data)
 	}
 
