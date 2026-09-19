@@ -438,6 +438,24 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 | `WorkDirResolutionTests` | 无差异（既有 `workdir_test.go` 已覆盖同一组契约，含 Windows 根相对路径） |
 | `RedirectHopValidationTests`、`LoggerFileTests` | 上游用例依赖本地重定向服务/句柄夹具，本仓对应契约由 `credhost_test.go`、`loggerfail_test.go` 覆盖 |
 
+### 4.22 第十七轮（目标轮 1~2）：实体 / 分发 / 配置合并 · 全部一致
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `EntityTests` | 无差异：`Page.Bvid` 对越界 aid（0 / 负数 / ≥2^51）回落**原始 aid**、非数字 aid 原样返回；`Audio.ShortCodecs` 大写去横线 |
+| `FetcherFactoryTests` | 无差异：`mid:`/`favId:`/`listBizId:`/`seriesBizId:`/`ep:`/`cheese:`/裸援助各自落到对应 fetcher，`ep:` + `--use-intl-api` 落 IntlBangumiInfoFetcher，订阅目标都不会落到 NormalInfoFetcher |
+| `ConfigMergeTests` | 无差异：空格与等号写法的命令行都压过配置文件、`--config-file=<path>` 被认、以 `-` 开头的配置取值不被吞、子命令调用整段跳过合并 |
+
+**说明**：这一轮只补用例、无代码改动——三处都是「跑一遍确认一致」，
+按既定口径同样记入文档：**没撞出差异也是结果**，下次不必重查。
+另核对了剩余清单里的一批「假剩余」：`ParserFixtureTests`、`ProgressBarTests`、
+`DownloadProgressAggregationTests`、`ArchiveGranularityTests`、`ServeApiSecurityTests`、
+`CommentUtilTests`、`SubscriptionStoreTests`、`LiveStreamUtilTests` 等在前几轮已按别的名字覆盖，
+真正的剩余面集中在：`MuxerArgsTests`、`HttpUtilRetryTests`、`HttpUtilSslPolicyTests`、
+`VerifiedNoRedirectClientTests`、`ConfigPropagationTests`、`DownloadPipelineTests`、
+`DownloadTaskSnapshotTests`、`ServeCommandTests`、`ParserPlayLimitTests`、
+`ExternalProcessRunnerTests`、`BBDownAria2cTests`、`JsonElementExtensionsTests`、
+`Widevine*Tests`、`DrmDecryptorTests`、`AppHelperMessageTests`、`CancellationClassificationTests`。
 **方法论收获**：这一轮最有价值的一条是 UA——它不在任何「模块」里，而是横跨「参数解析 →
 HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient 也存对了，只有最后一段没接上。
 差分用例的价值就在于它直接对着「用户设了参数该有什么效果」断言，从而把断链暴露出来。
