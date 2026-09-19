@@ -426,6 +426,21 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 **契约变更**：`CombineMultipleFilesIntoSingleFile` 签名加上 `ctx`（对齐上游的 CancellationToken），
 两个调用点（多线程分片合并、直播 FLV 分段合并）同步传入；既有用例与 muxer 用例按新契约更新。
 
+### 4.21 第十五~十六轮：差分续跑（弹幕 / 字幕 / 充电 / 凭据 / 时钟 / UA / 专栏）
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `DanmakuFilterTests`、`DanmakuAssEscapingTests` | 无差异（关键词/midHash 过滤、ASS 大括号与反斜杠中和、BGR 颜色、点号时间轴） |
+| `SubtitleFormatTests` | **两处差异**：毫秒按「小数 ×1000 截断」而非 tick 进位（`1.001s` 少 1ms）；NaN 未处理、极大值溢出；`SanitizeSRT` 只裁 ASCII 空白 |
+| `UpowerGuardTests`、`SessdataExpiryTests`、`ClockCalibrationTests` | 无差异 |
+| `HttpUtilUserAgentTests` | **一处差异**：下载路径写死 `Mozilla/5.0`，`--user-agent` 对媒体下载不生效 |
+| `ArticleUtilTests` | 无差异（cv 号解析含大小写与 URL 形态；Markdown 头部与 HH:MM 时间） |
+| `WorkDirResolutionTests` | 无差异（既有 `workdir_test.go` 已覆盖同一组契约，含 Windows 根相对路径） |
+| `RedirectHopValidationTests`、`LoggerFileTests` | 上游用例依赖本地重定向服务/句柄夹具，本仓对应契约由 `credhost_test.go`、`loggerfail_test.go` 覆盖 |
+
+**方法论收获**：这一轮最有价值的一条是 UA——它不在任何「模块」里，而是横跨「参数解析 →
+HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient 也存对了，只有最后一段没接上。
+差分用例的价值就在于它直接对着「用户设了参数该有什么效果」断言，从而把断链暴露出来。
 **方法论收获**：这轮两处「功能性」缺陷都藏在**跨模块的契约**里——脱敏键表小一号、合并失败不清理，
 读单个函数的实现都挑不出毛病，只有拿上游的断言表逐条对照才会红。
 另外确认了一条经验：**没撞出差异的也要记**（如数值校验），它是「这块已对齐」的证据，下次不必重查。

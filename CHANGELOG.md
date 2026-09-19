@@ -8,6 +8,31 @@
 上游（aliveranme/BBDown）的同名版本条目仍是行为的权威描述；本文件只记录 Go 重写侧
 **相对上游的落地情况**。逐条对账基线与判定见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md)。
 
+## [1.6.19-go.7] - 2026-09-19
+
+补丁版本：继续逐文件搬上游测试表。本轮接 12 个文件，撞出四处不一致并修复；
+其余八处跑下来确认与上游一致（用例已钉住）。
+
+### 修复
+
+- **媒体下载的 UA 写死成 `Mozilla/5.0`**（`HttpUtilUserAgentTests`）：上游的优先级是
+  显式参数 → 流配置（`--user-agent`）→ 进程级随机默认，而本仓下载路径（探针 HEAD / 单线程
+  GET / 多线程 Range / aria2c 输入文件）一律写死裸 `Mozilla/5.0`——用户设了 `--user-agent`
+  只影响 API 请求，媒体下载仍带着这个极易被 CDN 识别的 UA。现统一走 `DownloadConfig.userAgent()`。
+- **字幕时间轴的毫秒取整**（`SubtitleFormatTests`）：本仓用「小数部分 ×1000 截断」，
+  `1.001` 秒的差值算出来是 `0.000999…`，截断得 0ms，与上游 `TimeSpan.FromSeconds` 的
+  tick 级四舍五入差 1ms。改为按 tick 进位后再截断到毫秒。
+- **字幕时间轴的 NaN 与极大值**：`int(NaN)` 在 Go 里是实现相关行为（会算出垃圾时间），
+  上游把 NaN 与负数一律归 0；极大值也先夹到 `TimeSpan.MaxValue` 量级再格式化。
+- **`SanitizeSRT` 只裁 ASCII 空格/制表符**：上游用 `TrimEnd()`（Unicode 空白，含全角空格）。
+
+### 说明
+
+- 本轮确认无差异（已加用例钉住）：弹幕关键词/midHash 过滤、ASS 大括号与反斜杠中和、
+  弹幕色 BGR 转换与白色省略、时间轴点号分隔、充电试看判定、SESSDATA 到期估算、
+  服务器时钟校准、专栏 cv 号解析与 Markdown 头部、`--work-dir` 路径解析。
+- 逐跳重定向校验与 Logger 文件行为的上游用例依赖各自的本地服务/句柄夹具，
+  本仓对应用例（`credhost_test.go`、`loggerfail_test.go`）已覆盖同一契约。
 ## [1.6.19-go.6] - 2026-09-19
 
 补丁版本：继续搬上游测试表做差分，撞出六处不一致（其中两处是安全/数据完整性）。
