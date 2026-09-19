@@ -8,6 +8,23 @@
 上游（aliveranme/BBDown）的同名版本条目仍是行为的权威描述；本文件只记录 Go 重写侧
 **相对上游的落地情况**。逐条对账基线与判定见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md)。
 
+## [1.6.19-go.13] - 2026-09-19
+
+补丁版本：补一处**诊断缺口**——用户报「目前 404 概率比较高」时，日志里无从定位。
+
+### 新增
+
+- **下载请求的 Debug 行**：上游 `DownloadFileCoreAsync` / `MultiThreadDownloadCoreAsync` 都会打
+  `Start downloading: <脱敏 URL>`（每文件一次）。本仓此前完全没有，`--debug` 下也看不出是哪台
+  host、哪条签名 URL 失败——「强制替换到镜像（`upos-sz-mirrorcoso1`，上游默认开启）后 404」
+  这个最常见的解释因此无法证实。现按上游补上，签名/deadline 等参数照旧脱敏。
+
+### 说明
+
+- 本次未能复现 404：12 次真实下载（`--force-replace-host` 开/关各 6 次）、4 支视频原站与镜像的
+  curl 探测（HEAD/Range）、1 支 103 MB 视频的多线程分片下载，全部 0 次 404。
+- 复现「强制替换后 404」需要一份带 `--debug` 的失败日志（看 `Start downloading:` 行的 host）。
+- 另注：连续高频解析会触发 B 站 **HTTP 412 风控**，与 404 是两回事。
 ## [1.6.19-go.12] - 2026-09-19
 
 补丁版本：两处**用户可见输出**的对齐（都是用户实测报出来的），判定与证据见

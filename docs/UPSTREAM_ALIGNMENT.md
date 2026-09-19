@@ -633,5 +633,22 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 但**同一句话说给两个不同的对象**（两级重试）与**一次失败说两遍**（cobra + Execute）把用户绕进去了。
 对齐检查不能只看「有没有这条输出」，还要看「这条输出在什么级别、说几遍」。
 
+#### 4.32.3 下载请求 URL 的 Debug 行（上游有、本仓没有）
+
+用户报「目前 404 概率比较高」时，排查发现**日志里没有任何请求 URL**：上游
+`BBDownDownloadUtil.DownloadFileCoreAsync` 与 `MultiThreadDownloadCoreAsync` 各有一行
+`Logger.LogDebug("Start downloading: {0}", SensitiveDataMasker.MaskUrl(url))`（每文件一次，
+签名参数脱敏），本仓一行都没有——于是「强制替换到镜像后 404」这个最常见的解释在日志里无法证实。
+现按上游补上（`DownloadFile` 每文件一次，三条路径共用；aria2c 分支单独一行，同样只打一次）。
+
+**复现尝试（均 0 次 404，故未能定位用户环境里的成因）**：
+
+- 12 次真实下载（同一音频，`--force-replace-host` 默认/关闭各 6 次）：0 次 404；
+- 4 支视频的音频 URL 用 curl 探测（HEAD/Range 各 3 次 × 原站与镜像）：全 200/206；
+- 1 支视频的多线程下载（1MB 分片、103 MB 产物）：分片 Range 请求 0 次 404。
+
+另外：连续高频解析会触发 **HTTP 412 风控**（与本条的 404 是两回事，别混为一谈）。
+下一步要看的是用户那份 `--debug` 日志里 `Start downloading:` 行的 host。
+
 
 
