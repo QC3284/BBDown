@@ -2,7 +2,6 @@ package fetcher
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -58,7 +57,7 @@ func (f *FavListFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo, e
 			return nil, err
 		}
 		var root map[string]interface{}
-		if err := json.Unmarshal([]byte(resp), &root); err != nil {
+		if err := util.UnmarshalJSON(resp, &root); err != nil {
 			return nil, err
 		}
 		list := ga(gm(root, "data"), "list")
@@ -80,7 +79,7 @@ func (f *FavListFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo, e
 		return nil, err
 	}
 	var root map[string]interface{}
-	if err := json.Unmarshal([]byte(resp), &root); err != nil {
+	if err := util.UnmarshalJSON(resp, &root); err != nil {
 		return nil, err
 	}
 	data := gm(root, "data")
@@ -171,7 +170,7 @@ func (f *FavListFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo, e
 			return nil, fmt.Errorf("收藏夹第 %d 页请求失败: %w", page, err)
 		}
 		var pageRoot map[string]interface{}
-		if json.Unmarshal([]byte(resp), &pageRoot) != nil {
+		if util.UnmarshalJSON(resp, &pageRoot) != nil {
 			return nil, fmt.Errorf("收藏夹第 %d 页响应无法解析", page)
 		}
 		pageData := gm(pageRoot, "data")

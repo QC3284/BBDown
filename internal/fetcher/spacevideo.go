@@ -55,7 +55,7 @@ func (f *SpaceVideoFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo
 				} `json:"info"`
 			} `json:"data"`
 		}
-		if json.Unmarshal([]byte(resp), &r) == nil {
+		if util.UnmarshalJSON(resp, &r) == nil {
 			userName = strings.TrimSpace(r.Data.Info.Uname)
 		}
 	}
@@ -159,7 +159,7 @@ func (f *SpaceVideoFetcher) fetchPage(ctx context.Context, pageNumber int, mid s
 			} `json:"page"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(resp), &r); err != nil {
+	if err := util.UnmarshalJSON(resp, &r); err != nil {
 		return nil, 0, err
 	}
 	var entries []spaceEntry

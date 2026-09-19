@@ -2,7 +2,6 @@ package fetcher
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -24,7 +23,7 @@ func (f *SeriesListFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo
 		return nil, err
 	}
 	var root map[string]interface{}
-	if err := json.Unmarshal([]byte(resp), &root); err != nil {
+	if err := util.UnmarshalJSON(resp, &root); err != nil {
 		return nil, err
 	}
 	data := gm(root, "data")
@@ -62,7 +61,7 @@ func (f *SeriesListFetcher) fetchSeriesPages(ctx context.Context, bizID string) 
 			return nil, err
 		}
 		var root map[string]interface{}
-		if err := json.Unmarshal([]byte(resp), &root); err != nil {
+		if err := util.UnmarshalJSON(resp, &root); err != nil {
 			return nil, err
 		}
 		data := gm(root, "data")

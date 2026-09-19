@@ -46,7 +46,7 @@ func (f *CheeseInfoFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo
 		} `json:"data"`
 	}
 
-	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+	if err := util.UnmarshalJSON(resp, &result); err != nil {
 		return nil, fmt.Errorf("parse cheese response: %w", err)
 	}
 	if result.Code != 0 {

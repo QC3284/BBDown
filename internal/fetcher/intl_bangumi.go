@@ -2,7 +2,6 @@ package fetcher
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -42,7 +41,7 @@ func (f *IntlBangumiInfoFetcher) Fetch(ctx context.Context, id string) (*entity.
 	}
 
 	var root map[string]interface{}
-	if err := json.Unmarshal([]byte(resp), &root); err != nil {
+	if err := util.UnmarshalJSON(resp, &root); err != nil {
 		return nil, fmt.Errorf("parse intl bangumi response: %w", err)
 	}
 	result, ok := root["result"].(map[string]interface{})
@@ -61,7 +60,7 @@ func (f *IntlBangumiInfoFetcher) Fetch(ctx context.Context, id string) (*entity.
 		if web, err := f.client.GetWebSource(ctx, animeURL); err == nil {
 			if m := intlStateRegex.FindStringSubmatch(web); m != nil {
 				var state map[string]interface{}
-				if json.Unmarshal([]byte(m[1]), &state) == nil {
+				if util.UnmarshalJSON(m[1], &state) == nil {
 					if mediaInfo, ok := state["mediaInfo"].(map[string]interface{}); ok {
 						cover = gs(mediaInfo, "cover")
 						if t := gs(mediaInfo, "title"); t != "" {

@@ -60,7 +60,7 @@ func (f *NormalInfoFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo
 		} `json:"data"`
 	}
 
-	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+	if err := util.UnmarshalJSON(resp, &result); err != nil {
 		return nil, fmt.Errorf("parse view response: %w", err)
 	}
 
@@ -153,7 +153,7 @@ func (f *NormalInfoFetcher) fetchInteractionPages(ctx context.Context, bvid stri
 	var graph struct {
 		GraphVersion int64 `json:"graph_version"`
 	}
-	if err := json.Unmarshal([]byte(interactionJSON), &graph); err != nil {
+	if err := util.UnmarshalJSON(interactionJSON, &graph); err != nil {
 		return nil, err
 	}
 
@@ -177,7 +177,7 @@ func (f *NormalInfoFetcher) fetchInteractionPages(ctx context.Context, bvid stri
 		} `json:"data"`
 	}
 
-	if err := json.Unmarshal([]byte(edgeResp), &edgeData); err != nil {
+	if err := util.UnmarshalJSON(edgeResp, &edgeData); err != nil {
 		return nil, err
 	}
 

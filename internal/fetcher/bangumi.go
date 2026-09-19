@@ -2,7 +2,6 @@ package fetcher
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -31,7 +30,7 @@ func (f *BangumiInfoFetcher) Fetch(ctx context.Context, id string) (*entity.VInf
 	}
 
 	var root map[string]interface{}
-	if err := json.Unmarshal([]byte(resp), &root); err != nil {
+	if err := util.UnmarshalJSON(resp, &root); err != nil {
 		return nil, fmt.Errorf("parse bangumi response: %w", err)
 	}
 	result, ok := root["result"].(map[string]interface{})

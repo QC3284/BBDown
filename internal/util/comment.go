@@ -48,7 +48,7 @@ func FetchComments(ctx context.Context, client *HTTPClient, aid string, maxPages
 				} `json:"replies"`
 			} `json:"data"`
 		}
-		if err := json.Unmarshal([]byte(source), &r); err != nil {
+		if err := UnmarshalJSON(source, &r); err != nil {
 			return nil, false, fmt.Errorf("解析评论响应失败: %w", err)
 		}
 		if r.Code != 0 {

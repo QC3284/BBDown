@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
 	"strings"
 
 	"github.com/QC3284/BBDown/internal/util"
@@ -29,7 +28,7 @@ func CheckLoginWithDetails(ctx context.Context, client *util.HTTPClient, cookie 
 	}
 
 	var root map[string]interface{}
-	if err := json.Unmarshal([]byte(source), &root); err != nil {
+	if err := util.UnmarshalJSON(source, &root); err != nil {
 		util.LogDebug("检测登录状态失败: %v", err)
 		return false, false, ""
 	}

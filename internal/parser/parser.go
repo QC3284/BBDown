@@ -22,7 +22,7 @@ import (
 // disable the web-page fallback (upstream IsVipRestrictedResponse).
 func isVipRestricted(jsonStr string) bool {
 	var doc map[string]interface{}
-	if json.Unmarshal([]byte(jsonStr), &doc) == nil {
+	if util.UnmarshalJSON(jsonStr, &doc) == nil {
 		if msg, ok := doc["message"].(string); ok && msg != "" {
 			return strings.Contains(msg, "大会员专享限制")
 		}
@@ -180,7 +180,7 @@ func (p *Parser) reparseMaxQn(ctx context.Context, encoding, aidOri, aid, cid, e
 // result, data, or the document itself).
 func hasDashVideo(jsonStr string) bool {
 	var doc map[string]interface{}
-	if json.Unmarshal([]byte(jsonStr), &doc) != nil {
+	if util.UnmarshalJSON(jsonStr, &doc) != nil {
 		return false
 	}
 	roots := []map[string]interface{}{doc}
@@ -356,7 +356,7 @@ func (p *Parser) getIntlPlayJSON(ctx context.Context, aid, cid, epid, qn, code s
 
 func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.ParsedResult, aidOri, aid, cid, epid string, tvAPI, appAPI bool, encoding string, wantDrm bool) (*entity.ParsedResult, error) {
 	var root map[string]interface{}
-	if err := json.Unmarshal([]byte(result.WebJSONString), &root); err != nil {
+	if err := util.UnmarshalJSON(result.WebJSONString, &root); err != nil {
 		return nil, fmt.Errorf("parse playurl JSON: %w", err)
 	}
 
@@ -631,7 +631,7 @@ func (p *Parser) parseIntlStreams(ctx context.Context, result *entity.ParsedResu
 		}
 
 		var root map[string]interface{}
-		if err := json.Unmarshal([]byte(result.WebJSONString), &root); err != nil {
+		if err := util.UnmarshalJSON(result.WebJSONString, &root); err != nil {
 			continue
 		}
 
