@@ -453,6 +453,16 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 | `JsonElementExtensionsTests` | **一处差异**：本仓 `gi`/`gi64` 用 `fmt.Sscanf("%d")`，它接受数字**前缀**——`"12abc"` 会变成 12、`"1.5"` 变成 1；上游 `int.TryParse(NumberStyles.Integer)` 要求整串是数字，脏数据必须落到默认值 0。另 `gi` 未做 int32 范围判定（上游 `TryGetInt32` 失败即取默认值）。改为整串解析 + 范围判定。 |
 | `MuxerArgsTests` | 无差异（**加强既有用例**）：补上上游的三条断言——章节 meta 是第 5 个输入（下标 4）、`-map_chapters` 指向它自身、`-map` 序列不含该下标（meta 只供取章节）。原本只断言 `-map_chapters` 存在与顺序，现按上游口径钉死。 |
 
+### 4.24 第十九轮（目标轮 4）：风控页识别 / 会话传播 / 重试策略
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `HttpUtilRetryTests` | **一处差异**：本仓**完全没有**风控页识别。上游在 API 响应是 HTML 时抛 `RiskControlResponseException`（“疑似风控页：接口返回 HTML 而非预期数据…”），本仓把 HTML 直接交给 `json.Unmarshal`，用户看到 `invalid character '<' looking for beginning of value`——而风控页/登录墙恰恰都以 HTTP 200 + HTML 返回。现加 `util.LooksLikeHTMLPage` + `util.UnmarshalJSON`（剥前导空白与 BOM 后判首字符），parser/fetcher/评论导出的 22 处解析统一走它。其余重试语义（5xx 重试、4xx 不重试、耗尽即停、请求计数精确、body 上限）与上游一致，既有 `retry_test.go` 已按相同口径断言。 |
+| `ConfigPropagationTests` | 不适用于 Go：该文件用反射检查 C# 的 `AsyncLocal` 配置传播（子方法写 Config 不回流父流程，须显式返回并应用）。本仓等价契约由返回值承担——`workflow.InitSession` 返回 `(wbi, error)` 并回写 `*cfg`，三处调用点（watchlater / sub check / serve 任务）都把返回的 wbi 传给 `fetcher.NewFactory`，不存在“子方法写完父流程看不见”的形态。 |
+
+**方法论收获**：风控这次是「上游有、本仓没有」的**整块能力**，而它不体现在任何功能路径上——
+正常跑永远走不到。差分表能撞出它，是因为上游专门为它写了用例。这也再次说明：
+「我们没这条逻辑」和「我们这条逻辑写错了」是两类问题，只有对着上游用例清单才会有前者。
 **方法论收获**：「前缀解析」这类差异读代码时几乎不可能看出来——`fmt.Sscanf("%d")` 看上去完全合理，
 只有拿上游的 `"12abc"` 这类脏值去喂才会现形。差分表里那些**看起来没意义的边界值**
 （`"invalid"`、`null`、缺字段）恰恰是最有价值的部分。
