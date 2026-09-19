@@ -21,13 +21,14 @@ const MaxLogFieldLen = 512
 // banner darker than upstream on every terminal.
 const (
 	AnsiReset      = "\033[0m"
-	AnsiBlack      = "\033[30m" // ConsoleColor.Black      (二维码深色模块)
-	AnsiRed        = "\033[91m" // ConsoleColor.Red        (LogError)
-	AnsiDarkYellow = "\033[33m" // ConsoleColor.DarkYellow (LogWarn)
-	AnsiCyan       = "\033[96m" // ConsoleColor.Cyan       (LogColor / 提示符)
-	AnsiDarkGray   = "\033[90m" // ConsoleColor.DarkGray   (LogDebug)
-	AnsiWhite      = "\033[97m" // ConsoleColor.White      (横幅前景)
-	AnsiBgDarkBlue = "\033[44m" // ConsoleColor.DarkBlue   (横幅背景)
+	AnsiBlack      = "\033[30m"  // ConsoleColor.Black      (二维码深色模块)
+	AnsiRed        = "\033[91m"  // ConsoleColor.Red        (LogError)
+	AnsiDarkYellow = "\033[33m"  // ConsoleColor.DarkYellow (LogWarn)
+	AnsiCyan       = "\033[96m"  // ConsoleColor.Cyan       (LogColor / 提示符)
+	AnsiDarkGray   = "\033[90m"  // ConsoleColor.DarkGray   (LogDebug)
+	AnsiWhite      = "\033[97m"  // ConsoleColor.White      (横幅前景)
+	AnsiBgDarkBlue = "\033[44m"  // ConsoleColor.DarkBlue   (横幅背景)
+	AnsiBgRed      = "\033[101m" // ConsoleColor.Red       (失败输出底色，同样取亮色档)
 )
 
 // SanitizeLogString makes a value safe to interpolate into a single log line.

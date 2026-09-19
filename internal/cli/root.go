@@ -185,13 +185,15 @@ func usageArgs(v cobra.PositionalArgs) cobra.PositionalArgs {
 // 只有用法错误才附 usage（Spectre 在解析失败时打印帮助文本）。失败细节（堆栈）不进
 // 终端——上游同样只把它写进日志文件。
 func reportError(err error, w io.Writer) {
-	fmt.Fprintln(w, err)
+	// 上游 SetExceptionHandler 把这两行设成 ConsoleColor.Red 底 + White 字（都是亮色档，
+	// 对应 ANSI 101/97）——它是给用户的行动指引，不该淹没在普通日志里。
+	fmt.Fprintln(w, util.AnsiBgRed+util.AnsiWhite+err.Error()+util.AnsiReset)
 	var ue usageError
 	if errors.As(err, &ue) {
 		fmt.Fprintln(w, rootCmd.UsageString())
 		return
 	}
-	fmt.Fprintln(w, "请尝试升级到最新版本后重试!")
+	fmt.Fprintln(w, util.AnsiBgRed+util.AnsiWhite+"请尝试升级到最新版本后重试!"+util.AnsiReset)
 }
 
 // silenceOnCancel 在错误是用户 Ctrl+C 取消时，屏蔽 cobra 自带的 "Error: ..."

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/QC3284/BBDown/internal/util"
 )
 
 // 上游（Spectre.Console.Cli）的两种失败输出泾渭分明：
@@ -26,6 +28,23 @@ func TestReportRuntimeErrorPrintsNoUsage(t *testing.T) {
 	}
 	if !strings.Contains(out, "请尝试升级到最新版本后重试!") {
 		t.Errorf("缺少上游 SetExceptionHandler 的升级提示：%q", out)
+	}
+	// 上游把这两行都设成白字红底（亮色档 101/97）：用户报「不够显眼」，而这一行是行动指引。
+	// 逐行断言——只钉「某处出现颜色」的话，改掉其中一行也测不出来。
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("失败输出应为两行（消息 + 升级提示），实际 %d 行：%q", len(lines), out)
+	}
+	for i, ln := range lines[:2] {
+		if !strings.HasPrefix(ln, util.AnsiBgRed+util.AnsiWhite) {
+			t.Errorf("第 %d 行缺少白字红底（上游 SetExceptionHandler 的配色）：%q", i+1, ln)
+		}
+		if !strings.HasSuffix(ln, util.AnsiReset) {
+			t.Errorf("第 %d 行行尾必须复位颜色，否则污染后续输出：%q", i+1, ln)
+		}
+	}
+	if !strings.HasSuffix(strings.TrimRight(out, "\n"), util.AnsiReset) {
+		t.Errorf("行尾必须复位颜色，否则会污染后续输出：%q", out)
 	}
 }
 
