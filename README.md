@@ -4,7 +4,8 @@
 
 > **本分支为 Go 语言重写版本，与上游 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.19）功能一致。**
 > 版本号形如 `<上游版本>-go`，即「已对齐到哪一版上游」的声明；对账基线与逐条判定见 `docs/UPSTREAM_ALIGNMENT.md`。
-> 不主动增加新功能，仅做行为对齐维护。Go 重写由 AI 辅助完成。
+> 默认只做行为对齐维护、不主动增加新功能；**唯一的功能性差异是「进度条实时化」**
+>（用户明确要求：重绘由数据到达驱动，上游是 1/8 秒定时器驱动，判定见 §4.31）。Go 重写由 AI 辅助完成。
 
 ## 安装
 
@@ -13,10 +14,11 @@
 ```bash
 git clone https://github.com/QC3284/BBDown.git -b main
 cd BBDown
-makepkg -si
+makepkg -si        # 仓库自带 PKGBUILD，包名 bbdown-go-git
 ```
 
-> 如果你能将此项目上传至 [Arch Linux AUR](https://aur.archlinux.org/)，我将非常感谢你。
+> 该包尚未发布到 [Arch Linux AUR](https://aur.archlinux.org/)。`pkgver()` 取自 `git describe`，
+> 所以本地构建的版本会带 `.r<提交数>.<短哈希>` 后缀（例如 `1.6.19.go.13.r159.f8cc134`）。
 
 ### 手动编译
 
@@ -73,11 +75,12 @@ BBDown sub check
 |---|---|
 | `login` | APP 扫描二维码登录 WEB 账号 |
 | `logintv` | APP 扫描二维码登录 TV 账号 |
-| `serve` | HTTP API 服务器模式（非回环监听必须配 `--serve-token`） |
+| `serve` | HTTP API 服务器模式（非回环监听必须配 `--serve-token`；`--max-concurrent` 默认 3，`--trusted-proxy` 决定是否采用 `X-Forwarded-For`） |
 | `live` | 录制直播流（断流自动重连，分段合成，支持 `-o`） |
 | `article` | 下载专栏文章为 Markdown（支持 `-o`） |
 | `watchlater` | 下载稍后再看列表（`--limit`，需登录） |
-| `sub` | 订阅管理：`add/list/remove/check` |
+| `sub` | 订阅管理：`add/list/remove/check`；目标支持 `mid:` / `favId:` / `listBizId:` / `seriesBizId:` / `ep:` / `cheese:` 前缀与稿件链接 |
+| `completion` | 生成 shell 补全脚本（cobra 内置） |
 
 ### 主要选项
 
@@ -104,6 +107,10 @@ BBDown sub check
 | `--use-aria2c` | 调用 aria2c 下载 |
 | `--multi-thread` | 多线程下载（默认开启，`--multi-thread false` 关闭） |
 | `--force-http` | 强制 HTTP 协议（默认关闭，mcdn 域名除外） |
+| `--force-replace-host` | 把下载 host 强制替换为镜像 `upos-sz-mirrorcoso1.bilivideo.com`（**默认开启**，与上游同默认；镜像缺对象时表现为下载 404，可用 `--force-replace-host false` 关闭） |
+| `--upos-host` | 自定义 upos 镜像 host（设了它就按它替换，不再用内置镜像） |
+| `--allow-pcdn` | 不替换 PCDN 域名（默认 false，即替换） |
+| `--work-dir` | 工作目录（根命令的持久标志，所有子命令都可用） |
 | `--comments` | 下载评论区（导出 .comments.json） |
 | `--thread-segment-size` | 多线程分片大小(MB，默认 20) |
 | `--save-archives-to-file` | 记录已下载 aid（`BBDown.archives`，`aid|` 格式） |
@@ -166,11 +173,13 @@ make test        # go test ./...
 
 - 普通视频、番剧、课程、合集、收藏夹、UP 主全部投稿（合集/系列/收藏夹完整分页）
 - 最高 8K / HDR / 杜比视界 / 杜比全景声（杜比视界在 ffmpeg<5.0 时自动切换 mp4box 混流）
-- 三种解析模式：WEB（WBI 签名）/ APP（gRPC protobuf）/ TV / 国际版
+- 四种解析模式：WEB（WBI 签名）/ APP（gRPC protobuf）/ TV / 国际版
 - 多线程下载（并发上限 8、Range 校验、分片重试）+ aria2c
+- 实时进度条：数据到达即重绘（16ms 节流，下载停滞时 125ms 心跳保持转圈）——与上游唯一的功能性差异（§4.31）
 - 断点续传（`.tmp` + 资源身份清单，ETag/Last-Modified 校验，中断可安全续传）
 - 低画质 FLV 流分段下载与合并
 - 自动合并音视频（ffmpeg / mp4box，含章节、封面、多音轨、`creation_time` 元数据）
+- 背景音轨与角色配音下载（番剧 `dubbing_info`；每个 role 按自己的音频列表夹取下标）
 - 弹幕下载与过滤（XML / ASS）、字幕下载（多 API 回退、145 项语言表）
 - 章节信息写入（`view_points`）
 - 二维码登录（WEB / TV，含 qrcode.png）、凭据脱敏日志
@@ -184,12 +193,37 @@ make test        # go test ./...
 ## 与上游的关系
 
 基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.19）Go 语言重写，
-CLI 选项、默认值、API 端点、解析/下载/混流行为均已对齐；个别细节以等价方式处理。
+CLI 选项、默认值、API 端点、解析/下载/混流行为均已对齐。已知的有意差异（其余细节以等价方式处理）：
+
+- **进度条实时化**：重绘由数据到达驱动（16ms 节流 + 停滞时 125ms 心跳），上游是 1/8 秒定时器（§4.31）。
+- **根命令的 `--work-dir` 是持久标志**：所有子命令都可用（上游只有部分命令声明它）。
+- **失败输出**：运行期失败只打印错误消息 +「请尝试升级到最新版本后重试!」，只有参数/用法错误才附帮助文本（§4.32.1）。
 
 | 分支 | 内容 |
 |---|---|
 | `main` | Go 重写（当前分支） |
 | `master` | C# 原版快照 |
+
+## 常见问题
+
+### 看到 `HTTP 412` 或接口返回「请求被拦截」
+
+这是 B 站风控（也可能是 WAF 直接返回 HTTP 412），与下载器本身无关：同一账号/IP 短时间高频请求会触发。
+本仓与上游策略一致——**4xx 不做 HTTP 层重试**（重试只会加重风控），只有页面级 3 次退避（3s / 6s）。
+处理办法：等几分钟到几十分钟再试、降低下载频率、确认 `--cookie` 是当前账号且未过期，必要时更换网络出口。
+风控若以「HTTP 200 + HTML 页面」返回，本仓会直接报「疑似风控页」而不是抛 JSON 解析错误。
+
+### 下载报 `HTTP 404`，尤其是刚看到「强制替换…镜像」之后
+
+`--force-replace-host` 默认开启，会把每条流的 host 替换成镜像 `upos-sz-mirrorcoso1.bilivideo.com`；
+镜像不保证覆盖全部对象，命中缺口就是 404。定位时加 `--debug`：每个文件的请求 URL 会以
+`Start downloading: <脱敏 URL>` 打出（签名参数已脱敏），据此判断失败发生在镜像还是原站。
+绕开办法：`--force-replace-host false`，或 `--upos-host <另一个镜像>`。
+
+### 运行失败时为什么只打印一行错误
+
+上游只在**参数解析失败**时打印帮助文本；运行期异常走异常处理器，只给消息加一句升级提示。
+本仓对齐这一行为（§4.32.1），所以运行期失败不会刷出整篇 usage。
 
 ## 注意事项及警告
 
