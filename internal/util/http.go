@@ -191,6 +191,20 @@ func (c *HTTPClient) maySendCredentials(rawURL string) bool {
 }
 
 // GetWebSource fetches the content from a URL as a string.
+// statusSuffix 为风控态补一句可操作提示。
+//
+// 上游此处是 .NET 的 EnsureSuccessStatusCode()，消息形如
+// "Response status code does not indicate success: 412 (Precondition Failed)."——
+// 用户看到 HTTP 412 不知道该等还是该换网络。本仓有意补一句（差异登记见
+// docs/UPSTREAM_ALIGNMENT.md §4.33）。只对 412 生效：它是 B 站风控的固定状态码，
+// 其余 4xx（参数/鉴权）照旧原样抛出，不误导。
+func statusSuffix(code int) string {
+	if code == http.StatusPreconditionFailed {
+		return "（疑似风控拦截：请等待数分钟至数十分钟后重试，或更换网络出口；持续重试会加重风控）"
+	}
+	return ""
+}
+
 func (c *HTTPClient) GetWebSource(ctx context.Context, url string) (string, error) {
 	body, _, err := c.GetWebSourceWithSetCookies(ctx, url)
 	return body, err
@@ -277,7 +291,7 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 
 	// Upstream accepts any 2xx (EnsureSuccessStatusCode).
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, MaskUrl(url))
+		return "", nil, fmt.Errorf("HTTP %d: %s%s", resp.StatusCode, MaskUrl(url), statusSuffix(resp.StatusCode))
 	}
 
 	body, err := ReadAllBounded(resp.Body, maxResponseBodyBytes)
@@ -358,7 +372,7 @@ func (c *HTTPClient) PostResponse(ctx context.Context, url string, body []byte, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, MaskUrl(url))
+		return nil, fmt.Errorf("HTTP %d from %s%s", resp.StatusCode, MaskUrl(url), statusSuffix(resp.StatusCode))
 	}
 
 	return ReadAllBounded(resp.Body, maxResponseBodyBytes)
@@ -419,7 +433,7 @@ func (c *HTTPClient) PostForm(ctx context.Context, urlStr string, form url.Value
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, MaskUrl(urlStr))
+		return nil, fmt.Errorf("HTTP %d from %s%s", resp.StatusCode, MaskUrl(urlStr), statusSuffix(resp.StatusCode))
 	}
 	return ReadAllBounded(resp.Body, maxResponseBodyBytes)
 }
