@@ -474,6 +474,15 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 | `BuvidProviderTests` | 无差异：`HasBuvid3` 与上游逐字一致（`contains("buvid3=", OrdinalIgnoreCase)`），`buvid4=` / `buvid=` 不会误判。 |
 | `CancellationClassificationTests` | **一处差异**：本仓按 `ctx.Err() != nil` 判「已取消」，它把 **DeadlineExceeded 也算成用户取消**；上游只认 `CancellationRequested`，超时必须归 Failed 并保留原始错误。另外上游对真取消给出统一文案「已取消」，本仓此前落的是 `err.Error()`。现抽出 `classifyTaskCancellation` 按上游口径归类。 |
 
+### 4.27 第二十三轮（目标轮 7）：播放限制文案 / 官方域名白名单 / serve token
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `ParserPlayLimitTests` | **一处差异**：本仓播放受限只报「播放受限: limit_play_reason=…, play_detail=…」，**不给原因**；上游按 `limit_play_reason` 映射为「区域限制 / 付费限制 / 需要大会员 / 尚未到可播放时间 / 存在播放限制」，用户据此才知道是哪种限制。现抽出与上游同名的 `throwIfPlayLimited` / `throwIfBizError`（后者只在根是对象且 `code` 是 **JSON 数字**且非 0 时报错，字符串 code 不算）并对齐文案。`isVipRestricted` 与上游一致（JSON message 优先、非 JSON 回落裸子串）。 |
+| `ServeCommandTests` | **一处差异**：官方域名白名单少一个 **`biliapi.com`**——上游 `HTTPUtil.OfficialHostSuffixes` 是 9 项，本仓 8 项。该域是官方 API 镜像，漏掉会让凭据校验误判「非可信主机」拒绝发 Cookie、重定向守卫也会误拦。补齐后白名单逐项一致（含子域匹配与否定的 4 例）。token 解析（`BBDOWN_SERVE_TOKEN` 优先、空串回落旗标）抽成 `resolveServeToken` 并钉住 7 例，无差异。 |
+
+**方法论收获**：白名单这类「枚举」最容易少一项——它不报错、只在特定镜像站场景下静默少发凭据。
+差分表的做法是把上游的**枚举值逐个搬过来比对**，比读代码「看起来对」可靠得多。
 **方法论收获**：这次差异藏在「看起来对」的一行 `ctx.Err() != nil` 里——它覆盖了两种语义
 （用户取消 / 超时），而只有前者才该叫「已取消」。对照上游时要注意**这类把两种原因混为一个判断**的写法，
 它们不会报错，只会把失败原因伪装成用户操作。

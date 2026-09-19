@@ -30,6 +30,53 @@ func isVipRestricted(jsonStr string) bool {
 	return strings.Contains(jsonStr, "大会员专享限制")
 }
 
+// throwIfPlayLimited 对应上游 Parser.ThrowIfPlayLimited：result.play_check 里给了
+// limit_play_reason / play_detail 就说明接口判定不可播放，按原因给出可读文案
+// （只说「播放受限」会让用户无法判断是区域、付费、大会员还是未到时间）。
+func throwIfPlayLimited(root map[string]interface{}) error {
+	resultData, ok := root["result"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	playCheck, ok := resultData["play_check"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	reason, _ := playCheck["limit_play_reason"].(string)
+	detail, _ := playCheck["play_detail"].(string)
+	if strings.TrimSpace(reason) == "" && strings.TrimSpace(detail) == "" {
+		return nil
+	}
+	var message string
+	switch reason {
+	case "AREA_LIMIT":
+		message = "当前番剧/视频存在区域限制，接口返回不可播放"
+	case "PAY_LIMIT":
+		message = "当前番剧/视频存在付费限制，接口返回不可播放"
+	case "VIP_LIMIT":
+		message = "当前番剧/视频需要大会员权限，接口返回不可播放"
+	case "TIME_LOCK":
+		message = "当前番剧/视频尚未到可播放时间，接口返回不可播放"
+	default:
+		message = "当前番剧/视频存在播放限制，接口返回不可播放"
+	}
+	return fmt.Errorf("%s (limit_play_reason=%s, play_detail=%s)", message, reason, detail)
+}
+
+// throwIfBizError 对应上游 Parser.ThrowIfBizError：只在根是对象、且 code 是**JSON 数字**
+// 且非 0 时才报错——字符串形态的 code（如 "-412"）按上游语义不算业务错误。
+func throwIfBizError(root map[string]interface{}) error {
+	code, ok := root["code"].(float64)
+	if !ok || code == 0 {
+		return nil
+	}
+	msg, _ := root["message"].(string)
+	if msg == "" {
+		msg = fmt.Sprintf("接口返回错误码 %d", int64(code))
+	}
+	return fmt.Errorf("接口返回错误: %s (code=%d)", msg, int64(code))
+}
+
 // apiBase returns the scheme-qualified base URL for an API host. A host that
 // already carries a scheme is used as-is (upstream WithApiScheme), which is what
 // lets --host point at a plain-http mirror or a local test server.
@@ -360,21 +407,13 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 		return nil, fmt.Errorf("parse playurl JSON: %w", err)
 	}
 
-	// Check for play limit
-	if resultData, ok := root["result"].(map[string]interface{}); ok {
-		if playCheck, ok := resultData["play_check"].(map[string]interface{}); ok {
-			reason, _ := playCheck["limit_play_reason"].(string)
-			detail, _ := playCheck["play_detail"].(string)
-			if reason != "" || detail != "" {
-				return nil, fmt.Errorf("播放受限: limit_play_reason=%s, play_detail=%s", reason, detail)
-			}
-		}
+	// 播放限制与业务错误码（上游在解析前统一兜底：play_check 只在 pgc 的 result 节点出现，
+	// UGC 的限制通过顶层 code 表达）
+	if err := throwIfPlayLimited(root); err != nil {
+		return nil, err
 	}
-
-	// Check business error code
-	if code, ok := root["code"].(float64); ok && code != 0 {
-		msg, _ := root["message"].(string)
-		return nil, fmt.Errorf("接口返回错误: %s (code=%d)", msg, int(code))
+	if err := throwIfBizError(root); err != nil {
+		return nil, err
 	}
 
 	// Navigate to data node

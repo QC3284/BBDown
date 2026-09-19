@@ -52,7 +52,9 @@ func IsTrustedCookieHost(host string) bool {
 	if host == "" {
 		return false
 	}
-	for _, suffix := range []string{"bilibili.com", "b23.tv", "biliintl.com", "bilibili.tv", "bilivideo.com", "hdslb.com", "aisee.tv", "biliapi.net"} {
+	// 与上游 HTTPUtil.OfficialHostSuffixes 逐字一致（9 项）。此前漏了 biliapi.com：
+	// 该域是官方 API 镜像，凭据校验会误判为「非可信主机」而拒绝发 Cookie、重定向守卫也会误拦。
+	for _, suffix := range []string{"bilibili.com", "b23.tv", "bilivideo.com", "hdslb.com", "biliapi.net", "biliapi.com", "bilibili.tv", "biliintl.com", "aisee.tv"} {
 		if host == suffix || strings.HasSuffix(host, "."+suffix) {
 			return true
 		}

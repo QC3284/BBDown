@@ -84,12 +84,7 @@ var serveCmd = &cobra.Command{
 			return fmt.Errorf("参数有误：--max-concurrent 需 >= 1，当前为 %d", optServeMaxConcurrent)
 		}
 
-		// BBDOWN_SERVE_TOKEN takes precedence over the flag: it keeps the secret out
-		// of the process command line and of the container invocation.
-		serveToken := os.Getenv("BBDOWN_SERVE_TOKEN")
-		if serveToken == "" {
-			serveToken = optServeToken
-		}
+		serveToken := resolveServeToken(optServeToken, os.Getenv("BBDOWN_SERVE_TOKEN"))
 		srv := server.NewAPIServer(listen, optServeMaxConcurrent, serveToken, optNotifyWebhook)
 		srv.SetTrustedProxy(optTrustedProxy)
 
@@ -106,6 +101,16 @@ var serveCmd = &cobra.Command{
 		}
 		return err
 	},
+}
+
+// resolveServeToken 决定 serve 使用的 token（上游 BBDownApiServer.ResolveServeToken）：
+// 环境变量 BBDOWN_SERVE_TOKEN 优先于 --serve-token——它能让密钥不出现在进程命令行与容器调用里。
+// 环境变量为空串时回落到旗标。
+func resolveServeToken(cliToken, envToken string) string {
+	if envToken != "" {
+		return envToken
+	}
+	return cliToken
 }
 
 // resolveUnderWorkDir resolves a product path against --work-dir: an absolute
