@@ -166,6 +166,8 @@ type AudioMaterial struct {
 
 // AudioMaterialInfo represents audio material with track list.
 type AudioMaterialInfo struct {
+	// AudioID 是该 role 在接口响应里的 audio_id（用于按上游规则生成产物路径）。
+	AudioID    string  `json:"audio_id,omitempty"`
 	Title      string  `json:"title"`
 	PersonName string  `json:"person_name"`
 	Path       string  `json:"path"`

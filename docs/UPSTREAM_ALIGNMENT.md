@@ -488,6 +488,15 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 | `AppHelperMessageTests` | **一处差异**：gRPC **空载荷**帧（flag=0、length=0）本仓报 `invalid gRPC payload length: 0`，上游返回空数组——空载荷是合法响应。其余（帧头不足 5 字节、压缩标志只能 0/1、gzip 往返、解压上限）与上游一致。 |
 | `WvdDeviceKeyTests` | **一处差异**：**无 magic 的 v2 .wvd 被误判为「无法识别的 WVD 文件格式 (首字节: 2)」**——本仓探测只放行首字节 1（v1），而上游探测放行 1/2（`ParseWvd` 本身两种都支持）。上游注释里专门记了这个坑（RF-78），我们踩的是同一个。此外空文件、截断、加密 v2、垃圾数据的诊断与上游一致。 |
 
+### 4.29 第二十五轮（目标轮 9）：dubbing_info 解析 / 配音下载（整块缺失）
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `DownloadPipelineTests` | **一处整块缺失**：上游 `Parser.cs` 会读 `data.dubbing_info`（`background_audio` 与 `role_audio_list`，门控为 **APP API + 番剧**），本仓**完全没有这段解析**——于是 `ParsedResult.BackgroundAudioTracks` / `RoleAudioList` 永远是空的，工作流里那两段下载循环（背景音轨、配音）等同于死代码。现补上同名提取（含 `backup_url` 选择、带宽 /1000、`audio_id` 净化后拼路径），并为**配音**接上下载与混流物料（`ClampRoleAudioIndex` 按 role 自己的列表夹取，越界钳末位、空列表跳过——上游同款表已接入）。`entity.AudioMaterialInfo` 增加 `AudioID` 字段承载该 role 的 `audio_id`。 |
+
+**方法论收获**：这是本目标里最深的一处——不是某个分支写错，而是**整条数据链断在解析层**：
+下载、混流、封面/章节清理都写好了，上游也给这些循环写了用例，但我们从来没读过那个 JSON 节点。
+差分表之所以能撞到它，是因为上游用例的名字（`ClampRoleAudioIndex`）指向了一个我们根本没有的函数。
 **方法论收获**：这轮两处都是「合法性判断过严」——空载荷与 v2 文件本来都合法，我们却把它们当成畸形输入报错。
 对照上游时要专门看**边界值属于合法集还是非法集**：把合法的挡在外面，用户得到的是一条无从下手的错误。
 **方法论收获**：白名单这类「枚举」最容易少一项——它不报错、只在特定镜像站场景下静默少发凭据。

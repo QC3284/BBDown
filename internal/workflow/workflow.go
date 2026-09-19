@@ -795,6 +795,43 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			}
 		}
 
+		// 配音轨（上游对每个 role 单独夹取音频下标）：每个 role 的 audio 列表是独立的，
+		// 用户选的音频序号只对主列表校验过，直接拿来索引会越界——上游为此刻意抽出
+		// ClampRoleAudioIndex：越界钳到末位，列表为空则跳过该 role。此前本仓完全没下载这一路，
+		// 有配音的稿件产物里会缺配音轨。
+		if !w.Cfg.VideoOnly && len(result.RoleAudioList) > 0 {
+			for i, role := range result.RoleAudioList {
+				roleIdx := clampRoleAudioIndex(aIndex, len(role.Audio))
+				if roleIdx < 0 {
+					continue
+				}
+				roleAudio := role.Audio[roleIdx]
+				// 产物路径与上游同构：<aid>/<aid>.<cid>.<净化后的 audio_id>.m4a。
+				// audio_id 来自接口响应（外部输入），必须净化后再拼路径，否则 "../" 能写出工作目录（RF-18）。
+				rolePath := role.Path
+				if rolePath == "" {
+					seg := util.SanitizePathSegment(role.AudioID)
+					if seg == "" {
+						seg = util.SanitizePathSegment(roleAudio.ID)
+					}
+					if seg == "" {
+						seg = fmt.Sprintf("role%d", i)
+					}
+					rolePath = filepath.Join(page.Aid, fmt.Sprintf("%s.%s.%s.m4a", page.Aid, page.Cid, seg))
+				}
+				util.Log("开始下载P%d配音[%s]...", page.Index, role.Title)
+				if err := download.DownloadFile(ctx, roleAudio.BaseURL, rolePath, dlCfg); err != nil {
+					util.LogWarn("配音[%s]下载失败: %v", role.Title, err)
+					continue
+				}
+				backgroundMaterial = append(backgroundMaterial, entity.AudioMaterial{
+					Title:      role.Title,
+					PersonName: role.PersonName,
+					Path:       rolePath,
+				})
+			}
+		}
+
 		// DRM decryption (before mux; failure fails the page like upstream)
 		if result.IsDrm && w.Cfg.DecryptDrm && (result.KidHex != "" || result.PsshBase64 != "") {
 			if err := w.decryptDrm(ctx, result, videoPath, audioPath); err != nil {
@@ -1334,6 +1371,22 @@ func (w *Workflow) handleConflictingOptions() {
 	if w.Cfg.SkipSubtitle {
 		w.Cfg.SubOnly = false
 	}
+}
+
+// clampRoleAudioIndex 把用户选中的音频序号夹到某个 role 自己的音频列表范围内
+// （上游 Download.ClampRoleAudioIndex）：列表为空返回 -1 表示跳过该 role；
+// 越界钳到末位而不是报错——每个 role 的清晰度数量与主音频列表无关。
+func clampRoleAudioIndex(aIndex, audioCount int) int {
+	if audioCount <= 0 {
+		return -1
+	}
+	if aIndex < 0 {
+		return 0
+	}
+	if aIndex > audioCount-1 {
+		return audioCount - 1
+	}
+	return aIndex
 }
 
 // validateNumericOptions rejects out-of-range numeric options (upstream

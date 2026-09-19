@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -75,6 +76,96 @@ func throwIfBizError(root map[string]interface{}) error {
 		msg = fmt.Sprintf("接口返回错误码 %d", int64(code))
 	}
 	return fmt.Errorf("接口返回错误: %s (code=%d)", msg, int64(code))
+}
+
+// shouldExtractDubbing 是上游对 dubbing_info 的门控：只有 APP API + 番剧（ep/cheese）
+// 场景的响应里才有这两类轨道，其它路径里出现同名节点不能当数据用。
+func shouldExtractDubbing(appAPI bool, aidOri string) bool {
+	return appAPI && (strings.HasPrefix(aidOri, "ep:") || strings.HasPrefix(aidOri, "cheese:"))
+}
+
+// extractDubbingInfo 读取 data.dubbing_info 下的背景音频与配音（上游 Parser.cs 的同一段，
+// 仅在 APP API + 番剧场景下出现）。此前本仓完全没有这段解析：工作流虽然写了背景音轨/配音
+// 的下载循环，但两个列表永远为空，等于死代码。
+func extractDubbingInfo(data map[string]interface{}, result *entity.ParsedResult, aid, cid string, pDur int) {
+	dub, ok := data["dubbing_info"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	bgArr, hasBg := dub["background_audio"].([]interface{})
+	roleArr, hasRole := dub["role_audio_list"].([]interface{})
+	if !hasBg || !hasRole {
+		return
+	}
+
+	toAudio := func(node map[string]interface{}) entity.Audio {
+		audioID := getString(node, "id")
+		urlList := []string{getString(node, "base_url")}
+		if backups, ok := node["backup_url"].([]interface{}); ok {
+			for _, b := range backups {
+				if bs, ok := b.(string); ok {
+					urlList = append(urlList, bs)
+				}
+			}
+		}
+		finalURL := urlList[0]
+		for _, u := range urlList {
+			if !baseURLRegex.MatchString(u) {
+				finalURL = u
+				break
+			}
+		}
+		return entity.Audio{
+			ID:        audioID,
+			Dfn:       audioID,
+			Dur:       pDur,
+			Bandwidth: getInt64(node, "bandwidth") / 1000,
+			BaseURL:   finalURL,
+			Codecs:    getString(node, "codecs"),
+		}
+	}
+
+	for _, n := range bgArr {
+		node, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		result.BackgroundAudioTracks = append(result.BackgroundAudioTracks, toAudio(node))
+	}
+
+	for _, r := range roleArr {
+		role, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		material := entity.AudioMaterialInfo{
+			AudioID:    getString(role, "audio_id"),
+			Title:      getString(role, "title"),
+			PersonName: getString(role, "person_name"),
+		}
+		if arr, ok := role["audio"].([]interface{}); ok {
+			for _, n := range arr {
+				node, ok := n.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				material.Audio = append(material.Audio, toAudio(node))
+			}
+		}
+		if len(material.Audio) == 0 {
+			continue
+		}
+		// 产物路径与上游同构：<aid>/<aid>.<cid>.<净化后的 audio_id>.m4a
+		seg := util.SanitizePathSegment(material.AudioID)
+		if seg == "" {
+			seg = util.SanitizePathSegment(material.Audio[0].ID)
+		}
+		if seg == "" {
+			seg = "audio"
+		}
+		material.Path = path.Join(aid, fmt.Sprintf("%s.%s.%s.m4a", aid, cid, seg))
+		result.RoleAudioList = append(result.RoleAudioList, material)
+	}
 }
 
 // apiBase returns the scheme-qualified base URL for an API host. A host that
@@ -450,6 +541,12 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 			pDur = int(tl) / 1000
 		}
 		result.ActualDurationSec = pDur
+
+		// 背景音频与配音只在 APP API + 番剧场景出现（上游同一门控）。
+		// 缺了这段解析，工作流里的背景音轨/配音下载循环永远拿不到数据。
+		if shouldExtractDubbing(appAPI, aidOri) {
+			extractDubbingInfo(data, result, aid, cid, pDur)
+		}
 
 		// Parse video tracks
 		if videos, ok := dash["video"].([]interface{}); ok {
