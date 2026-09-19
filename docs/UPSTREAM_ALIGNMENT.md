@@ -466,6 +466,17 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 |---|---|
 | `HttpUtilSslPolicyTests`、`VerifiedNoRedirectClientTests` | 无差异（**补上安全前提的钉住用例**）。上游用反射比较「校验池/不安全池是不是同一个实例」，Go 侧无对应机制；改按可移植的行为断言钉住三件事：① 许可证请求不跟随重定向（307 原样返回，目标一次都没被请求）；② 许可证请求始终校验证书（自签站点必然失败，不随 `--insecure` 降级）；③ `--insecure` 真的切换校验（skipSSL=true 能连自签、false 拒绝）。为可测性把 `licenseURL` 由常量改为变量（用例指向本地服务器），生产值不变。 |
 
+### 4.26 第二十二轮（目标轮 6）：选项默认值 / buvid3 / 取消归类
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `OptionDefaultsBindingTests` | 无差异（补钉住用例）：帮助文本标称「默认开启」的三个布尔选项（`--multi-thread` / `--skip-ai` / `--force-replace-host`）默认值确为 true，`--force-http`/`--use-tv-api`/`--only-show-info`/`--audio-only` 确为 false。上游当年踩的是 Spectre 把未出现的 flag 写回 false 覆盖初始化器，Go 侧无此机制，但默认值本身值得钉住。 |
+| `BuvidProviderTests` | 无差异：`HasBuvid3` 与上游逐字一致（`contains("buvid3=", OrdinalIgnoreCase)`），`buvid4=` / `buvid=` 不会误判。 |
+| `CancellationClassificationTests` | **一处差异**：本仓按 `ctx.Err() != nil` 判「已取消」，它把 **DeadlineExceeded 也算成用户取消**；上游只认 `CancellationRequested`，超时必须归 Failed 并保留原始错误。另外上游对真取消给出统一文案「已取消」，本仓此前落的是 `err.Error()`。现抽出 `classifyTaskCancellation` 按上游口径归类。 |
+
+**方法论收获**：这次差异藏在「看起来对」的一行 `ctx.Err() != nil` 里——它覆盖了两种语义
+（用户取消 / 超时），而只有前者才该叫「已取消」。对照上游时要注意**这类把两种原因混为一个判断**的写法，
+它们不会报错，只会把失败原因伪装成用户操作。
 **方法论收获**：这一片「无差异」但**原先没有任何用例**——安全前提靠代码里的一行 `CheckRedirect` 撑着，
 谁把它删掉都不会有测试变红。差分表的价值在这里是另一面：它把「本来就对、但没人守」的地方变成有守卫的。
 **方法论收获**：风控这次是「上游有、本仓没有」的**整块能力**，而它不体现在任何功能路径上——

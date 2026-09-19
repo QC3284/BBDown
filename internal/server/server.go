@@ -667,12 +667,9 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 	task.SetStatus(StatusRunning)
 	err = wf.Run(ctx)
 	if err != nil {
-		if ctx.Err() != nil {
-			task.SetStatus(StatusCancelled)
-		} else {
-			task.SetStatus(StatusFailed)
-		}
-		s.finishTask(task, err.Error())
+		status, msg := classifyTaskCancellation(ctx, err)
+		task.SetStatus(status)
+		s.finishTask(task, msg)
 		s.sendCallback(task)
 		return
 	}
@@ -704,6 +701,20 @@ func maskTaskError(msg string) string {
 }
 
 // finishTask moves a task to the finished list and sets its terminal fields.
+// classifyTaskCancellation 对应上游 BBDownApiServer.ClassifyCancellation：
+// 只有「任务确实被取消」（ctx 是 Canceled，而非 DeadlineExceeded）才算 Cancelled 并给出
+// 统一文案「已取消」；HttpClient 超时抛出的取消类错误其 ctx 并未取消，必须归为 Failed——
+// 否则任务被误标「已取消」，把真实失败原因掩盖成用户操作。
+func classifyTaskCancellation(ctx context.Context, err error) (TaskStatus, string) {
+	if ctx.Err() == context.Canceled {
+		return StatusCancelled, "已取消"
+	}
+	if err != nil {
+		return StatusFailed, err.Error()
+	}
+	return StatusFailed, ""
+}
+
 func (s *APIServer) finishTask(task *DownloadTask, errMsg string) {
 	task.mu.Lock()
 	if task.TaskFinishTime == 0 {
