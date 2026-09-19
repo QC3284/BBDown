@@ -8,6 +8,26 @@
 上游（aliveranme/BBDown）的同名版本条目仍是行为的权威描述；本文件只记录 Go 重写侧
 **相对上游的落地情况**。逐条对账基线与判定见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md)。
 
+## [1.6.19-go.14] - 2026-09-19
+
+补丁版本：用户确认的三处**有意差异**（判定与六处变异验证见
+[docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4.33）。
+
+### 变更
+
+- **412 追加可操作提示**：`HTTP 412: <脱敏 URL>（疑似风控拦截：请等待数分钟至数十分钟后重试，或更换网络出口；持续重试会加重风控）`。
+  上游此处是 .NET 默认消息，用户看到 412 不知道该等还是该换网络；只对 412 生效，404 等其它 4xx 照旧原样抛出。
+- **失败输出白字红底**：上游 `SetExceptionHandler` 把消息与升级提示两行都设成 `Red` 底 + `White` 字（亮色档 → ANSI 101/97）。
+  go.12 只搬了文本、漏了配色，用户反馈「不够显眼」。
+- **镜像 404 回退替换前的原地址**：`--force-replace-host` 默认开启会把每条流改写到 `upos-sz-mirrorcoso1`，
+  而镜像不保证覆盖全部对象；命中缺口时旧行为是对同一个死地址重试满 3×3 次再整页重来。现在首次 404 即切回原地址，
+  单线程与多线程分片两条路径都覆盖，原地址经 `DownloadConfig.FallbackURL` 由工作流传入。
+
+### 测试
+
+- 新增 `internal/util/status_hint_test.go`、`internal/download/fallback_test.go`、`internal/workflow/fallback_test.go`；
+  强化 `internal/cli/error_report_test.go`（逐行断言配色，只钉「某处有色」测不出改掉其中一行）。
+- 六处变异均验证「撤掉即红」：412 分支、消息行配色、提示行配色、单线程回退、分片回退、`withFallback` 不透传。
 ## [1.6.19-go.13] - 2026-09-19
 
 补丁版本：补一处**诊断缺口**——用户报「目前 404 概率比较高」时，日志里无从定位。

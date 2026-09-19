@@ -650,5 +650,35 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 另外：连续高频解析会触发 **HTTP 412 风控**（与本条的 404 是两回事，别混为一谈）。
 下一步要看的是用户那份 `--debug` 日志里 `Start downloading:` 行的 host。
 
+### 4.33 第二十九轮：三处**有意差异**（用户逐条点了「可以」）
+
+用户看完 §4.32 的判定后确认做三件事，都不是对齐、而是有意的行为差异：
+
+| # | 差异 | 上游行为 | 本仓行为 |
+|---|---|---|---|
+| 1 | 412 提示 | `EnsureSuccessStatusCode()` 抛 .NET 默认消息（`Response status code does not indicate success: 412 (Precondition Failed).`） | 追加「（疑似风控拦截：请等待数分钟至数十分钟后重试，或更换网络出口；持续重试会加重风控）」，只对 412 生效 |
+| 2 | 失败输出配色 | 两行都是白字红底（`BackgroundColor = Red`、`ForegroundColor = White`，亮色档） | 同（ANSI 101/97）——go.12 只搬了文本漏了配色，用户报「这个不够显眼」 |
+| 3 | 镜像 404 回退 | 对同一个死地址重试满 3×3 次再整页重来 | 首次 404 即换回 host 替换前的原地址（单线程与分片两条路径都覆盖） |
+
+**第 3 条的接线**：`handlePcdn` 改写 URL 前先记下原地址（`origVideoURL`/`origAudioURL`），下载调用处经
+`withFallback` 在「当前地址 ≠ 原地址」时把它放进 `DownloadConfig.FallbackURL`；下载器把 404 做成
+类型化错误（`httpStatusError`，`Error()` 文本与改前逐字相同），两条下载循环在 404 时切到原地址并
+各打一条 Warn。
+
+**测试与变异验证**（六处全部「撤掉即红」）：
+
+| 用例 | 钉住的行为 | 变异 → 红 |
+|---|---|---|
+| `TestHTTP412CarriesActionableHint` | 412 带提示、URL 脱敏 | 撤 412 分支 |
+| `TestHTTP404HasNoRiskControlHint` | 404 **不带**风控提示（不许误导） | （反向保护） |
+| `TestReportRuntimeErrorPrintsNoUsage` | 失败输出逐行白字红底 + 行尾复位 | 消息行不上色 / 提示行不上色 |
+| `TestDownloadFallsBackToOriginalHostOn404` | 单线程 404 回退原地址 | 撤单线程回退分支 |
+| `TestDownloadFallsBackPerClipOn404` | 分片 404 回退原地址 | 撤分片回退分支 |
+| `TestPageDownloadFallsBackWhenMirrorReplacedHost404s` | 端到端：`--upos-host` 指向恒 404 的假镜像，产物仍完整 | `withFallback` 不透传 |
+
+**方法论收获**：「不主动加功能」的约束下，偏离必须**逐条点名、逐条留痕**——这三条都写进了本节与
+README 的「已知有意差异」，而 §4.32 那两条（下载 URL 的 Debug 行、两级重试日志分级）是对齐、不算
+差异。两类分开放的用处是：下次与上游对账时，不会把有意差异当成待修的落后项去「修」掉。
+
 
 
