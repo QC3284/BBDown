@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +84,45 @@ func TestFFmpegArgsKeepOutputOptionsAfterAllInputs(t *testing.T) {
 	for _, want := range []string{"-metadata:s:s:0", "-disposition:v:1", "-map_chapters"} {
 		if !seen[want] {
 			t.Errorf("expected option %q to still be emitted\nargs: %v", want, args)
+		}
+	}
+
+	// 上游 MuxerArgsTests 的三条：章节 meta 是最后一个输入（下标 4），
+	// -map_chapters 指向它自身，且 -map 序列不得包含它（meta 只供取章节，不进输出）。
+	metaIdx := -1
+	for i, a := range args {
+		if a == "-map_chapters" && i+1 < len(args) {
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				t.Fatalf("-map_chapters 的下标 %q 不是整数", args[i+1])
+			}
+			metaIdx = n
+		}
+	}
+	if metaIdx != 4 {
+		t.Errorf("章节 meta 的下标 = %d，上游期望 4（video/audio/cover/sub 之后）\nargs: %v", metaIdx, args)
+	}
+
+	var inputs []string
+	for i, a := range args {
+		if a == "-i" && i+1 < len(args) {
+			inputs = append(inputs, args[i+1])
+		}
+	}
+	if len(inputs) <= metaIdx {
+		t.Fatalf("只有 %d 个输入，撑不起下标 %d", len(inputs), metaIdx)
+	}
+	if !strings.Contains(filepath.Base(inputs[metaIdx]), "chapters") {
+		t.Errorf("第 %d 个输入不是章节 meta：%q", metaIdx, inputs[metaIdx])
+	}
+
+	for i, a := range args {
+		if a != "-map" || i+1 >= len(args) {
+			continue
+		}
+		n, err := strconv.Atoi(args[i+1])
+		if err == nil && n == metaIdx {
+			t.Errorf("-map 序列不应包含章节 meta 的下标 %d\nargs: %v", metaIdx, args)
 		}
 	}
 }

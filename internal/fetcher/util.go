@@ -2,6 +2,9 @@ package fetcher
 
 import (
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 
 	"github.com/QC3284/BBDown/internal/entity"
 )
@@ -21,25 +24,40 @@ func gs(m map[string]interface{}, key string) string {
 	return ""
 }
 
+// gi 对应上游 JsonElementExtensions.GetInt32Safe：数字要能落在 int32 内且为整数，
+// 字符串要**整串**是数字（允许两侧空白与正负号），否则取默认值 0。
 func gi(m map[string]interface{}, key string) int {
 	switch v := m[key].(type) {
 	case float64:
+		if v != math.Trunc(v) || v < math.MinInt32 || v > math.MaxInt32 {
+			return 0
+		}
 		return int(v)
 	case string:
-		n := 0
-		fmt.Sscanf(v, "%d", &n)
+		// 不能用 fmt.Sscanf("%d")：它接受数字**前缀**，"12abc" 会被当成 12——
+		// 上游 int.TryParse 要求整串都是数字，脏数据必须落到默认值。
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0
+		}
 		return n
 	}
 	return 0
 }
 
+// gi64 对应上游 GetInt64Safe（整串解析、超范围取默认值）。
 func gi64(m map[string]interface{}, key string) int64 {
 	switch v := m[key].(type) {
 	case float64:
+		if v != math.Trunc(v) || v < math.MinInt64 || v > math.MaxInt64 {
+			return 0
+		}
 		return int64(v)
 	case string:
-		var n int64
-		fmt.Sscanf(v, "%d", &n)
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			return 0
+		}
 		return n
 	}
 	return 0

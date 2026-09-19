@@ -446,6 +446,16 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 | `FetcherFactoryTests` | 无差异：`mid:`/`favId:`/`listBizId:`/`seriesBizId:`/`ep:`/`cheese:`/裸援助各自落到对应 fetcher，`ep:` + `--use-intl-api` 落 IntlBangumiInfoFetcher，订阅目标都不会落到 NormalInfoFetcher |
 | `ConfigMergeTests` | 无差异：空格与等号写法的命令行都压过配置文件、`--config-file=<path>` 被认、以 `-` 开头的配置取值不被吞、子命令调用整段跳过合并 |
 
+### 4.23 第十八轮（目标轮 3）：JSON 取值 / 混流参数
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `JsonElementExtensionsTests` | **一处差异**：本仓 `gi`/`gi64` 用 `fmt.Sscanf("%d")`，它接受数字**前缀**——`"12abc"` 会变成 12、`"1.5"` 变成 1；上游 `int.TryParse(NumberStyles.Integer)` 要求整串是数字，脏数据必须落到默认值 0。另 `gi` 未做 int32 范围判定（上游 `TryGetInt32` 失败即取默认值）。改为整串解析 + 范围判定。 |
+| `MuxerArgsTests` | 无差异（**加强既有用例**）：补上上游的三条断言——章节 meta 是第 5 个输入（下标 4）、`-map_chapters` 指向它自身、`-map` 序列不含该下标（meta 只供取章节）。原本只断言 `-map_chapters` 存在与顺序，现按上游口径钉死。 |
+
+**方法论收获**：「前缀解析」这类差异读代码时几乎不可能看出来——`fmt.Sscanf("%d")` 看上去完全合理，
+只有拿上游的 `"12abc"` 这类脏值去喂才会现形。差分表里那些**看起来没意义的边界值**
+（`"invalid"`、`null`、缺字段）恰恰是最有价值的部分。
 **说明**：这一轮只补用例、无代码改动——三处都是「跑一遍确认一致」，
 按既定口径同样记入文档：**没撞出差异也是结果**，下次不必重查。
 另核对了剩余清单里的一批「假剩余」：`ParserFixtureTests`、`ProgressBarTests`、
