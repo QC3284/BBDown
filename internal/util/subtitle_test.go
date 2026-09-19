@@ -22,7 +22,9 @@ func TestFormatSubTime(t *testing.T) {
 	}{
 		{0, "00:00:00,000"},
 		{61.25, "00:01:01,250"},
-		{3661.999, "01:01:01,998"}, // float64 precision truncates 999ms
+		// 对齐上游 SubUtil.FormatTime：毫秒来自 TimeSpan.Milliseconds（tick 级四舍五入后
+		// 截断到毫秒），不是「小数部分 ×1000 截断」——后者在这类取值上会少 1ms。
+		{3661.999, "01:01:01,999"},
 		{-5, "00:00:00,000"},
 	}
 	for _, c := range cases {
