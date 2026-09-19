@@ -148,11 +148,17 @@ func (g *stallGuard) Stop() { g.timer.Stop() }
 
 func DownloadFile(ctx context.Context, url, destPath string, cfg DownloadConfig) error {
 	if cfg.UseAria2c {
+		util.LogDebug("Start downloading: %s", util.MaskUrl(url))
 		return downloadWithAria2c(ctx, url, destPath, cfg)
 	}
 
 	// Force-http replacement: gated by the option, mcdn excluded (upstream).
 	url = forceHTTPIfNeeded(url, cfg.ForceHTTP)
+
+	// 上游 DownloadFileCoreAsync / MultiThreadDownloadCoreAsync 都以脱敏 URL 打这一行
+	// （每文件一次）。本仓此前完全没有：用户报「404 概率高」时，日志里既看不出是哪台
+	// host、也看不出哪条路径——「强制替换到镜像后 404」这种最常见的解释因此无法证实。
+	util.LogDebug("Start downloading: %s", util.MaskUrl(url))
 
 	multi := cfg.MultiThread
 	if multi && strings.Contains(url, "-cmcc-") {
