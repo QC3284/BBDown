@@ -1,6 +1,7 @@
 package util
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -83,7 +84,7 @@ func TestCombineMultipleFilesIntoSingleFile(t *testing.T) {
 	if err := os.WriteFile(f2, []byte("world"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := CombineMultipleFilesIntoSingleFile([]string{f1, f2}, out); err != nil {
+	if err := CombineMultipleFilesIntoSingleFile(context.Background(), []string{f1, f2}, out); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(out)

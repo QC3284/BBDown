@@ -220,8 +220,13 @@ func TestMergeFLVCleansIntermediatesOnFailure(t *testing.T) {
 		inputs = append(inputs, p)
 	}
 
-	// The output directory does not exist, so the combine step fails.
-	out := filepath.Join(dir, "missing-dir", "out.mp4")
+	// 让合并步骤失败：把输出的父路径做成一个普通文件——合并会自动创建缺失的目录
+	// （上游 BBDownUtil 的同一契约），所以只能靠"父路径不是目录"来制造失败。
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(blocker, "out.mp4")
 	if err := MergeFLV(context.Background(), inputs, out); err == nil {
 		t.Fatal("expected the combine step to fail")
 	}

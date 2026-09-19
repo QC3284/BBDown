@@ -416,7 +416,7 @@ func MergeFLV(ctx context.Context, files []string, outPath string) error {
 		tsFiles = append(tsFiles, tsFile)
 	}
 
-	if err := util.CombineMultipleFilesIntoSingleFile(tsFiles, outPath); err != nil {
+	if err := util.CombineMultipleFilesIntoSingleFile(ctx, tsFiles, outPath); err != nil {
 		return err
 	}
 	converted = true

@@ -524,7 +524,7 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 	for _, c := range clips {
 		clipFiles = append(clipFiles, clipPath(destPath, c.idx))
 	}
-	if err := util.CombineMultipleFilesIntoSingleFile(clipFiles, destPath); err != nil {
+	if err := util.CombineMultipleFilesIntoSingleFile(ctx, clipFiles, destPath); err != nil {
 		return err
 	}
 	util.Log("清理分片...")

@@ -1,10 +1,12 @@
 package util
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -324,30 +326,85 @@ func FormatTime(seconds int, absolute bool) string {
 	return fmt.Sprintf("%02dm%02ds", m, s)
 }
 
-// CombineMultipleFilesIntoSingleFile concatenates files into one. Streams
-// each input with a fixed buffer instead of loading whole files into memory
-// (video clips and live segments can be hundreds of MB each).
-func CombineMultipleFilesIntoSingleFile(files []string, output string) error {
+// CombineMultipleFilesIntoSingleFile concatenates files into one, in order.
+//
+// 与上游 BBDownUtil.CombineMultipleFilesIntoSingleFileAsync 同契约（上游有专门用例钉住）：
+//   - 预取消：在创建输出之前就返回，不留下空文件；
+//   - 单个文件：直接 rename（源文件随之消失），不做无谓拷贝；
+//   - 输出目录不存在时自动创建；
+//   - 合并中途失败/取消：删掉半截产物——否则后续的「已存在」判定可能把它当成完整文件；
+//     清理失败绝不掩盖原始错误（清理不能把取消翻成失败）；
+//   - 空列表直接返回，不产出文件。
+//
+// 逐块流式拷贝（1MB 缓冲），不把整文件读进内存：视频分片与直播分段可能各有数百 MB。
+func CombineMultipleFilesIntoSingleFile(ctx context.Context, files []string, output string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
+	if len(files) == 1 {
+		return os.Rename(files[0], output)
+	}
+
+	if dir := filepath.Dir(output); dir != "" && dir != "." {
+		if _, err := os.Stat(dir); err != nil {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+		}
+	}
+
 	out, err := os.Create(output)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-
-	buf := make([]byte, 1<<20) // 1MB copy buffer
-	for _, f := range files {
-		in, err := os.Open(f)
-		if err != nil {
-			return err
+	err = func() error {
+		buf := make([]byte, 1<<20)
+		for _, f := range files {
+			if cerr := ctx.Err(); cerr != nil {
+				return cerr
+			}
+			in, oerr := os.Open(f)
+			if oerr != nil {
+				return oerr
+			}
+			for {
+				n, rerr := in.Read(buf)
+				if n > 0 {
+					if _, werr := out.Write(buf[:n]); werr != nil {
+						_ = in.Close()
+						return werr
+					}
+				}
+				if rerr == io.EOF {
+					break
+				}
+				if rerr != nil {
+					_ = in.Close()
+					return rerr
+				}
+				if cerr := ctx.Err(); cerr != nil {
+					_ = in.Close()
+					return cerr
+				}
+			}
+			if cerr := in.Close(); cerr != nil {
+				return cerr
+			}
 		}
-		_, copyErr := io.CopyBuffer(out, in, buf)
-		closeErr := in.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
+		return nil
+	}()
+	closeErr := out.Close()
+	if err != nil {
+		// 先关句柄再删（Windows 上打开中的文件删不掉）；删除失败不改变返回的错误类型。
+		_ = os.Remove(output)
+		return err
+	}
+	if closeErr != nil {
+		_ = os.Remove(output)
+		return closeErr
 	}
 	return nil
 }
