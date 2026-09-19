@@ -13,6 +13,7 @@ func TestBuildAria2cInputFileRejectsLineInjection(t *testing.T) {
 		"https://upos.example.com/a.m4s\n  out=/etc/passwd",
 		false,
 		"SESSDATA=x\ndir=/",
+		"Mozilla/5.0",
 		"/tmp/work",
 		"a.m4s",
 	)
@@ -48,7 +49,7 @@ func TestBuildAria2cInputFileRejectsLineInjection(t *testing.T) {
 
 // TestBuildAria2cInputFileShape pins the normal rendering.
 func TestBuildAria2cInputFileShape(t *testing.T) {
-	got := buildAria2cInputFile("https://upos.example.com/a.m4s", true, "", "/tmp/work", "a.m4s")
+	got := buildAria2cInputFile("https://upos.example.com/a.m4s", true, "", "Mozilla/5.0", "/tmp/work", "a.m4s")
 	want := "https://upos.example.com/a.m4s\n" +
 		"  header=Referer: https://www.bilibili.com\n" +
 		"  header=User-Agent: Mozilla/5.0\n" +

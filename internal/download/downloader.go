@@ -32,7 +32,26 @@ type DownloadConfig struct {
 	RetryCount    int
 	RetryDelayMs  int
 	Cookie        string
-	Client        *util.HTTPClient
+	// UserAgent 留空时取 HTTPClient 的 UA（显式 --user-agent 或进程级随机默认）。
+	UserAgent string
+	Client    *util.HTTPClient
+}
+
+// userAgent 返回本次下载使用的 UA。
+//
+// 上游 HTTPUtil.GetUserAgent(null) 的优先级：显式值 → 进程默认随机 UA。本仓把 --user-agent
+// 写在 HTTPClient 上（SetUserAgent），这里直接取它——此前下载路径写死 "Mozilla/5.0"，
+// 用户设了 --user-agent 也只影响 API 请求，媒体下载仍带着这个极易被 CDN 识别的裸 UA。
+func (c DownloadConfig) userAgent() string {
+	if c.UserAgent != "" {
+		return c.UserAgent
+	}
+	if c.Client != nil {
+		if ua := c.Client.UserAgent(); ua != "" {
+			return ua
+		}
+	}
+	return util.RandomUserAgent()
 }
 
 // maxConcurrentClips caps parallel range requests per file (upstream uses
@@ -191,7 +210,7 @@ func probeFile(ctx context.Context, url string, cfg DownloadConfig) (probeResult
 	if needsBilibiliReferer(url) {
 		req.Header.Set("Referer", "https://www.bilibili.com")
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("User-Agent", cfg.userAgent())
 	resp, err := client.Do(req)
 	if err != nil {
 		return pr, err
@@ -306,7 +325,7 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 			if needsBilibiliReferer(url) {
 				req.Header.Set("Referer", "https://www.bilibili.com")
 			}
-			req.Header.Set("User-Agent", "Mozilla/5.0")
+			req.Header.Set("User-Agent", cfg.userAgent())
 			if cfg.Cookie != "" {
 				req.Header.Set("Cookie", cfg.Cookie)
 			}
@@ -590,7 +609,7 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 			if needsBilibiliReferer(url) {
 				req.Header.Set("Referer", "https://www.bilibili.com")
 			}
-			req.Header.Set("User-Agent", "Mozilla/5.0")
+			req.Header.Set("User-Agent", cfg.userAgent())
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", clip.from, clip.to))
 			if cfg.Cookie != "" {
 				req.Header.Set("Cookie", cfg.Cookie)
@@ -744,8 +763,8 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 	}
 	go func() {
 		defer stdin.Close()
-		io.WriteString(stdin, buildAria2cInputFile(
-			url, needsBilibiliReferer(url), cfg.Cookie, filepath.Dir(destPath), filepath.Base(destPath)))
+		io.WriteString(stdin, buildAria2cInputFile(url, needsBilibiliReferer(url), cfg.Cookie, cfg.userAgent(),
+			filepath.Dir(destPath), filepath.Base(destPath)))
 	}()
 
 	if err := cmd.Run(); err != nil {
@@ -806,13 +825,13 @@ func aria2cSanitize(v string) string {
 // response (base_url), so a mirror or an --insecure MITM could otherwise append
 // "\n  out=..." and make aria2c write to an arbitrary path. The Cookie already
 // had this guard while the URL — the one value that is never local — did not.
-func buildAria2cInputFile(url string, needsReferer bool, cookie, dir, out string) string {
+func buildAria2cInputFile(url string, needsReferer bool, cookie, userAgent, dir, out string) string {
 	var sb strings.Builder
 	sb.WriteString(aria2cSanitize(url) + "\n")
 	if needsReferer {
 		sb.WriteString("  header=Referer: https://www.bilibili.com\n")
 	}
-	sb.WriteString("  header=User-Agent: Mozilla/5.0\n")
+	sb.WriteString("  header=User-Agent: " + aria2cSanitize(userAgent) + "\n")
 	if cookie != "" {
 		sb.WriteString("  header=Cookie: " + aria2cSanitize(cookie) + "\n")
 	}
