@@ -22,11 +22,12 @@ import (
 	"github.com/QC3284/BBDown/internal/util"
 )
 
-// Widevine CDM constants.
-const (
-	licenseURL = "https://bvc-drm.bilivideo.com/bili_widevine"
-	certURL    = "https://bvc-drm.bilivideo.com/cer/bilibili_certificate.bin"
-)
+// Widevine CDM endpoints.
+const certURL = "https://bvc-drm.bilivideo.com/cer/bilibili_certificate.bin"
+
+// licenseURL 是变量而非常量：用例把它指向本地服务器，验证「不跟随重定向」与
+// 「始终校验证书」两条安全前提（上游 VerifiedNoRedirectClientTests）。
+var licenseURL = "https://bvc-drm.bilivideo.com/bili_widevine"
 
 var widevineSystemID = []byte{
 	0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce,

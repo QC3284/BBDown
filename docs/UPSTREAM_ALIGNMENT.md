@@ -460,6 +460,14 @@ DRM 取钥与解密（`Decrypt.cs` / `WidevineCdm` / `WvdDevice`：手动密钥�
 | `HttpUtilRetryTests` | **一处差异**：本仓**完全没有**风控页识别。上游在 API 响应是 HTML 时抛 `RiskControlResponseException`（“疑似风控页：接口返回 HTML 而非预期数据…”），本仓把 HTML 直接交给 `json.Unmarshal`，用户看到 `invalid character '<' looking for beginning of value`——而风控页/登录墙恰恰都以 HTTP 200 + HTML 返回。现加 `util.LooksLikeHTMLPage` + `util.UnmarshalJSON`（剥前导空白与 BOM 后判首字符），parser/fetcher/评论导出的 22 处解析统一走它。其余重试语义（5xx 重试、4xx 不重试、耗尽即停、请求计数精确、body 上限）与上游一致，既有 `retry_test.go` 已按相同口径断言。 |
 | `ConfigPropagationTests` | 不适用于 Go：该文件用反射检查 C# 的 `AsyncLocal` 配置传播（子方法写 Config 不回流父流程，须显式返回并应用）。本仓等价契约由返回值承担——`workflow.InitSession` 返回 `(wbi, error)` 并回写 `*cfg`，三处调用点（watchlater / sub check / serve 任务）都把返回的 wbi 传给 `fetcher.NewFactory`，不存在“子方法写完父流程看不见”的形态。 |
 
+### 4.25 第二十一轮（目标轮 5）：SSL 策略 / 不跟随重定向
+
+| 上游测试文件 | 结果 |
+|---|---|
+| `HttpUtilSslPolicyTests`、`VerifiedNoRedirectClientTests` | 无差异（**补上安全前提的钉住用例**）。上游用反射比较「校验池/不安全池是不是同一个实例」，Go 侧无对应机制；改按可移植的行为断言钉住三件事：① 许可证请求不跟随重定向（307 原样返回，目标一次都没被请求）；② 许可证请求始终校验证书（自签站点必然失败，不随 `--insecure` 降级）；③ `--insecure` 真的切换校验（skipSSL=true 能连自签、false 拒绝）。为可测性把 `licenseURL` 由常量改为变量（用例指向本地服务器），生产值不变。 |
+
+**方法论收获**：这一片「无差异」但**原先没有任何用例**——安全前提靠代码里的一行 `CheckRedirect` 撑着，
+谁把它删掉都不会有测试变红。差分表的价值在这里是另一面：它把「本来就对、但没人守」的地方变成有守卫的。
 **方法论收获**：风控这次是「上游有、本仓没有」的**整块能力**，而它不体现在任何功能路径上——
 正常跑永远走不到。差分表能撞出它，是因为上游专门为它写了用例。这也再次说明：
 「我们没这条逻辑」和「我们这条逻辑写错了」是两类问题，只有对着上游用例清单才会有前者。
