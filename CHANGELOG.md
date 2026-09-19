@@ -8,6 +8,32 @@
 上游（aliveranme/BBDown）的同名版本条目仍是行为的权威描述；本文件只记录 Go 重写侧
 **相对上游的落地情况**。逐条对账基线与判定见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md)。
 
+## [1.6.19-go.8] - 2026-09-19
+
+补丁版本：差分续跑撞出两处（一处整块缺失、一处解析口径），另确认一处不适用。
+
+### 新增
+
+- **风控页识别**（对齐上游 `RiskControlResponseException`）：B 站的风控页/登录墙/错误页都以
+  HTTP 200 + HTML 返回，本仓此前把 HTML 直接交给 `json.Unmarshal`，用户看到的是
+  `invalid character '<' looking for beginning of value`——既难定位又像偶发。
+  现由 `util.LooksLikeHTMLPage`（剥前导空白与 BOM 后判首字符）识别，
+  经 `util.UnmarshalJSON` 给出「疑似风控页：接口返回 HTML 而非预期数据…」的可读诊断；
+  parser / fetcher / 评论导出的 22 处解析统一走它。
+
+### 修复
+
+- **JSON 数字取值容忍前缀**：`gi`/`gi64` 用 `fmt.Sscanf("%d")`，`"12abc"` 会被当成 12、
+  `"1.5"` 当成 1；上游 `int.TryParse(NumberStyles.Integer)` 要求整串是数字，脏数据落到默认值 0。
+  现改为整串解析（`strconv`）+ int32 范围判定。
+
+### 说明
+
+- 重试策略（5xx 重试、4xx 不重试、耗尽即停、请求计数精确、响应体上限）与上游一致，
+  既有 `retry_test.go` 已按同一口径断言。
+- 上游 `ConfigPropagationTests` 用反射检查 C# 的 `AsyncLocal` 传播，Go 无对应机制：
+  本仓等价契约由返回值承担（`InitSession` 返回 wbi 并回写 cfg，调用点传给 factory），
+  不存在「子方法写完父流程看不见」的形态，已记入对齐文档。
 ## [1.6.19-go.7] - 2026-09-19
 
 补丁版本：继续逐文件搬上游测试表。本轮接 12 个文件，撞出四处不一致并修复；
