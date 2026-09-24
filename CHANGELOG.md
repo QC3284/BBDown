@@ -10,6 +10,23 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [1.6.20-go.4] - 2026-09-24
+
+第四个版本：**批量输入（F2）** 与 **模板变量对账（F1）**。
+
+### 新增
+
+- **批量输入**：位置参数可给多个目标（修复：此前只取第一个，其余被静默忽略），新增 `--urls-file <path>`
+  （每行一个，`#` 注释与空行跳过，`-` 表示 stdin）。顺序执行，单个失败不中断其余，末尾汇总 `N/M 个任务失败`；
+  Ctrl+C 立即停下；更新检查只在开头查一次。单目标行为与改前一致。
+
+### 说明
+
+- **F1 模板变量对账**：上游 `PathHelper` 的 17 个占位符本仓全部可用（含 `<ownerMid>`、`<publishDate:格式>`、
+  `<videoCodecs>` 等），因此不新增占位符——`<upMid>` 之类只是同一件事的第二个名字。产出是把整张表钉住的
+  用例（`internal/download/pathformat_tokens_test.go`），此前没有任何用例守它。
+- 批量输入属于相对上游的**有意差异**（上游只接受单个位置参数），登记见
+  [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4.38；候选清单见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 ## [1.6.20-go.3] - 2026-09-24
 
 第三批：**O4 分片自适应**（≈2× 提速）、**O6 杜比视界探测的两个掩盖型 bug**、**O3 进度条 CPU 实测**。

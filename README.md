@@ -65,6 +65,11 @@ BBDown article cv123
 # 下载稍后再看列表（需登录）
 BBDown watchlater
 
+# 批量下载：位置参数给多个，或从文件/stdin 读列表（每行一个，# 注释）
+BBDown BV1xx411c7mD av270935199
+BBDown --urls-file urls.txt
+cat urls.txt | BBDown --urls-file -
+
 # 订阅管理（add/list/remove/check）
 BBDown sub add mid:123456
 BBDown sub check
@@ -112,6 +117,7 @@ BBDown sub check
 | `--upos-host` | 自定义 upos 镜像 host（设了它就按它替换，不再用内置镜像） |
 | `--allow-pcdn` | 不替换 PCDN 域名（默认 false，即替换） |
 | `--work-dir` | 工作目录（根命令的持久标志，所有子命令都可用） |
+| `--urls-file` | 从文件批量读取下载目标（每行一个，`#` 注释，`-` 表示 stdin）；位置参数也可给多个，顺序执行、单个失败不中断其余 |
 | `--comments` | 下载评论区（导出 .comments.json） |
 | `--thread-segment-size` | 多线程分片大小(MB)。**默认 0 = 自动**：按「分片数 ≈ 并发上限」倒推（1–20MB）；显式给值则按值切 |
 | `--save-archives-to-file` | 记录已下载 aid（`BBDown.archives`，`aid|` 格式） |
