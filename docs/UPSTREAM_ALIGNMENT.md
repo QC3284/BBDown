@@ -665,7 +665,7 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 | 3 | 镜像 404 回退 | 对同一个死地址重试满 3×3 次再整页重来 | 首次 404 即换回 host 替换前的原地址（单线程与分片两条路径都覆盖） |
 
 **第 3 条的接线**：`handlePcdn` 改写 URL 前先记下原地址（`origVideoURL`/`origAudioURL`），下载调用处经
-`withFallback` 在「当前地址 ≠ 原地址」时把它放进 `DownloadConfig.FallbackURL`；下载器把 404 做成
+`withFallback` 在「当前地址 ≠ 原地址」时把它放进 `DownloadConfig.FallbackURLs`（§4.39 起为有序候选链，元素 0 即原地址）；下载器把 404 做成
 类型化错误（`httpStatusError`，`Error()` 文本与改前逐字相同），两条下载循环在 404 时切到原地址并
 各打一条 Warn。
 
@@ -697,6 +697,23 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 **用例**：`internal/fetcher/upstream_apierror_test.go`（code=0/缺 code 不报错、字符串形态的 code、缺 message 仍带 code、
 消息格式逐字比对）；变异验证：撤掉 code 判断即变红。
 
+### 4.39 第三十五轮：产物校验与候选链（**新功能 + 修复**）、进度 JSON、订阅过滤、serve 闸门量测
+
+| # | 项 | 性质 | 内容 |
+|---|---|---|---|
+| 1 | F3 产物校验 | 修复（本仓自愈） | 判定只用 Content-Length / Content-Range 权威总长 / 实际写入字节；接口 size 不做判定（dash 无该字段、bandwidth 估算误差 −1.39%~+0.04%）| 
+| 2 | F4 候选链 | **有意偏离**（§4.33 扩展） | DownloadConfig.FallbackURL → FallbackURLs 有序候选链：404 或连接/传输失败换下一个；其它错误不烧候选；尝试次数 max(retry, 候选数) 上限 8 |
+| 3 | F5 进度 JSON | 新功能 | `--progress-json` 逐行 JSON 到 stderr；关闭时行为与改前一致 |
+| 4 | F6 订阅过滤 | 新功能 | `sub add --filter <正则>` 按标题过滤（RE2），旧文件兼容 |
+| 5 | O7 serve 闸门 | 优化（量测+回归） | 闸门抽成 acquireSlot/releaseSlot；6 任务/上限 3 → 峰值并发 3、201ms；变异（容量放大）变红 |
+
+**证据**：代理 A 12 条变异、代理 B 14 条变异全部「改回旧行为即红」；本仓全仓 `go test ./... -count=1` 16 包绿。
+非回归：9 次重试阶梯（GET=9/HEAD=3）、§4.33 两条回退用例、§4.35 单次请求与 dash-reparse 夹具全绿。
+
+**方法论收获**：这轮把「先量清楚再判定」做成了硬步骤——F3 一开始的候选是「用接口声明的 size 校验产物」，
+真去量才发现 dash 节点没有 size、bandwidth 估算能差 1.4%，若照原计划做就会给用户造出一堆误报。另外，
+**变异脚本本身也会假绿**：代理 A 的第一次变异脚本把待删块插到了文件头，导致 M2~M11 是编译失败而非真红，
+它自己发现并用「唯一 marker + 原地替换」重跑了全部 12 条——这类披露比结论更重要。
 ### 4.38 第三十四轮：批量输入（**新功能**）与模板变量对账
 
 | # | 项 | 性质 | 内容 |

@@ -26,12 +26,18 @@ type progressReader struct {
 	lastTime  time.Time
 	speed     string
 	started   int32
+	// base 是本次传输之前已就位的字节数（断点续传时 > 0）：JSON 事件报的是
+	// 「文件已完成多少」而不是「这一次读了多少」，否则续传的 percent 永远到不了 100%。
+	// 终端进度条不读它（行为与改前一致）。
+	base int64
 	// pacer 由数据路径（Read）打点、渲染协程消费：重绘不再等定时器（见 pacer.go）。
 	pacer      progressPacer
 	done       chan struct{}
 	finished   chan struct{}
 	closeOnce  sync.Once
 	isTerminal bool
+	// json 为真时走逐行 JSON 事件（--progress-json），与终端无关。
+	json bool
 }
 
 func newProgressReader(r io.Reader, total int64) *progressReader {
@@ -40,6 +46,7 @@ func newProgressReader(r io.Reader, total int64) *progressReader {
 		total:      total,
 		lastTime:   time.Now(),
 		isTerminal: term.IsTerminal(int(os.Stdout.Fd())),
+		json:       progressJSONEnabled.Load(),
 		pacer:      newProgressPacer(),
 		done:       make(chan struct{}),
 		finished:   make(chan struct{}),
@@ -51,7 +58,8 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 	n, err := pr.reader.Read(p)
 	if n > 0 {
 		atomic.AddInt64(&pr.current, int64(n))
-		if pr.isTerminal && atomic.CompareAndSwapInt32(&pr.started, 0, 1) {
+		// --progress-json 时不受终端限制：这正是给管道里的自动化用的。
+		if (pr.isTerminal || pr.json) && atomic.CompareAndSwapInt32(&pr.started, 0, 1) {
 			go pr.renderLoop()
 		}
 		// 数据到达即打点（合并式、不阻塞）：进度帧由数据驱动，不再等 125ms 定时器。
@@ -73,6 +81,10 @@ func (pr *progressReader) Close() {
 
 func (pr *progressReader) renderLoop() {
 	defer close(pr.finished)
+	if pr.json {
+		pr.renderJSONLoop()
+		return
+	}
 	if !pr.isTerminal {
 		return
 	}
@@ -111,6 +123,19 @@ func (pr *progressReader) renderLoop() {
 	// 首帧、节流、静默心跳与收尾擦行统一在 runProgressLoop 里（见 pacer.go）：
 	// 上游此处是 125ms 定时器，本仓按「数据到达即重绘」的节奏驱动。
 	runProgressLoop(pr.pacer.Signals(), pr.done, true, line, render)
+}
+
+// renderJSONLoop 是 --progress-json 的渲染循环：与终端进度条共用同一套
+// 「首帧 / 节流 / 静默心跳 / 收尾」节奏（runProgressLoop），只把帧渲染换成一行 JSON。
+//
+// 用零值 progressLine（enabled=false）：JSON 是给程序消费的，这一行不能再去动终端。
+// 退出前补一条 state=done —— Close() 要等 finished，所以调用方拿到 Close 返回时，
+// 结束事件一定已经写出去了。
+func (pr *progressReader) renderJSONLoop() {
+	emit := newJSONProgressEmitter(pr.total)
+	downloaded := func() int64 { return pr.base + atomic.LoadInt64(&pr.current) }
+	runProgressLoop(pr.pacer.Signals(), pr.done, true, &progressLine{}, func() { emit.progress(downloaded()) })
+	emit.done(downloaded())
 }
 
 func formatSpeed(size float64) string {

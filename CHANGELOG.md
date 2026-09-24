@@ -10,6 +10,36 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [1.6.20-go.5] - 2026-09-24
+
+第五个版本：**产物校验（F3）**、**多镜像回退扩展（F4）**、**进度事件 JSON（F5）**、**订阅正则过滤（F6）**、
+**serve 并发闸门量测（O7）**。
+
+### 修复
+
+- **F3 产物校验**：先量清「接口声明的 size 能不能判定」——现行 web playurl 的 dash 节点根本没有 size 字段，
+  bandwidth×时长只是估算（实测偏差 −1.39%~+0.04%），durl 的 size 虽精确但 FLV 产物 ≠ 分段之和。因此判定只用
+  可靠来源：HTTP Content-Length / Content-Range 权威总长 / 实际写入字节。四处修复：
+  ① 声明长度未知时无条件丢弃陈旧 .tmp（旧代码 206 分支不删不截断，陈旧尾部会留在产物里）；
+  ② HEAD 与 206 两次声明矛盾即报错（旧行为会先落盘；分片路径会把另一份资源的 4MB 前缀当成功合并出去）；
+  ③ aria2c 路径补长度复核（此前零校验）；④ 拦下 0 字节的原始轨道/FLV 产物（--skip-mux 下旧行为会交付空文件）。
+
+### 新增
+
+- **F4 多镜像回退扩展**：候选链数据驱动（parser 保留每条轨道的 backup_url；workflow 传「替换前原地址 → backup_url」；
+  下载器按序回退）。404 **或**连接/传输失败才换候选；其它错误保持原地址重试，不烧候选。尝试次数
+  = max(--retry-count, 候选数)（上限 8），**无候选时与改前逐字一致**，9 次阶梯不动。
+- **F5 `--progress-json`**（默认关，写 stderr）：逐行 JSON {percent, downloaded, total, speed, state}，74~90 字节/行；
+  与终端进度条同一节流；关闭时只多一次 atomic load，终端路径逐字未改；续传场景末帧报整文件已完成。
+- **F6 `sub add --filter <正则>`**：按稿件标题过滤（非法正则当场报错且不落盘），sub list 显示，sub check 应用，
+  旧订阅文件兼容。
+
+### 说明
+
+- F3/F4/F5/F6 都是相对上游的差异（F4 是 §4.33 回退语义的扩展，F5/F6 是新功能），登记见
+  [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4.39；候选清单见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+- 代理披露的三处未覆盖点（F5 的 CLI 调用点端到端、F6 的 sub check 接线、终端进度帧可瞬时越过总长 +33%）如实记在
+  ROADMAP 的「待办」段，不掩饰。
 ## [1.6.20-go.4] - 2026-09-24
 
 第四个版本：**批量输入（F2）** 与 **模板变量对账（F1）**。

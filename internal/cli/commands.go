@@ -14,6 +14,7 @@ import (
 
 	"github.com/QC3284/BBDown/internal/article"
 	"github.com/QC3284/BBDown/internal/config"
+	"github.com/QC3284/BBDown/internal/download"
 	"github.com/QC3284/BBDown/internal/fetcher"
 	"github.com/QC3284/BBDown/internal/live"
 	"github.com/QC3284/BBDown/internal/login"
@@ -32,6 +33,10 @@ var (
 	watchLaterWbi string
 	subCheckWbi   string
 )
+
+// applyProgressJSON 把 --progress-json 传给下载层（F5，本仓新功能）。
+// 默认关：关闭时下载层照旧画终端进度条，行为与改前一致。
+func applyProgressJSON() { download.SetProgressJSON(optProgressJSON) }
 
 // warnAppAPIWithoutToken 提示 APP 接口不识别 WEB 登录 Cookie（与上游行为一致）：
 // 登录用户加 -a 看不到高清属于预期行为，需要 APP token 或改用默认 WEB 接口。
@@ -92,7 +97,7 @@ var serveCmd = &cobra.Command{
 		defer cancel()
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v1.6.20-go.4")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v1.6.20-go.5")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -259,7 +264,7 @@ var subAddCmd = &cobra.Command{
 	Short: "添加订阅",
 	Args:  usageArgs(cobra.MinimumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := substore.Add(args[0], optSubName); err != nil {
+		if err := substore.Add(args[0], optSubName, optSubFilter); err != nil {
 			return err
 		}
 		util.Log("已添加订阅: %s", args[0])
@@ -281,7 +286,12 @@ var subListCmd = &cobra.Command{
 		}
 		util.Log("共 %d 个订阅:", len(subs))
 		for _, s := range subs {
-			util.Log("  %s  [%s]  (添加于 %s)", s.Target, s.Name, time.Unix(s.AddedAt, 0).Local().Format("2006-01-02 15:04"))
+			// 没设过滤时这一行与改前逐字相同（旧清单/不用该功能的用户不受影响）。
+			filter := ""
+			if s.Filter != "" {
+				filter = "  过滤: " + s.Filter
+			}
+			util.Log("  %s  [%s]  (添加于 %s)%s", s.Target, s.Name, time.Unix(s.AddedAt, 0).Local().Format("2006-01-02 15:04"), filter)
 		}
 		return nil
 	},
@@ -318,6 +328,7 @@ func runWatchLater(cmd *cobra.Command, args []string) error {
 	cfg.UseAppAPI = optUseAppAPI
 	cfg.UseIntlAPI = optUseIntlAPI
 	cfg.WorkDir = optWorkDir
+	applyProgressJSON()
 	warnAppAPIWithoutToken(cfg.UseAppAPI, cfg.AccessToken)
 
 	client := buildHTTPClient(cfg)
@@ -428,6 +439,7 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 	cfg.UseAppAPI = optUseAppAPI
 	cfg.UseIntlAPI = optUseIntlAPI
 	cfg.WorkDir = optWorkDir
+	applyProgressJSON()
 	warnAppAPIWithoutToken(cfg.UseAppAPI, cfg.AccessToken)
 	client := buildHTTPClient(cfg)
 	wbi, err := workflow.InitSession(ctx, &cfg, client)
@@ -468,21 +480,17 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		var newAids []string
-		for _, aid := range allAids {
-			known := false
-			for _, h := range history {
-				if h == aid {
-					known = true
-					break
-				}
-			}
-			if !known {
-				newAids = append(newAids, aid)
-			}
+		newAids, err := subNewAids(sub, vInfo.Title, allAids, history)
+		if err != nil {
+			util.LogWarn("订阅 %s 的过滤条件无效（跳过）: %v", sub.Name, err)
+			continue
 		}
 		if len(newAids) == 0 {
-			util.Log("  没有新增内容")
+			if sub.Filter != "" {
+				util.Log("  没有匹配过滤 %q 的新内容（稿件标题: %s）", sub.Filter, vInfo.Title)
+			} else {
+				util.Log("  没有新增内容")
+			}
 			continue
 		}
 		util.Log("  发现 %d 个新内容: av%s", len(newAids), joinAids(newAids))
@@ -525,6 +533,36 @@ func subCheckResult(cancelled bool, failures int) error {
 		return fmt.Errorf("订阅检查完成，但有 %d 个视频下载失败", failures)
 	}
 	return nil
+}
+
+// subNewAids 计算某订阅本次要下载的 aid（F6 标题过滤 + 既有历史去重）：
+//
+//   - 稿件标题不匹配订阅的 --filter 正则 → 返回空，这一稿整条跳过；
+//   - 过滤正则非法（清单被手改/旧版本写入）→ 返回错误，调用方据此跳过该订阅，
+//     而不是当成「全部通过」——那会把用户明确排除的稿件也下下来；
+//   - 没有过滤时就是「历史里没下载过的 aid」。
+func subNewAids(sub substore.Subscription, title string, aids, history []string) ([]string, error) {
+	re, err := sub.CompileFilter()
+	if err != nil {
+		return nil, err
+	}
+	if re != nil && !re.MatchString(title) {
+		return nil, nil
+	}
+	var newAids []string
+	for _, aid := range aids {
+		known := false
+		for _, h := range history {
+			if h == aid {
+				known = true
+				break
+			}
+		}
+		if !known {
+			newAids = append(newAids, aid)
+		}
+	}
+	return newAids, nil
 }
 
 func joinAids(aids []string) string {

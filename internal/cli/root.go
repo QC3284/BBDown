@@ -95,6 +95,7 @@ var (
 	optRetryDelay         int
 	optURLsFile           string
 	optThreadSegmentSize  int
+	optProgressJSON       bool
 
 	// Serve options
 	optServeListen        string
@@ -106,6 +107,7 @@ var (
 	optLiveOutput      string
 	optArticleOutput   string
 	optSubName         string
+	optSubFilter       string
 	optWatchLaterLimit int
 )
 
@@ -120,7 +122,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "1.6.20-go.4",
+	Version: "1.6.20-go.5",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -371,6 +373,7 @@ func init() {
 	rootCmd.Flags().IntVar(&optRetryDelay, "retry-delay", 3000, "重试间隔(毫秒)")
 	rootCmd.Flags().IntVar(&optThreadSegmentSize, "thread-segment-size", 0, "分片大小(MB)，0=自动（约按并发数份）")
 	rootCmd.Flags().StringVar(&optURLsFile, "urls-file", "", "从文件批量读取下载目标（每行一个，# 注释；- 表示 stdin）")
+	rootCmd.Flags().BoolVar(&optProgressJSON, "progress-json", false, "进度输出为逐行 JSON 事件到 stderr（供 GUI/自动化集成；默认仍是终端进度条）")
 
 	// Serve flags
 	serveCmd.Flags().StringVarP(&optServeListen, "listen", "l", "http://127.0.0.1:23333", "API服务器监听地址")
@@ -391,6 +394,7 @@ func init() {
 
 	watchLaterCmd.Flags().IntVar(&optWatchLaterLimit, "limit", 0, "最多下载前 N 个稍后再看视频(默认 0=全部)")
 	subAddCmd.Flags().StringVar(&optSubName, "name", "", "订阅显示名称(默认使用目标字符串)")
+	subAddCmd.Flags().StringVar(&optSubFilter, "filter", "", "标题过滤正则(仅下载标题匹配的新稿)")
 
 	// watchlater / sub check inherit the download option semantics (upstream).
 	for _, c := range []*cobra.Command{watchLaterCmd, subCheckCmd} {
@@ -400,6 +404,7 @@ func init() {
 		c.Flags().BoolVarP(&optUseTvAPI, "use-tv-api", "t", false, "使用TV端解析模式")
 		c.Flags().BoolVar(&optUseIntlAPI, "use-intl-api", false, "使用国际版解析模式")
 		c.Flags().StringVarP(&optWorkDir, "work-dir", "w", "", "设置工作目录(所有相对路径的根目录)")
+		c.Flags().BoolVar(&optProgressJSON, "progress-json", false, "进度输出为逐行 JSON 事件到 stderr（供 GUI/自动化集成）")
 	}
 
 	// Register subcommands
@@ -428,6 +433,9 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	}
 	optURL = targets[0]
 
+	// F5：把 --progress-json 交给下载层（默认关，关闭时仍是终端进度条）。
+	applyProgressJSON()
+
 	// Build MyOption from flags
 	cfg := buildMyOption()
 
@@ -438,7 +446,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v1.6.20-go.4")
+	util.CheckUpdateAsync(context.Background(), client, "v1.6.20-go.5")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()

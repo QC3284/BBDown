@@ -742,6 +742,11 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				util.LogError("P%d 合并分段失败: %v", page.Index, err)
 				return false
 			}
+			// 产物校验：FLV 分段合并出来的文件就是产物（--skip-mux 时更是唯一下游就是用户）。
+			if err := verifyArtifact(videoPath, "视频"); err != nil {
+				util.LogError("P%d %v", page.Index, err)
+				return false
+			}
 			if w.Cfg.SkipMux {
 				if w.OnSaved != nil {
 					w.OnSaved(videoPath)
@@ -759,7 +764,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			videoPath = filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.mp4", page.Aid, page.Index, page.Cid))
 			os.MkdirAll(page.Aid, 0755)
 			util.Log("开始下载P%d视频...", page.Index)
-			if err := download.DownloadFile(ctx, selectedVideo.BaseURL, videoPath, withFallback(dlCfg, selectedVideo.BaseURL, origVideoURL)); err != nil {
+			if err := download.DownloadFile(ctx, selectedVideo.BaseURL, videoPath, withFallback(dlCfg, selectedVideo.BaseURL, origVideoURL, selectedVideo.BackupURLs...)); err != nil {
 				// Per-request retries already happened inside the downloader;
 				// the remaining page-level retry re-parses playurl and retries
 				// the whole page (upstream retries the page body up to 3 times).
@@ -781,7 +786,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			audioPath = filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.m4a", page.Aid, page.Index, page.Cid))
 			os.MkdirAll(page.Aid, 0755)
 			util.Log("开始下载P%d音频...", page.Index)
-			if err := download.DownloadFile(ctx, selectedAudio.BaseURL, audioPath, withFallback(dlCfg, selectedAudio.BaseURL, origAudioURL)); err != nil {
+			if err := download.DownloadFile(ctx, selectedAudio.BaseURL, audioPath, withFallback(dlCfg, selectedAudio.BaseURL, origAudioURL, selectedAudio.BackupURLs...)); err != nil {
 				attempt := retry + 1
 				if attempt >= pageRetryLimit {
 					util.LogError("P%d 音频下载失败: %v", page.Index, err)
@@ -801,7 +806,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			for i, bg := range result.BackgroundAudioTracks {
 				bgPath := filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.background.%d.%s.m4a", page.Aid, page.Index, i, bg.ID))
 				util.Log("开始下载背景音轨%d...", i)
-				if err := download.DownloadFile(ctx, bg.BaseURL, bgPath, dlCfg); err != nil {
+				if err := download.DownloadFile(ctx, bg.BaseURL, bgPath, withFallback(dlCfg, bg.BaseURL, "", bg.BackupURLs...)); err != nil {
 					util.LogWarn("背景音轨下载失败: %v", err)
 					continue
 				}
@@ -834,7 +839,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					rolePath = filepath.Join(page.Aid, fmt.Sprintf("%s.%s.%s.m4a", page.Aid, page.Cid, seg))
 				}
 				util.Log("开始下载P%d配音[%s]...", page.Index, role.Title)
-				if err := download.DownloadFile(ctx, roleAudio.BaseURL, rolePath, dlCfg); err != nil {
+				if err := download.DownloadFile(ctx, roleAudio.BaseURL, rolePath, withFallback(dlCfg, roleAudio.BaseURL, "", roleAudio.BackupURLs...)); err != nil {
 					util.LogWarn("配音[%s]下载失败: %v", role.Title, err)
 					continue
 				}
@@ -843,6 +848,15 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					PersonName: role.PersonName,
 					Path:       rolePath,
 				})
+			}
+		}
+
+		// 产物校验：录下来的原始轨道必须非空。混流路径至少还有 ffmpeg 兜底，但 --skip-mux
+		// 保留原始轨道时它们就是最终产物，没有任何下游环节会再碰它们。
+		for _, art := range []struct{ path, what string }{{videoPath, "视频"}, {audioPath, "音频"}} {
+			if err := verifyArtifact(art.path, art.what); err != nil {
+				util.LogError("P%d %v", page.Index, err)
+				return false
 			}
 		}
 
@@ -1082,14 +1096,46 @@ func sleepCtxLocal(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// withFallback 给这次下载附上「host 被替换前的原地址」：替换后的目标返回 404 时，下载器
-// 改用它重试（本仓有意差异，见 docs/UPSTREAM_ALIGNMENT.md §4.33）。地址没被替换时不附，
+// withFallback 给这次下载附上候选地址链（按序回退）：host 被替换前的原地址在前，该轨道从
+// playurl 解析出来的 backup_url 在后（数据驱动，没有新增开关）。下载器在首个 404 或连接失败
+// 时换下一个候选（本仓有意差异，见 docs/UPSTREAM_ALIGNMENT.md §4.33）。主地址本身不重复入列，
 // 免得同一个地址被白白重试一次。
-func withFallback(cfg download.DownloadConfig, current, original string) download.DownloadConfig {
-	if original != "" && original != current {
-		cfg.FallbackURL = original
+func withFallback(cfg download.DownloadConfig, current, original string, backups ...string) download.DownloadConfig {
+	list := make([]string, 0, 1+len(backups))
+	add := func(u string) {
+		if u == "" || u == current {
+			return
+		}
+		for _, seen := range list {
+			if seen == u {
+				return
+			}
+		}
+		list = append(list, u)
 	}
+	add(original)
+	for _, u := range backups {
+		add(u)
+	}
+	cfg.FallbackURLs = list
 	return cfg
+}
+
+// verifyArtifact 复核下载产物：必须存在且非空。空产物在混流路径会被 ffmpeg 拦住，但
+// --skip-mux 保留原始轨道时它就是交付物——服务器返回 200 + 空体时旧行为会一路判成功，
+// 用户拿到一个 0 字节的"视频"文件却看到任务完成。
+func verifyArtifact(path, what string) error {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s产物缺失: %v", what, err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("%s产物为 0 字节（服务器返回空内容或声明长度为 0）", what)
+	}
+	return nil
 }
 
 // logPageRetry 打印页面级重试（上游 DownloadPageAsync 的两行：先给原因，再给

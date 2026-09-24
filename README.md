@@ -71,8 +71,9 @@ BBDown --urls-file urls.txt
 cat urls.txt | BBDown --urls-file -
 
 # 订阅管理（add/list/remove/check）
-BBDown sub add mid:123456
-BBDown sub check
+BBDown sub add mid:123456                       # 订阅 UP 主
+BBDown sub add mid:123456 --filter 4K           # 只要标题含 4K 的稿件
+BBDown sub list && BBDown sub check
 ```
 
 ### 子命令
@@ -117,6 +118,7 @@ BBDown sub check
 | `--upos-host` | 自定义 upos 镜像 host（设了它就按它替换，不再用内置镜像） |
 | `--allow-pcdn` | 不替换 PCDN 域名（默认 false，即替换） |
 | `--work-dir` | 工作目录（根命令的持久标志，所有子命令都可用） |
+| `--progress-json` | 进度以逐行 JSON 输出到 stderr（`{percent, downloaded, total, speed, state}`），便于脚本/GUI 集成；默认关，终端进度条行为不变 |
 | `--urls-file` | 从文件批量读取下载目标（每行一个，`#` 注释，`-` 表示 stdin）；位置参数也可给多个，顺序执行、单个失败不中断其余 |
 | `--comments` | 下载评论区（导出 .comments.json） |
 | `--thread-segment-size` | 多线程分片大小(MB)。**默认 0 = 自动**：按「分片数 ≈ 并发上限」倒推（1–20MB）；显式给值则按值切 |

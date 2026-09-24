@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,10 +38,11 @@ type DownloadConfig struct {
 	// UserAgent 留空时取 HTTPClient 的 UA（显式 --user-agent 或进程级随机默认）。
 	UserAgent string
 	Client    *util.HTTPClient
-	// FallbackURL 是 host 被强制替换（--force-replace-host / --upos-host）之前的原地址：
-	// 替换后的目标返回 404 时改用它重试。镜像不保证覆盖所有对象，而 404 是确定性的——
-	// 重试同一个地址只会再 404 几次，换回原站才有意义（本仓有意差异，§4.33）。
-	FallbackURL string
+	// FallbackURLs 是主地址之后的候选地址链（按序回退）：host 被强制替换
+	// （--force-replace-host / --upos-host）之前的原地址，以及 playurl 里同一条轨道的
+	// backup_url。首个 404 或连接失败就换下一个候选，而不是对同一个死地址重试满 retryCount
+	// 次（本仓有意差异，见 §4.33）。地址来源全部数据驱动，没有新增 CLI 开关。
+	FallbackURLs []string
 }
 
 // httpStatusError 携带 HTTP 状态码：回退原地址只针对 404，字符串匹配既脆又会被脱敏后的
@@ -51,16 +54,96 @@ type httpStatusError struct {
 
 func (e *httpStatusError) Error() string { return e.msg }
 
-// fallbackURL 在「404 且配置了替换前原地址」时给出新目标，否则返回空串。
-func (c DownloadConfig) fallbackURL(cur string, err error) string {
+// maxTrackAttempts 是单个文件的尝试次数硬上限：候选链再长也不能把失败路径变成请求风暴
+// （畸形响应可以塞进任意多个候选地址）。
+const maxTrackAttempts = 8
+
+// candidateChain 返回本次下载的候选链：主地址在前，FallbackURLs 依次在后（跳过空项、去掉重复）。
+// 链上的地址指向同一个对象的多个镜像，按序尝试；--force-http 对候选与主地址一视同仁，否则
+// 回退之后又把 https 带回来了。
+func (c DownloadConfig) candidateChain(primary string) []string {
+	chain := make([]string, 0, 1+len(c.FallbackURLs))
+	add := func(u string) {
+		if u == "" {
+			return
+		}
+		u = forceHTTPIfNeeded(u, c.ForceHTTP)
+		for _, seen := range chain {
+			if seen == u {
+				return
+			}
+		}
+		chain = append(chain, u)
+	}
+	add(primary)
+	for _, u := range c.FallbackURLs {
+		add(u)
+	}
+	return chain
+}
+
+// candidateAttempts 返回单文件的尝试次数：每个候选至少出场一次，总数不少于 --retry-count。
+// 没有候选时与改前完全一致（默认 3 次），9 次重试阶梯（页面级 3 × 轨道级 3）的语义不变——
+// 候选只是把失败的那几次换成「下一个地址」，不会在同一个地址上叠加次数。
+func candidateAttempts(chain []string, retryCount int) int {
+	n := retryCount
+	if len(chain) > n {
+		n = len(chain)
+	}
+	if n > maxTrackAttempts {
+		n = maxTrackAttempts
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// candidateAdvanceable 判断这次失败是否值得换下一个候选地址：
+//   - 404：镜像没有这个对象（确定性失败，重试同一个地址只会再 404）；
+//   - 连接/传输失败：DNS 失败、连接被拒/重置、读到一半断流（client.Do 的网络错误、停滞看门狗
+//     关掉响应体、Content-Length 没读满的 EOF）。
+//
+// 其它失败不换地址：服务器明确回了别的状态码（换地址只会拿到同样的应答）、Range 不支持、
+// 本地磁盘错误、ctx 取消。按错误类型判断而不是「一律换」，是为了不白白烧掉候选。
+func candidateAdvanceable(err error) bool {
+	if err == nil || errors.Is(err, ErrRangeNotSupported) {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	var se *httpStatusError
-	if !errors.As(err, &se) || se.code != http.StatusNotFound {
-		return ""
+	if errors.As(err, &se) {
+		return se.code == http.StatusNotFound
 	}
-	if c.FallbackURL == "" || cur == c.FallbackURL {
-		return ""
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return true
 	}
-	return c.FallbackURL
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	return errors.Is(err, http.ErrBodyReadAfterClose) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// advanceCandidate 在候选链上推进一格；没有下一个候选、或这次失败不该换地址时保持原位。
+func advanceCandidate(chain []string, cur *int, err error) bool {
+	if *cur+1 >= len(chain) || !candidateAdvanceable(err) {
+		return false
+	}
+	*cur++
+	return true
+}
+
+// candidateSwitchReason 给出换候选的用户可见原因（404 与连接失败的说法不同）。
+func candidateSwitchReason(err error) string {
+	var se *httpStatusError
+	if errors.As(err, &se) && se.code == http.StatusNotFound {
+		return "目标返回 404（镜像可能未覆盖该对象）"
+	}
+	return fmt.Sprintf("连接失败（%v）", err)
 }
 
 // userAgent 返回本次下载使用的 UA。
@@ -382,6 +465,17 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 		return manifestMatchesProbe(m, currentIdentity, pr.size, pr.etag, pr.lastModified)
 	}
 
+	// 声明长度未知（HEAD 不被支持/没带 Content-Length）时，磁盘上的旧 .tmp 无从校验：从 0 写入
+	// 会把上一次的尾部留在产物里——新资源比旧 .tmp 短时，产物比本次实际写入的字节还长，末尾是
+	// 上一份资源的残留。--skip-mux 保留原始轨道时这个文件就是交付物，没有任何下游环节能发现它。
+	if pr.size <= 0 {
+		if fileSizeOrZero(tmp) > 0 {
+			util.LogDebug("断点续传: 服务器未声明长度, 丢弃无法校验的临时文件")
+		}
+		os.Remove(tmp)
+		os.Remove(metaPath)
+	}
+
 	// Write the manifest BEFORE the first byte: an interrupted .tmp must carry a
 	// manifest or the next run cannot trust it and has to redownload.
 	{
@@ -392,9 +486,12 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 	}
 
 	lastErr := fmt.Errorf("download failed")
-	// activeURL 只在「目标 404 且配置了替换前原地址」时切回原站（本仓有意差异，§4.33）。
-	activeURL := url
-	for attempt := 0; attempt < cfg.retryCount(); attempt++ {
+	// 候选链：主地址在前，替换前的原地址与 playurl 的 backup_url 依次在后（本仓有意差异，§4.33）。
+	// 每个候选至少出场一次，所以尝试次数取 max(--retry-count, 候选数)。
+	chain := cfg.candidateChain(url)
+	cur := 0
+	for attempt := 0; attempt < candidateAttempts(chain, cfg.retryCount()); attempt++ {
+		activeURL := chain[cur]
 		if attempt > 0 {
 			backoff := time.Duration(attempt) * cfg.retryDelay()
 			// 轨道级重试（上游 BBDownDownloadUtil.DownloadFileCoreAsync）记 Debug：
@@ -468,6 +565,11 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 
 			switch {
 			case resp.StatusCode == http.StatusPartialContent:
+				// 产物校验：HEAD 探测与 Range 响应是两个独立声明，互相矛盾时产物不可信——
+				// 旧行为会先把这份长度不对的内容落盘，再靠末尾那条长度检查报错。
+				if total := rangeTotal(resp.Header.Get("Content-Range")); pr.size > 0 && total > 0 && total != pr.size {
+					return fmt.Errorf("服务器两次声明的长度不一致：HEAD 探测 %d 字节，Range 响应 %d 字节", pr.size, total)
+				}
 				if offset > 0 {
 					if got := rangeStart(resp.Header.Get("Content-Range")); got >= 0 && got != offset {
 						// Server ignored our offset: restart from scratch.
@@ -500,11 +602,19 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 			// 它们在百毫秒内完成，进度条只会留下一行 100% 噪声。
 			guard := newStallGuard(resp.Body, downloadStallTimeout)
 			defer guard.Stop()
-			if isTerminalOut() && pr.size >= 1<<20 && resp.ContentLength > 0 {
+			switch {
+			case progressJSONEnabled.Load() && resp.ContentLength > 0:
+				// --progress-json：不看终端、也不看大小——它正是给 GUI/自动化消费的，
+				// 每个文件都该有事件（含收尾的 done 帧），与终端是不是 TTY 无关。
+				pr2 := newProgressReader(guard, resp.ContentLength+offset)
+				pr2.base = offset
+				defer pr2.Close()
+				_, err = io.Copy(out, pr2)
+			case isTerminalOut() && pr.size >= 1<<20 && resp.ContentLength > 0:
 				pr2 := newProgressReader(guard, resp.ContentLength+offset)
 				defer pr2.Close()
 				_, err = io.Copy(out, pr2)
-			} else {
+			default:
 				_, err = io.Copy(out, guard)
 			}
 			return err
@@ -514,11 +624,10 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			// 404 是确定性的：镜像没有这个对象时，重试同一个地址只会再 404 几次；
-			// 换回替换前的原地址才有意义（本仓有意差异，见 §4.33）。
-			if next := cfg.fallbackURL(activeURL, err); next != "" {
-				util.LogWarn("目标返回 404（镜像可能未覆盖该对象），改用替换前的地址重试: %s", util.MaskUrl(next))
-				activeURL = next
+			// 404 与连接失败都是确定性的「这个地址不行」：换下一个候选，而不是对同一个死地址
+			// 重试满 retryCount 次（本仓有意差异，见 §4.33）。
+			if advanceCandidate(chain, &cur, err) {
+				util.LogWarn("%s，改用候选地址重试: %s", candidateSwitchReason(err), util.MaskUrl(chain[cur]))
 			}
 			continue
 		}
@@ -547,6 +656,25 @@ func fileSizeOrZero(path string) int64 {
 		return 0
 	}
 	return info.Size()
+}
+
+// rangeTotal 解析 Content-Range 声明的资源总长（"bytes N-M/S" 的 S），未知返回 -1。
+// 它是**权威总长**：HEAD 的 Content-Length 可能来自缓存/占位，206 的 S 是这次真正要给的
+// 那份内容的总长——两者不一致说明对象已经换了，产物不可信（上游 RemoteSizeMismatchException）。
+func rangeTotal(contentRange string) int64 {
+	idx := strings.Index(contentRange, "/")
+	if idx < 0 {
+		return -1
+	}
+	total := strings.TrimSpace(contentRange[idx+1:])
+	if total == "" || total == "*" {
+		return -1
+	}
+	n, err := strconv.ParseInt(total, 10, 64)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // rangeStart parses the start offset from a Content-Range header ("bytes N-M/S").
@@ -631,7 +759,7 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 				return
 			}
 
-			n, err := downloadRange(ctx, url, destPath, c, cfg, reportProgress(c.idx))
+			n, err := downloadRange(ctx, url, destPath, c, size, cfg, reportProgress(c.idx))
 			if err == ErrRangeNotSupported {
 				notSupported.Store(true)
 				recordErr(err)
@@ -641,7 +769,12 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 				recordErr(err)
 				return
 			}
-			totalBytes.Add(n)
+			// 分片完成后再补一次 Add 是终端进度条的既有行为（帧在两次上报之间也不会低于
+			// 已完成分片）；JSON 事件按聚合总量出数，不做这一步，否则会发出
+			// downloaded > total（percent 只能靠截断才不越界）——那是给程序读的数据，不能自相矛盾。
+			if !progressJSONEnabled.Load() {
+				totalBytes.Add(n)
+			}
 		}(clip)
 	}
 	wg.Wait()
@@ -718,13 +851,16 @@ func clipPath(dest string, idx int) string {
 //
 // onProgress 收到的是**该分片自己的累计字节数**（不是增量）：聚合方按「新值 - 上次值」
 // 推进总量，重试时先上报 0 让总量回退，与上游 ProgressAggregator 同语义。
-func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cfg DownloadConfig, onProgress func(int64)) (int64, error) {
+func downloadRange(ctx context.Context, url, destPath string, clip clipRange, expectedTotal int64, cfg DownloadConfig, onProgress func(int64)) (int64, error) {
 	tmpPath := clipPath(destPath, clip.idx)
 
-	// activeURL 只在「分片 404 且配置了替换前原地址」时切回原站（本仓有意差异，§4.33）。
-	activeURL := url
+	// 候选链与单线程路径同语义：每个分片独立走一遍链，404/连接失败就换下一个候选
+	// （本仓有意差异，见 §4.33）。
+	chain := cfg.candidateChain(url)
+	cur := 0
 	var lastErr error
-	for attempt := 0; attempt < cfg.retryCount(); attempt++ {
+	for attempt := 0; attempt < candidateAttempts(chain, cfg.retryCount()); attempt++ {
+		activeURL := chain[cur]
 		if attempt > 0 {
 			if onProgress != nil {
 				onProgress(0) // 分片从头重下，聚合总量随之回退
@@ -760,6 +896,13 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 
 			switch {
 			case resp.StatusCode == http.StatusPartialContent:
+				// 产物校验：分片声明的内容总长必须与规划分片时的总长一致，否则拼出来的是另一份
+				// 资源的前缀——旧行为会把它当成功合并出去（每个分片的字节数都"对"）。
+				// 产物校验：分片声明的内容总长必须与规划分片时的总长一致，否则拼出来的是另一份
+				// 资源的前缀——旧行为会把它当成功合并出去（每个分片的字节数都"对"）。
+				if total := rangeTotal(resp.Header.Get("Content-Range")); total > 0 && expectedTotal > 0 && total != expectedTotal {
+					return 0, fmt.Errorf("分片总长与探测不一致：服务器声明 %d 字节，规划时探测到 %d 字节", total, expectedTotal)
+				}
 				if got := rangeStart(resp.Header.Get("Content-Range")); got >= 0 && got != clip.from {
 					return 0, fmt.Errorf("range request ignored: expected offset %d, got %d", clip.from, got)
 				}
@@ -789,10 +932,9 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, cf
 		}
 		lastErr = err
 		os.Remove(tmpPath)
-		// 分片 404 同样换回替换前的原地址（镜像覆盖不全时会整片 404）。
-		if next := cfg.fallbackURL(activeURL, err); next != "" {
-			util.LogWarn("分片返回 404（镜像可能未覆盖该对象），改用替换前的地址重试: %s", util.MaskUrl(next))
-			activeURL = next
+		// 分片 404/连接失败同样换下一个候选（镜像覆盖不全时会整片 404）。
+		if advanceCandidate(chain, &cur, err) {
+			util.LogWarn("%s，改用候选地址重试: %s", candidateSwitchReason(err), util.MaskUrl(chain[cur]))
 		}
 	}
 	return 0, lastErr
@@ -808,6 +950,14 @@ var renderProgressBar = renderAggregateProgress
 // 作用域表达同一件事——ProgressBar 的 Dispose 必须在合并日志之前完成）。
 func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressPacer, done <-chan struct{}, stopped chan<- struct{}) {
 	defer close(stopped)
+	// --progress-json：同一套节奏，帧内容换成一行 JSON（写 stderr），收尾补 done 帧。
+	// 零值 progressLine（enabled=false）保证这条路径不碰终端。
+	if progressJSONEnabled.Load() {
+		emit := newJSONProgressEmitter(total)
+		runProgressLoop(pacer.Signals(), done, true, &progressLine{}, func() { emit.progress(counter.Load()) })
+		emit.done(counter.Load())
+		return
+	}
 	line := newProgressLine()
 	if !line.enabled {
 		return
@@ -899,14 +1049,27 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 			filepath.Dir(destPath), filepath.Base(destPath)))
 	}()
 
+	// aria2c 只给退出码、自己不核对长度：先探一次服务器声明的长度，跑完复核落盘字节数。
+	// 探测失败（CDN 不支持 HEAD 等）就退化为「只检查文件存在」，不凭空造出误报。
+	var declared int64
+	if cfg.Client != nil {
+		if pr, perr := probeFile(ctx, url, cfg); perr == nil && pr.size > 0 {
+			declared = pr.size
+		}
+	}
+
 	if err := cmd.Run(); err != nil {
 		return err
 	}
 	if _, err := os.Stat(destPath + ".aria2"); err == nil {
 		return fmt.Errorf("aria2下载可能存在错误")
 	}
-	if _, err := os.Stat(destPath); err != nil {
+	info, err := os.Stat(destPath)
+	if err != nil {
 		return fmt.Errorf("aria2下载可能存在错误: 未找到输出文件")
+	}
+	if declared > 0 && info.Size() != declared {
+		return fmt.Errorf("aria2 产物长度(%d)与服务器声明(%d)不符", info.Size(), declared)
 	}
 	return nil
 }

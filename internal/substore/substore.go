@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 	"time"
@@ -17,6 +18,35 @@ type Subscription struct {
 	Target  string `json:"Target"`
 	Name    string `json:"Name"`
 	AddedAt int64  `json:"AddedAt"`
+	// Filter 是可选的稿件标题正则（F6）：`sub check` 只下载标题匹配的新稿。
+	// 旧清单没有这个字段，反序列化为空串 = 不过滤，因此升级不需要迁移。
+	Filter string `json:"Filter,omitempty"`
+}
+
+// CompileFilter 编译订阅的标题过滤正则；空 Filter 表示不过滤（返回 nil, nil）。
+// 清单可以被手改，非法正则在这里变成错误，由调用方跳过该订阅，
+// 而不是当成「全部通过」——那会把用户明确排除的稿件也下下来。
+func (s Subscription) CompileFilter() (*regexp.Regexp, error) {
+	if s.Filter == "" {
+		return nil, nil
+	}
+	re, err := regexp.Compile(s.Filter)
+	if err != nil {
+		return nil, fmt.Errorf("订阅 %s 的标题过滤正则无效(%q): %v", s.Target, s.Filter, err)
+	}
+	return re, nil
+}
+
+// validateFilter 在写入前校验过滤正则：非法正则在 `sub add` 当场报错，
+// 而不是等 `sub check` 才发现——那时订阅已经进了清单，用户以为加上了。
+func validateFilter(filter string) error {
+	if filter == "" {
+		return nil
+	}
+	if _, err := regexp.Compile(filter); err != nil {
+		return fmt.Errorf("标题过滤正则无效 %q: %v", filter, err)
+	}
+	return nil
 }
 
 // CorruptError signals corrupted persistence data; callers must abort the whole
@@ -87,7 +117,11 @@ func Load() ([]Subscription, error) {
 }
 
 // Add appends a subscription (replacing an existing one with the same target).
-func Add(target, name string) error {
+// filter 是可选的稿件标题正则；非法正则当场报错，不写清单。
+func Add(target, name, filter string) error {
+	if err := validateFilter(filter); err != nil {
+		return err
+	}
 	ioLock.Lock()
 	defer ioLock.Unlock()
 	subs, err := Load()
@@ -100,10 +134,11 @@ func Add(target, name string) error {
 	for i := range subs {
 		if subs[i].Target == target {
 			subs[i].Name = name
+			subs[i].Filter = filter
 			return atomicWrite(subFile(), subs)
 		}
 	}
-	subs = append(subs, Subscription{Target: target, Name: name, AddedAt: time.Now().Unix()})
+	subs = append(subs, Subscription{Target: target, Name: name, Filter: filter, AddedAt: time.Now().Unix()})
 	return atomicWrite(subFile(), subs)
 }
 

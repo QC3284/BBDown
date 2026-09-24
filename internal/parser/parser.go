@@ -100,28 +100,15 @@ func extractDubbingInfo(data map[string]interface{}, result *entity.ParsedResult
 
 	toAudio := func(node map[string]interface{}) entity.Audio {
 		audioID := getString(node, "id")
-		urlList := []string{getString(node, "base_url")}
-		if backups, ok := node["backup_url"].([]interface{}); ok {
-			for _, b := range backups {
-				if bs, ok := b.(string); ok {
-					urlList = append(urlList, bs)
-				}
-			}
-		}
-		finalURL := urlList[0]
-		for _, u := range urlList {
-			if !baseURLRegex.MatchString(u) {
-				finalURL = u
-				break
-			}
-		}
+		finalURL, backups := urlCandidates(getString(node, "base_url"), node["backup_url"])
 		return entity.Audio{
-			ID:        audioID,
-			Dfn:       audioID,
-			Dur:       pDur,
-			Bandwidth: getInt64(node, "bandwidth") / 1000,
-			BaseURL:   finalURL,
-			Codecs:    getString(node, "codecs"),
+			ID:         audioID,
+			Dfn:        audioID,
+			Dur:        pDur,
+			Bandwidth:  getInt64(node, "bandwidth") / 1000,
+			BaseURL:    finalURL,
+			BackupURLs: backups,
+			Codecs:     getString(node, "codecs"),
 		}
 	}
 
@@ -560,31 +547,18 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 				if baseURL == "" {
 					continue
 				}
-				urlList := []string{baseURL}
-				if backups, ok := vm["backup_url"].([]interface{}); ok {
-					for _, b := range backups {
-						if bs, ok := b.(string); ok {
-							urlList = append(urlList, bs)
-						}
-					}
-				}
-				// Filter out base URL regex matches
-				finalURL := urlList[0]
-				for _, u := range urlList {
-					if !baseURLRegex.MatchString(u) {
-						finalURL = u
-						break
-					}
-				}
+				// 首选之外仍保留其余候选（backup_url）：镜像漏对象/连不上时按序回退。
+				finalURL, backups := urlCandidates(baseURL, vm["backup_url"])
 
 				video := entity.Video{
-					ID:        videoID,
-					Dfn:       config.QualityMap[videoID],
-					BaseURL:   finalURL,
-					Codecs:    VideoCodec(getString(vm, "codecid")),
-					Bandwidth: getInt64(vm, "bandwidth") / 1000,
-					Dur:       pDur,
-					Size:      getFloat64(vm, "size"),
+					ID:         videoID,
+					Dfn:        config.QualityMap[videoID],
+					BaseURL:    finalURL,
+					BackupURLs: backups,
+					Codecs:     VideoCodec(getString(vm, "codecid")),
+					Bandwidth:  getInt64(vm, "bandwidth") / 1000,
+					Dur:        pDur,
+					Size:       getFloat64(vm, "size"),
 				}
 				if video.Dfn == "" {
 					video.Dfn = fmt.Sprintf("未知(%s)", videoID)
@@ -622,21 +596,7 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 				if baseURL == "" {
 					continue
 				}
-				urlList := []string{baseURL}
-				if backups, ok := am["backup_url"].([]interface{}); ok {
-					for _, b := range backups {
-						if bs, ok := b.(string); ok {
-							urlList = append(urlList, bs)
-						}
-					}
-				}
-				finalURL := urlList[0]
-				for _, u := range urlList {
-					if !baseURLRegex.MatchString(u) {
-						finalURL = u
-						break
-					}
-				}
+				finalURL, backups := urlCandidates(baseURL, am["backup_url"])
 				audioID := getString(am, "id")
 				codecs := getString(am, "codecs")
 				switch codecs {
@@ -649,12 +609,13 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 				}
 
 				audio := entity.Audio{
-					ID:        audioID,
-					Dfn:       audioID,
-					BaseURL:   finalURL,
-					Codecs:    codecs,
-					Bandwidth: getInt64(am, "bandwidth") / 1000,
-					Dur:       pDur,
+					ID:         audioID,
+					Dfn:        audioID,
+					BaseURL:    finalURL,
+					BackupURLs: backups,
+					Codecs:     codecs,
+					Bandwidth:  getInt64(am, "bandwidth") / 1000,
+					Dur:        pDur,
 				}
 				result.AudioTracks = append(result.AudioTracks, audio)
 			}
@@ -672,13 +633,15 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 					if baseURL == "" {
 						continue
 					}
+					finalURL, backups := urlCandidates(baseURL, am["backup_url"])
 					audio := entity.Audio{
-						ID:        getString(am, "id"),
-						Dfn:       getString(am, "id"),
-						BaseURL:   baseURL,
-						Codecs:    "E-AC-3",
-						Bandwidth: getInt64(am, "bandwidth") / 1000,
-						Dur:       pDur,
+						ID:         getString(am, "id"),
+						Dfn:        getString(am, "id"),
+						BaseURL:    finalURL,
+						BackupURLs: backups,
+						Codecs:     "E-AC-3",
+						Bandwidth:  getInt64(am, "bandwidth") / 1000,
+						Dur:        pDur,
 					}
 					result.AudioTracks = append(result.AudioTracks, audio)
 				}
@@ -690,13 +653,15 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 			if flacAudio, ok := flac["audio"].(map[string]interface{}); ok {
 				baseURL := getString(flacAudio, "base_url")
 				if baseURL != "" {
+					finalURL, backups := urlCandidates(baseURL, flacAudio["backup_url"])
 					audio := entity.Audio{
-						ID:        getString(flacAudio, "id"),
-						Dfn:       getString(flacAudio, "id"),
-						BaseURL:   baseURL,
-						Codecs:    "FLAC",
-						Bandwidth: getInt64(flacAudio, "bandwidth") / 1000,
-						Dur:       pDur,
+						ID:         getString(flacAudio, "id"),
+						Dfn:        getString(flacAudio, "id"),
+						BaseURL:    finalURL,
+						BackupURLs: backups,
+						Codecs:     "FLAC",
+						Bandwidth:  getInt64(flacAudio, "bandwidth") / 1000,
+						Dur:        pDur,
 					}
 					result.AudioTracks = append(result.AudioTracks, audio)
 				}
@@ -814,30 +779,17 @@ func (p *Parser) parseIntlStreams(ctx context.Context, result *entity.ParsedResu
 			}
 
 			videoID := getString(streamInfo, "quality")
-			urlList := []string{baseURL}
-			if backups, ok := dashVideo["backup_url"].([]interface{}); ok {
-				for _, b := range backups {
-					if bs, ok := b.(string); ok {
-						urlList = append(urlList, bs)
-					}
-				}
-			}
-			finalURL := urlList[0]
-			for _, u := range urlList {
-				if !baseURLRegex.MatchString(u) {
-					finalURL = u
-					break
-				}
-			}
+			finalURL, backups := urlCandidates(baseURL, dashVideo["backup_url"])
 
 			v := entity.Video{
-				ID:        videoID,
-				Dfn:       config.QualityMap[videoID],
-				BaseURL:   finalURL,
-				Codecs:    VideoCodec(getString(dashVideo, "codecid")),
-				Bandwidth: getInt64(dashVideo, "bandwidth") / 1000,
-				Dur:       pDur,
-				Size:      getFloat64(dashVideo, "size"),
+				ID:         videoID,
+				Dfn:        config.QualityMap[videoID],
+				BaseURL:    finalURL,
+				BackupURLs: backups,
+				Codecs:     VideoCodec(getString(dashVideo, "codecid")),
+				Bandwidth:  getInt64(dashVideo, "bandwidth") / 1000,
+				Dur:        pDur,
+				Size:       getFloat64(dashVideo, "size"),
 			}
 			if v.Dfn == "" {
 				v.Dfn = fmt.Sprintf("未知(%s)", videoID)
@@ -850,29 +802,16 @@ func (p *Parser) parseIntlStreams(ctx context.Context, result *entity.ParsedResu
 			if baseURL == "" {
 				continue
 			}
-			urlList := []string{baseURL}
-			if backups, ok := node["backup_url"].([]interface{}); ok {
-				for _, b := range backups {
-					if bs, ok := b.(string); ok {
-						urlList = append(urlList, bs)
-					}
-				}
-			}
-			finalURL := urlList[0]
-			for _, u := range urlList {
-				if !baseURLRegex.MatchString(u) {
-					finalURL = u
-					break
-				}
-			}
+			finalURL, backups := urlCandidates(baseURL, node["backup_url"])
 
 			audio := entity.Audio{
-				ID:        getString(node, "id"),
-				Dfn:       getString(node, "id"),
-				BaseURL:   finalURL,
-				Codecs:    "M4A",
-				Bandwidth: getInt64(node, "bandwidth") / 1000,
-				Dur:       pDur,
+				ID:         getString(node, "id"),
+				Dfn:        getString(node, "id"),
+				BaseURL:    finalURL,
+				BackupURLs: backups,
+				Codecs:     "M4A",
+				Bandwidth:  getInt64(node, "bandwidth") / 1000,
+				Dur:        pDur,
 			}
 			result.AudioTracks = appendUniqueAudio(result.AudioTracks, audio)
 		}
@@ -927,6 +866,61 @@ func getFloat64(m map[string]interface{}, key string) float64 {
 		}
 	}
 	return 0
+}
+
+// urlCandidates 归一化一条轨道的地址候选：首选仍是列表里第一个不含显式端口（PCDN 直连）的地址
+// （上游与本仓既有的选择规则，见 baseURLRegex），其余候选按响应里的原始顺序返回、去掉重复项。
+//
+// 此前只留下被选中的那一个，其余 backup_url 直接丢弃：playurl 本来就给了 1~2 个备用镜像，镜像
+// 漏对象或连不上时却没有任何地址可换（本仓有意差异，见 docs/UPSTREAM_ALIGNMENT.md §4.33）。
+func urlCandidates(baseURL string, rawBackups interface{}) (string, []string) {
+	urlList := make([]string, 0, 4)
+	if baseURL != "" {
+		urlList = append(urlList, baseURL)
+	}
+	if backups, ok := rawBackups.([]interface{}); ok {
+		for _, b := range backups {
+			if bs, ok := b.(string); ok && bs != "" {
+				urlList = append(urlList, bs)
+			}
+		}
+	}
+	if len(urlList) == 0 {
+		return "", nil
+	}
+
+	final := urlList[0]
+	for _, u := range urlList {
+		if !baseURLRegex.MatchString(u) {
+			final = u
+			break
+		}
+	}
+	// 回退顺序尊重既有的选择偏好：先列其余非 PCDN 地址（响应里的原始顺序），把带显式端口的
+	// 直连地址放到最后——它们是首选规则刻意避开的，但作为最后的兜底仍然比"没有地址可换"强。
+	rest := make([]string, 0, len(urlList)-1)
+	appendUnique := func(u string) {
+		if u == final {
+			return
+		}
+		for _, seen := range rest {
+			if seen == u {
+				return
+			}
+		}
+		rest = append(rest, u)
+	}
+	for _, u := range urlList {
+		if !baseURLRegex.MatchString(u) {
+			appendUnique(u)
+		}
+	}
+	for _, u := range urlList {
+		if baseURLRegex.MatchString(u) {
+			appendUnique(u)
+		}
+	}
+	return final, rest
 }
 
 func appendUniqueVideo(videos []entity.Video, v entity.Video) []entity.Video {

@@ -104,25 +104,30 @@ type ViewPoint struct {
 
 // Video represents a video track.
 type Video struct {
-	ID        string  `json:"id"`
-	Dfn       string  `json:"dfn"` // quality display name
-	BaseURL   string  `json:"base_url"`
-	Res       string  `json:"res,omitempty"`
-	FPS       string  `json:"fps,omitempty"`
-	Codecs    string  `json:"codecs"`
-	Bandwidth int64   `json:"bandwidth"`
-	Dur       int     `json:"dur"`
-	Size      float64 `json:"size"`
+	ID      string `json:"id"`
+	Dfn     string `json:"dfn"` // quality display name
+	BaseURL string `json:"base_url"`
+	// BackupURLs 是同一轨道的其余候选地址（playurl 的 backup_url，去掉已被选为首选的条目），
+	// 按响应里的原始顺序排列：首选镜像漏对象或连不上时按序回退（见 docs/UPSTREAM_ALIGNMENT.md §4.33）。
+	BackupURLs []string `json:"backup_urls,omitempty"`
+	Res        string   `json:"res,omitempty"`
+	FPS        string   `json:"fps,omitempty"`
+	Codecs     string   `json:"codecs"`
+	Bandwidth  int64    `json:"bandwidth"`
+	Dur        int      `json:"dur"`
+	Size       float64  `json:"size"`
 }
 
 // Audio represents an audio track.
 type Audio struct {
-	ID        string `json:"id"`
-	Dfn       string `json:"dfn"`
-	BaseURL   string `json:"base_url"`
-	Codecs    string `json:"codecs"`
-	Bandwidth int64  `json:"bandwidth"`
-	Dur       int    `json:"dur"`
+	ID      string `json:"id"`
+	Dfn     string `json:"dfn"`
+	BaseURL string `json:"base_url"`
+	// BackupURLs 含义同 Video.BackupURLs。
+	BackupURLs []string `json:"backup_urls,omitempty"`
+	Codecs     string   `json:"codecs"`
+	Bandwidth  int64    `json:"bandwidth"`
+	Dur        int      `json:"dur"`
 }
 
 // ShortCodecs returns the short codec name (E-AC-3 => EAC3).

@@ -27,7 +27,7 @@ func fallbackBody() []byte {
 
 // TestDownloadFallsBackToOriginalHostOn404 单线程路径：目标恒 404，配置里带原地址 → 回退成功。
 //
-// 变异验证：删掉 downloadToFile 里的 cfg.fallbackURL 分支，本用例变红（下载失败）。
+// 变异验证：删掉单线程循环里的 advanceCandidate 分支，本用例变红（下载失败）。
 func TestDownloadFallsBackToOriginalHostOn404(t *testing.T) {
 	var mirrorHits, originHits atomic.Int64
 	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +44,7 @@ func TestDownloadFallsBackToOriginalHostOn404(t *testing.T) {
 	defer origin.Close()
 
 	dest := filepath.Join(t.TempDir(), "out.bin")
-	cfg := DownloadConfig{Client: newTestClient(), RetryCount: 3, RetryDelayMs: 1, FallbackURL: origin.URL + "/a.m4s"}
+	cfg := DownloadConfig{Client: newTestClient(), RetryCount: 3, RetryDelayMs: 1, FallbackURLs: []string{origin.URL + "/a.m4s"}}
 	if err := DownloadFile(context.Background(), mirror.URL+"/a.m4s", dest, cfg); err != nil {
 		t.Fatalf("镜像 404 时应回退原地址并成功: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestDownloadFallsBackPerClipOn404(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "out.bin")
 	cfg := DownloadConfig{
 		Client: newTestClient(), MultiThread: true, SegmentSizeMB: 1, RetryCount: 2, RetryDelayMs: 1,
-		FallbackURL: origin.URL + "/a.m4s",
+		FallbackURLs: []string{origin.URL + "/a.m4s"},
 	}
 	if err := DownloadFile(context.Background(), mirror.URL+"/a.m4s", dest, cfg); err != nil {
 		t.Fatalf("分片 404 时应回退原地址并成功: %v", err)

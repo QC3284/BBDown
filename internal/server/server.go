@@ -610,6 +610,22 @@ func (s *APIServer) handleAddTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, AddTaskResponse{TaskID: task.JobID})
 }
 
+// acquireSlot 取一个执行槽（并发上限 maxConcurrent），ctx 取消时返回 false。
+//
+// 抽成方法是为了让并发闸门可以**离线量测与回归**（O7，见 concurrency_test.go）：闸门此前内联在
+// processTask 里，只能靠真实网络任务才走得到，没有用例守「并发不超过上限」这条不变量。
+func (s *APIServer) acquireSlot(ctx context.Context) bool {
+	select {
+	case s.semaphore <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// releaseSlot 归还执行槽。
+func (s *APIServer) releaseSlot() { <-s.semaphore }
+
 // processTask runs a real download via the workflow (upstream
 // ProcessDownloadTaskAsync): parse URL → fetch metadata → download pages.
 func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url string) {
@@ -617,15 +633,13 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 	defer func() { <-s.acceptLimiter }()
 	defer s.persistFinishedTasks()
 
-	select {
-	case s.semaphore <- struct{}{}:
-		defer func() { <-s.semaphore }()
-	case <-ctx.Done():
+	if !s.acquireSlot(ctx) {
 		task.SetStatus(StatusCancelled)
 		s.finishTask(task, "")
 		s.sendCallback(task)
 		return
 	}
+	defer s.releaseSlot()
 
 	util.Log("处理任务 %s: %s", task.JobID, url)
 	client := util.NewHTTPClient(
