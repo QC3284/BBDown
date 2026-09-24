@@ -26,6 +26,9 @@ func (f *SeriesListFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo
 	if err := util.UnmarshalJSON(resp, &root); err != nil {
 		return nil, err
 	}
+	if err := throwIfAPIError(root, "获取系列信息失败"); err != nil {
+		return nil, err
+	}
 	data := gm(root, "data")
 	if data == nil {
 		return nil, fmt.Errorf("获取系列信息失败(code=%d): %s", gi(root, "code"), gs(root, "message"))
@@ -62,6 +65,9 @@ func (f *SeriesListFetcher) fetchSeriesPages(ctx context.Context, bizID string) 
 		}
 		var root map[string]interface{}
 		if err := util.UnmarshalJSON(resp, &root); err != nil {
+			return nil, err
+		}
+		if err := throwIfAPIError(root, "获取系列分页列表失败"); err != nil {
 			return nil, err
 		}
 		data := gm(root, "data")

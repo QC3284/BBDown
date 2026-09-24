@@ -37,6 +37,12 @@ func (f *MediaListFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo,
 		}
 	}
 
+	// 上游 v1.6.20：data 存在时也要查 code，避免带错误 code 的响应被当作有效合集解析
+	//（data 缺失的分支已在上面回退过系列解析）。
+	if err := throwIfAPIError(root, "获取合集信息失败"); err != nil {
+		return nil, err
+	}
+
 	listTitle := gs(data, "title")
 	intro := gs(data, "intro")
 	pubTime := gi64(data, "ctime")
@@ -69,6 +75,14 @@ func (f *MediaListFetcher) fetchListPages(ctx context.Context, mediaType int, bi
 		}
 		var root map[string]interface{}
 		if err := util.UnmarshalJSON(resp, &root); err != nil {
+			return nil, err
+		}
+		// 分页同样先查 code（上游：合集与系列两条循环各有自己的文案）。
+		pageLabel := "获取系列分页列表失败"
+		if mediaType == 8 {
+			pageLabel = "获取合集视频列表失败"
+		}
+		if err := throwIfAPIError(root, pageLabel); err != nil {
 			return nil, err
 		}
 		data := gm(root, "data")

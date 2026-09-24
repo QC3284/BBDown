@@ -11,6 +11,22 @@ import (
 
 // ---- map[string]interface{} JSON helpers for fetchers ----
 
+// throwIfAPIError 对应上游 v1.6.20 新增的 FetcherJson.ThrowIfApiError：顶层 code 非零即终止。
+//
+// 上游此前有六处写成「if (code != 0) { var msg = SanitizeServerText(...); }」——只算不抛，
+// 精心写好的诊断永远不可达；v1.6.20 统一收口成这个助手。本仓这些路径一直是直接 return err，
+// 但「data 存在时也要查 code」此前没有覆盖：错误响应通常带 data=null，所以只在窄边界上不同。
+//
+// 消息格式与上游逐字一致：<文案> (code=N): <message>（括号前有空格）。message 来自服务器，
+// 由日志层统一单行化/截断（util.SanitizeLogString）。
+func throwIfAPIError(root map[string]interface{}, failureMessage string) error {
+	code := gi(root, "code")
+	if code == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s (code=%d): %s", failureMessage, code, gs(root, "message"))
+}
+
 func gs(m map[string]interface{}, key string) string {
 	switch v := m[key].(type) {
 	case string:
