@@ -10,6 +10,30 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [1.6.20-go.3] - 2026-09-24
+
+第三批：**O4 分片自适应**（≈2× 提速）、**O6 杜比视界探测的两个掩盖型 bug**、**O3 进度条 CPU 实测**。
+
+### 修复
+
+- **杜比视界探测恒返回错误结果**（两个 bug 互相掩盖）：版本正则的字面量把反斜杠全丢了，永远匹配不到
+  `libavutil  58.  2.100` → 恒 false（杜比视界一律回退 mp4box，没装 mp4box 的机器直接混流失败）；
+  阈值又写成 `major >= 5`（上游是 `> 57 或 57.17+`）→ 对任何真实 libavutil 都成立、恒 true。
+  现按上游规则修正：`libavutil > 57 或 57.17+`（≈ ffmpeg 6.0+）。
+
+### 优化
+
+- **分片大小自适应**：未显式指定 `--thread-segment-size`（默认 0）时按「分片数 ≈ 并发上限」倒推，
+  下界 1 MB、上界 20 MB；多线程触发门槛仍是 20 MB。实测 40 MB 文件在限速服务器上
+  **1.698 s → 869 ms（≈2×）**（3 → 5 条连接）。显式给值时行为不变。
+- **杜比视界探测按 ffmpeg 路径缓存**：多P 杜比视界此前每 P 启动一次探测进程，现在进程内每二进制一次。
+
+### 说明
+
+- `--thread-segment-size` 的默认值从 `20` 变为 `0`（=自动），属于相对上游的**有意偏离**，登记见
+  [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4.37；显式传值语义不变。
+- **O3（进度条 CPU）实测后判定无需优化**：单帧 2.4 µs，受 16 ms 节流限制上限 62.5 帧/秒 → ≈0.015% CPU。
+  基准留在 `internal/download/progress_bench_test.go`（`go test -bench` 才跑，不影响 CI 时间）。
 ## [1.6.20-go.2] - 2026-09-24
 
 第二个优化版本：**断点续传在 B 站场景下真正生效**（此前跨进程续传永不命中）。

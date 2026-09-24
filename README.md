@@ -113,7 +113,7 @@ BBDown sub check
 | `--allow-pcdn` | 不替换 PCDN 域名（默认 false，即替换） |
 | `--work-dir` | 工作目录（根命令的持久标志，所有子命令都可用） |
 | `--comments` | 下载评论区（导出 .comments.json） |
-| `--thread-segment-size` | 多线程分片大小(MB，默认 20) |
+| `--thread-segment-size` | 多线程分片大小(MB)。**默认 0 = 自动**：按「分片数 ≈ 并发上限」倒推（1–20MB）；显式给值则按值切 |
 | `--save-archives-to-file` | 记录已下载 aid（`BBDown.archives`，`aid|` 格式） |
 | `--retry-count` / `--retry-delay` | 下载请求重试次数/间隔（默认 3 次 / 3000ms） |
 | `--config-file` | 指定配置文件（逐行参数文本，默认 `BBDown.config`） |
