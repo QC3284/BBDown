@@ -8,6 +8,28 @@
 上游（aliveranme/BBDown）的同名版本条目仍是行为的权威描述；本文件只记录 Go 重写侧
 **相对上游的落地情况**。逐条对账基线与判定见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md)。
 
+## [1.6.20-go] - 2026-09-19
+
+上游 v1.6.20 是一次**重构版本**（下载流水线拆分 + 资源管理 + async I/O）。逐项定性见
+[docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4.34：**没有新规格要搬**，唯一的行为对齐点是
+fetcher 的 API 错误码收口。版本号按语义前移一个上游版本，补丁后缀归零。
+
+### 变更
+
+- **fetcher：`data` 存在时也校验顶层 `code`**：对齐上游 v1.6.20 新增的 `FetcherJson.ThrowIfApiError`——
+  系列与合集的首屏/分页四条路径统一先查 `code`，消息格式 `<文案> (code=N): <message>` 与上游逐字一致。
+  上游 v1.6.19 那六处是「只算不抛」的死代码（诊断不可达），本仓一直是直接报错，所以那一半是上游补齐；
+  本仓此前只在 `data` 缺失时报错，带错误 `code` 却带 `data` 节点的响应会被当作有效数据解析。
+
+### 说明
+
+- 下载流水线拆分（`Download.cs` 1088 行 → 8 个文件）经机械扫描与逐段核对判定**无行为差异**：未命中
+  v1.6.19 全树的逻辑行全是 record/context 与签名管线；`DownloadFinalizer` 的跳过分支、`finally` 轨道清理、
+  封面删除条件、aid 空目录兜底与旧 `MuxAndFinalizeAsync` 一致，且本仓早已同构。
+- `Parser.cs` 110 行是 C# 的 `JsonDocument`/ArrayPool 生命周期重构（Go 侧 N/A）。
+- 上游 5 个测试文件的变化经逐行过滤后全是机械重命名（类拆分/异步化/元组返回），断言未改 → 无新规格可搬。
+- `RetryPolicy.NormalizeForServe` 与 `SanitizeUntrustedOptions` 针对 serve 请求体里的每任务选项；
+  本仓 `/add-task` 只接受 `url`，该攻击面不存在。
 ## [1.6.19-go.14] - 2026-09-19
 
 补丁版本：用户确认的三处**有意差异**（判定与六处变异验证见

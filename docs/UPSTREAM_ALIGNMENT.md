@@ -2,19 +2,20 @@
 
 > 本文件是 **Go 重写版与上游 C# 版行为对齐的唯一追踪基线**。
 > 目的：把「落后多少版本」变成「缺哪些条目」，并让每次同步都可复现、可交接。
-> 建立日期：2026-09-19 ｜ 结论基于 `upstream/master` = v1.6.19。
+> 建立日期：2026-09-19 ｜ 结论基于 `upstream/master` = v1.6.20（tag `5de84c4`，merge `165d075`）。
 
 ## 1. 参照源
 
 | 名称 | remote / ref | 版本 | commit | 日期 |
 |---|---|---|---|---|
-| 上游（权威参照） | `upstream` → aliveranme/BBDown | **v1.6.19** | `2d2573b` | 2026-09-18 |
+| 上游（权威参照） | `upstream` → aliveranme/BBDown | **v1.6.20** | `165d075`（tag `5de84c4`） | 2026-09-24 |
 | 本项目 C# 快照分支 | `origin/master` | v1.6.10 + 2 补丁 | `9fb96f2` | 2026-08-11 |
-| Go 重写（工作分支） | `origin/main` | **1.6.19-go** | — | — |
+| Go 重写（工作分支） | `origin/main` | **1.6.20-go** | — | — |
 
-同步状态：`origin/master` 是 `upstream/master` 的**严格祖先**（`0 ahead / 122 behind`），可纯快进，无分叉、无本地独有提交。
+同步状态：`origin/master` 是 `upstream/master` 的**严格祖先**（`0 ahead / 124 behind`），可纯快进，无分叉、无本地独有提交。
 
-Go 侧自报基线为 **C# v1.6.11**，硬编码于三处：`internal/cli/root.go:119`、`internal/cli/root.go:336`、`cmd/bbdown/main.go:11`。
+Go 侧自报版本硬编码于五处：`cmd/bbdown/main.go`（横幅）、`internal/cli/root.go`（`Version` 与启动更新检查）、
+`internal/cli/commands.go`（serve 的更新检查）、`PKGBUILD`（`pkgver`），另有 `CHANGELOG.md` 记变更。
 
 ### 1.1 项目谱系（重要）
 
@@ -675,6 +676,27 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 | `TestDownloadFallsBackToOriginalHostOn404` | 单线程 404 回退原地址 | 撤单线程回退分支 |
 | `TestDownloadFallsBackPerClipOn404` | 分片 404 回退原地址 | 撤分片回退分支 |
 | `TestPageDownloadFallsBackWhenMirrorReplacedHost404s` | 端到端：`--upos-host` 指向恒 404 的假镜像，产物仍完整 | `withFallback` 不透传 |
+
+### 4.34 第三十轮：上游 v1.6.20 定性（**重构版本**，无新规格）
+
+上游 2026-09-24 发布 v1.6.20（`upstream/master` = `165d075`，tag `5de84c4`；相对 v1.6.19 共 2 个提交、52 个文件）。
+这一版以重构为主，逐项判定如下：
+
+| 项 | 判定 | 依据 |
+|---|---|---|
+| `Download.cs`（1088 行）拆成 8 个新文件 | **无行为差异** | 机械扫描：把改动文件里每一行逻辑拿去 v1.6.19 全树比对（限定符/`await` 两边同样归一化），未命中的行全是 record/context 类与签名管线；再逐段核对 `DownloadFinalizer`（跳过分支、`finally` 里的轨道清理、封面删除条件「单P ∥ 末P ∥ 换稿」、aid 空目录兜底）与 v1.6.19 的 `MuxAndFinalizeAsync` 一致，且本仓实现早已是同一套边界 |
+| `Parser.cs` 110 行 | **N/A** | 纯 C# 资源管理：`JsonDocument`/ArrayPool 的 dispose 改 try/finally、免二压重发的文档所有权转移；Go 由 GC 管 |
+| fetcher 六处 + 新增 `FetcherJson.cs` | **一处窄边界已对齐** | 上游 v1.6.19 那六处写成「if (code != 0) { var msg = …; }」——**只算不抛**，诊断永远不可达（上游自己的 bug）。本仓一直是 `return err`，所以这一半是上游补齐；但上游新增的 `ThrowIfApiError` 在 **data 存在时也查 code**，本仓此前只在 data 缺失时报错 → 本轮补齐四处（系列首屏/分页、合集首屏/分页），消息格式 `<文案> (code=N): <message>` 与上游逐字一致 |
+| 5 个测试文件的「新表」 | **无新规格可搬** | 逐行过滤掉 async/命名空间改动后，剩余差异全是机械重命名（`Program.ArchiveTracker` → 独立类、`MergeWithConfig` → `MergeWithConfigAsync`、`CanResumeFrom(..., out var)` → 元组返回、`Program.ClampRoleAudioIndex` → `DownloadPageExecutor.…`），**断言一条未改** |
+| `RetryPolicy.cs`（新）+ serve 的 `NormalizeForServe` | **N/A：面不存在** | 钳制针对 serve 请求体里的每任务选项；本仓 `/add-task` 只接受 `url`（README 同此），执行字段与数值根本进不来 |
+| `Archive.cs`/`SubscriptionStore.cs`/`AppSettings.cs`/构建 | **N/A** | async I/O 迁移、`IsServeMode` 与时钟偏移字段搬家、NuGet 锁文件、Dockerfile、CI 缓存 |
+
+**用例**：`internal/fetcher/upstream_apierror_test.go`（code=0/缺 code 不报错、字符串形态的 code、缺 message 仍带 code、
+消息格式逐字比对）；变异验证：撤掉 code 判断即变红。
+
+**方法论收获**：这是第一次遇到「上游发版但**没有新规格**」——机械扫描（改动行 × 旧版全树）+ 关键边界逐段核对，
+比逐文件通读更省也更可复现；「无行为差异」同样要写进基线，否则下一轮会重复劳动。另一点：**上游也会写出
+「只算不抛」的死代码**，本仓「一开始就 return err」不等于落后——对账要区分「我们不齐」与「上游刚补上」。
 
 **方法论收获**：「不主动加功能」的约束下，偏离必须**逐条点名、逐条留痕**——这三条都写进了本节与
 README 的「已知有意差异」，而 §4.32 那两条（下载 URL 的 Debug 行、两级重试日志分级）是对齐、不算
