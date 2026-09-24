@@ -93,6 +93,7 @@ var (
 	optMuxerTimeout       int
 	optRetryCount         int
 	optRetryDelay         int
+	optURLsFile           string
 	optThreadSegmentSize  int
 
 	// Serve options
@@ -119,7 +120,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "1.6.20-go.3",
+	Version: "1.6.20-go.4",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -369,6 +370,7 @@ func init() {
 	rootCmd.Flags().IntVar(&optRetryCount, "retry-count", 3, "重试次数")
 	rootCmd.Flags().IntVar(&optRetryDelay, "retry-delay", 3000, "重试间隔(毫秒)")
 	rootCmd.Flags().IntVar(&optThreadSegmentSize, "thread-segment-size", 0, "分片大小(MB)，0=自动（约按并发数份）")
+	rootCmd.Flags().StringVar(&optURLsFile, "urls-file", "", "从文件批量读取下载目标（每行一个，# 注释；- 表示 stdin）")
 
 	// Serve flags
 	serveCmd.Flags().StringVarP(&optServeListen, "listen", "l", "http://127.0.0.1:23333", "API服务器监听地址")
@@ -415,13 +417,16 @@ func init() {
 }
 
 func runDownload(cmd *cobra.Command, args []string) error {
-	if len(args) > 0 {
-		optURL = args[0]
+	// F2 批量输入（本仓新功能）：位置参数可给多个（此前只取 args[0]，其余被静默忽略），
+	// 也可用 --urls-file 从文件/stdin 读列表。
+	targets, err := collectTargets(args, optURLsFile, os.Stdin)
+	if err != nil {
+		return err
 	}
-
-	if optURL == "" {
+	if len(targets) == 0 {
 		return fmt.Errorf("请提供视频地址")
 	}
+	optURL = targets[0]
 
 	// Build MyOption from flags
 	cfg := buildMyOption()
@@ -432,19 +437,32 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	// Run the workflow
 	client := buildHTTPClient(cfg)
 
-	// Fire-and-forget update check (upstream DefaultCommand).
-	util.CheckUpdateAsync(context.Background(), client, "v1.6.20-go.3")
-
-	wf := workflow.New(cfg, client)
+	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
+	util.CheckUpdateAsync(context.Background(), client, "v1.6.20-go.4")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	err := wf.Run(ctx)
-	// Ctrl+C 取消：静默 cobra 的 "Error:" 与 usage 输出，由 Execute 统一提示。
-	if errors.Is(err, context.Canceled) {
-		cmd.SilenceErrors = true
-		cmd.SilenceUsage = true
+	failures := runTargets(ctx, targets, func(ctx context.Context, target string) error {
+		one := cfg
+		one.URL = target
+		err := workflow.New(one, client).Run(ctx)
+		// Ctrl+C 取消：静默 cobra 的 "Error:" 与 usage 输出，由 Execute 统一提示。
+		if errors.Is(err, context.Canceled) {
+			cmd.SilenceErrors = true
+			cmd.SilenceUsage = true
+		}
+		// 单目标时错误由 Execute 打印；批量时逐条记录，否则只剩最后一行的汇总。
+		if err != nil && len(targets) > 1 {
+			util.LogError("%s 失败: %v", target, err)
+		}
+		return err
+	})
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
-	return err
+	if failures > 0 {
+		return fmt.Errorf("%d/%d 个任务失败", failures, len(targets))
+	}
+	return nil
 }
