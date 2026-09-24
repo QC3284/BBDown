@@ -126,14 +126,82 @@ type probeResult struct {
 	lastModified string
 }
 
-// resumeManifest identifies a remote resource so a partial .tmp file can be
-// resumed safely (an untrusted/stale prefix is discarded instead of producing
-// a corrupted file). Stored next to the .tmp file.
+// resumeManifest 是 .tmp 的旁车清单（上游 ResumeManifest）：身份存**稳定身份**（剥离会刷新的
+// 签名参数），不是完整签名 URL——媒体 URL 的 deadline/sign 每次请求都刷新，用完整 URL 比较
+// 会让同一资源永远无法跨进程续传（上游 v1.6.20 StableResourceIdentity）。URL 字段兼容旧清单。
 type resumeManifest struct {
-	URL          string `json:"url"`
+	Identity     string `json:"identity"`
+	URL          string `json:"url,omitempty"`
 	Size         int64  `json:"size"`
 	ETag         string `json:"etag,omitempty"`
 	LastModified string `json:"last_modified,omitempty"`
+}
+
+// signatureQueryKeys 是每次请求都会刷新的 query 参数（上游 SignatureQueryKeys）：
+// 它们不构成资源身份，比较续传清单时必须剥离。
+var signatureQueryKeys = map[string]bool{
+	"deadline": true, "sign": true, "w_rid": true, "wts": true, "ts": true,
+	"expires": true, "auth_key": true, "ok": true, "ok_av": true, "oid": true,
+	"trid": true, "platform": true, "fnval": true, "fnver": true, "fourk": true,
+	"type": true, "uparams": true, "t": true,
+}
+
+// stableResourceIdentity 返回剥离签名参数后的稳定资源身份：路径 + 非签名参数（按键名排序）。
+func stableResourceIdentity(rawURL string) string {
+	i := strings.Index(rawURL, "?")
+	if i < 0 {
+		return rawURL
+	}
+	path, query := rawURL[:i], rawURL[i+1:]
+	kept := make([]string, 0, 8)
+	for _, pair := range strings.Split(query, "&") {
+		if pair == "" {
+			continue
+		}
+		key := pair
+		if eq := strings.Index(pair, "="); eq > 0 {
+			key = pair[:eq]
+		}
+		if signatureQueryKeys[strings.ToLower(key)] {
+			continue
+		}
+		kept = append(kept, pair)
+	}
+	sort.Strings(kept)
+	if len(kept) == 0 {
+		return path
+	}
+	return path + "?" + strings.Join(kept, "&")
+}
+
+// manifestIdentity 取清单记录的身份；旧清单只存了完整 URL 时按稳定身份回退计算。
+func manifestIdentity(m resumeManifest) string {
+	if m.Identity != "" {
+		return m.Identity
+	}
+	if m.URL != "" {
+		return stableResourceIdentity(m.URL)
+	}
+	return ""
+}
+
+// manifestMatchesProbe 判断清单是否仍代表当前探测到的资源（上游 CanResumeFromAsync）：
+// 稳定身份与总长必须一致；ETag/Last-Modified 只在**双方都有**时才比较——有些 CDN 不返回，
+// 单边缺失时退化为「身份 + 长度」判断。
+func manifestMatchesProbe(m resumeManifest, identity string, size int64, etag, lastModified string) bool {
+	if manifestIdentity(m) != identity {
+		return false
+	}
+	if m.Size != size {
+		return false
+	}
+	if etag != "" && m.ETag != "" && m.ETag != etag {
+		return false
+	}
+	if lastModified != "" && m.LastModified != "" && !strings.EqualFold(m.LastModified, lastModified) {
+		return false
+	}
+	return true
 }
 
 // DownloadFile downloads a URL to a local file, with optional multi-threading,
@@ -279,26 +347,17 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 		return m, true
 	}
 
-	// identityMatches reports whether the recorded resource identity matches the
-	// current probe: the URL must match, and any validator the server provides
-	// must equal the recorded one.
+	// 身份比对用**稳定身份**（上游 v1.6.20 起）：签名参数每次刷新，比完整 URL 会让同一资源
+	// 永远无法续传——B 站每次解析都会换 deadline/sign/trid/upsig。
+	currentIdentity := stableResourceIdentity(url)
 	identityMatches := func(m resumeManifest) bool {
-		if m.URL != url {
-			return false
-		}
-		if pr.etag != "" && m.ETag != pr.etag {
-			return false
-		}
-		if pr.lastModified != "" && m.LastModified != pr.lastModified {
-			return false
-		}
-		return true
+		return manifestMatchesProbe(m, currentIdentity, pr.size, pr.etag, pr.lastModified)
 	}
 
 	// Write the manifest BEFORE the first byte: an interrupted .tmp must carry a
 	// manifest or the next run cannot trust it and has to redownload.
-	if pr.size > 0 {
-		m := resumeManifest{URL: url, Size: pr.size, ETag: pr.etag, LastModified: pr.lastModified}
+	{
+		m := resumeManifest{Identity: currentIdentity, URL: url, Size: pr.size, ETag: pr.etag, LastModified: pr.lastModified}
 		if data, err := json.Marshal(m); err == nil {
 			os.WriteFile(metaPath, data, 0o644)
 		}
