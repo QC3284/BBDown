@@ -2,11 +2,13 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-**版本号语义**：`<上游版本>-go`。例如 `1.6.19-go` 表示「行为已对齐到上游 C# v1.6.19」，
-版本号本身就是对齐进度声明，而不是独立的产品版本线。
+**版本号语义**：`<上游基线>-go[.N]`。`1.6.20-go` = 基于上游 C# v1.6.20 的首个发布，
+`1.6.20-go.3` = 其上的第 3 个发布（修复 / 优化 / 新功能都走这个序号，换基线时才重置）。
 
-上游（aliveranme/BBDown）的同名版本条目仍是行为的权威描述；本文件只记录 Go 重写侧
-**相对上游的落地情况**。逐条对账基线与判定见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md)。
+本项目**以上游为基线，并在其上做优化与新功能**：上游的同名条目仍是基线行为的权威描述，
+本文件记录每一版相对基线做了什么（含优化的改前/改后数字）。与上游不同的行为另在
+[docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
+候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
 ## [1.6.20-go] - 2026-09-19
 

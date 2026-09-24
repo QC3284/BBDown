@@ -14,21 +14,33 @@ BBDown —— 命令行哔哩哔哩下载器，**上游 C# 版 [aliveranme/BBDow
 - `internal/server/` —— `serve` HTTP API
 - `internal/live/` `internal/article/` `internal/substore/` `internal/login/` `internal/drm/`
 
-## 最高约束：行为对齐，不主动加功能
+## 最高约束：以上游为基线，持续做优化与新功能
 
-本分支存在的意义是与上游保持一致。**动手前先确认上游怎么做**：
+上游是**基线**而不是天花板：同步上游（吸收其修复与行为）仍是常规工作，但本项目**允许并鼓励**在
+基线之上做优化与新功能。动手前仍然先确认上游怎么做——目的从「保持一致」变成「知道差异在哪」：
 
-- 上游源码就在本地 git 对象库里（remote `upstream`，tags `v1.6.11`~`v1.6.19`），**无需联网**：
+- 上游源码就在本地 git 对象库里（remote `upstream`，tags `v1.6.11`~`v1.6.20`），**无需联网**：
   ```bash
-  git show v1.6.19:BBDown.Core/Parser.cs
-  git show v1.6.19:BBDown.Tests/ParserFixtureTests.cs
+  git show v1.6.20:BBDown.Core/Parser.cs
+  git show v1.6.20:BBDown.Tests/DownloadPipelineTests.cs
   ```
 - 上游的 `CHANGELOG.md` 与 `docs/REVIEW_FINDINGS.md`（RF-1..RF-88）是行为规格的第二来源。
-- 上游的 `BBDown.Tests/`（含 `FakeBilibiliApiServer` 与 `Fixtures/`）是**验收标准**：新行为优先
-  移植其断言，而不是自己发明期望值。
+- 上游的 `BBDown.Tests/`（含 `FakeBilibiliApiServer` 与 `Fixtures/`）是**回归网与规格来源**：
+  新行为优先移植其断言当基线，再叠加我们自己的。
 - **本仓库的注释也会过时**：曾有一条 `matching C#: no early return` 的注释与上游行为完全相反。
   有疑问就查上游真身，不要信注释。
-- 版本号语义为 `<上游版本>-go`（见 `CHANGELOG.md`），它是对齐进度声明。
+- 版本号语义为 `<上游基线>-go[.N]`：`1.6.20-go` = 基于上游 v1.6.20 的首个发布，
+  `1.6.20-go.3` = 其上的第 3 个发布（修复/优化/新功能都走这个序号，换基线时才重置）。
+
+### 两条硬规矩：偏离留痕、改动有证据
+
+1. **偏离留痕**：与上游不同的行为逐条登记到 `docs/UPSTREAM_ALIGNMENT.md` 的差异表（§4.x），并在
+   CHANGELOG 对应版本里写清「差异点 + 用户价值」。**有意偏离**与**尚未对齐**必须分开记，否则下次
+   对账会把有意差异当成待修的落后项。
+2. **证据门槛**：
+   - 功能与修复：回归用例 + 变异验证（撤掉实现必须变红），与既有测试纪律一致；
+   - **优化：改前/改后的量化数字**（耗时 / HTTP 请求数 / CPU / 内存 / 产物大小）。没有数字不算优化。
+3. 候选清单与优先级见 `docs/ROADMAP.md`。
 
 ## 命令
 
@@ -80,7 +92,8 @@ git show <tag>:docs/REVIEW_FINDINGS.md
 ```
 
 上游发版后：更新 `docs/UPSTREAM_ALIGNMENT.md` 的 §1 参照源与 §4 判定表，按新增条目补用例，
-再把版本号前移（`CHANGELOG.md` + 三处硬编码 + `PKGBUILD`）。
+再把版本号前移（`CHANGELOG.md` + 四处硬编码：横幅 `cmd/bbdown/main.go`、`internal/cli/root.go` 的
+`Version` 与更新检查、`internal/cli/commands.go` 的更新检查 + `PKGBUILD`）。
 
 ## serve 子命令的坑
 

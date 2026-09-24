@@ -4,7 +4,8 @@
 
 > **本分支为 Go 语言重写版本，与上游 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.20）功能一致。**
 > 版本号形如 `<上游版本>-go`，即「已对齐到哪一版上游」的声明；对账基线与逐条判定见 `docs/UPSTREAM_ALIGNMENT.md`。
-> 默认只做行为对齐维护、不主动增加新功能；功能性差异逐条列在下方「与上游的关系」一节。
+> **以上游为基线，并在其上做优化与新功能**：与上游不同的行为逐条列在下方「与上游的关系」，
+> 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 >（用户明确要求：重绘由数据到达驱动，上游是 1/8 秒定时器驱动，判定见 §4.31）。Go 重写由 AI 辅助完成。
 
 ## 安装
@@ -192,8 +193,10 @@ make test        # go test ./...
 
 ## 与上游的关系
 
-基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.20）Go 语言重写，
-CLI 选项、默认值、API 端点、解析/下载/混流行为均已对齐。已知的有意差异（其余细节以等价方式处理）：
+基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.20）Go 语言重写。
+**上游是基线，不是天花板**：基线行为（CLI 选项、默认值、API 端点、解析/下载/混流）保持对齐，
+同时在其上做优化与新功能。已知差异逐条登记在
+[docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4，候选清单见 [docs/ROADMAP.md](docs/ROADMAP.md)：
 
 - **进度条实时化**：重绘由数据到达驱动（16ms 节流 + 停滞时 125ms 心跳），上游是 1/8 秒定时器（§4.31）。
 - **根命令的 `--work-dir` 是持久标志**：所有子命令都可用（上游只有部分命令声明它）。
@@ -232,7 +235,7 @@ CLI 选项、默认值、API 端点、解析/下载/混流行为均已对齐。�
 - 本软件仅供学习交流，**请勿用于商业用途或传播下载内容**。
 - 使用本软件下载视频时，请遵守哔哩哔哩 [用户协议](https://www.bilibili.com/protocal/licence.html) 及相关法律法规。
 - 下载受版权保护的内容可能构成侵权，请仅下载您拥有合法权限的内容。
-- **本分支不会主动增加新功能**，仅保持与上游 C# 版功能一致。
+- **本分支以上游为基线，会主动增加优化与新功能**；与上游的差异逐条登记在「与上游的关系」与 `docs/UPSTREAM_ALIGNMENT.md`。
 - 使用 `--cookie` 或 `--access-token` 时，凭据将以明文存储于本地文件，请注意保管。
 - **禁止将本软件用于任何违法用途**，使用者自行承担一切法律后果。
 
