@@ -149,15 +149,18 @@ func extractFixturePasses(t *testing.T, first, second string) (*entity.ParsedRes
 	return res, qns, err
 }
 
-// TestFixtureReparseSecondPassTakesOver: the qn=127 document replaces the first
-// one wholesale, so the tracks come from the re-request (upstream F09).
+// TestFixtureReparseSecondPassTakesOver: 最高清晰度文档直接生效，轨道取自它。
+//
+// 本仓优化（docs/ROADMAP.md O2）：上游是「先 qn=0、再 qn=127 重发」，重发带 dash.video
+// 就整份取代前者——常见情况下第一份 qn=0 文档白发。本仓改成 qn=127 优先，因此这里只见
+// 一次请求；落点与上游一致（都是 pass2 那份文档），所以对结果的断言不变。
 func TestFixtureReparseSecondPassTakesOver(t *testing.T) {
 	res, qns, err := extractFixturePasses(t, "dash-reparse-pass1", "dash-reparse-pass2")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(qns) != 2 || qns[0] != "0" || qns[1] != maxQn {
-		t.Fatalf("qn sequence = %v, want [0 %s]", qns, maxQn)
+	if len(qns) != 1 || qns[0] != maxQn {
+		t.Fatalf("qn sequence = %v, want [%s]（最高清晰度可用时不再发第二遍）", qns, maxQn)
 	}
 	if len(res.VideoTracks) != 1 || res.VideoTracks[0].ID != "127" {
 		t.Errorf("video tracks = %+v, want exactly the 127 track from the second pass", res.VideoTracks)
@@ -167,15 +170,15 @@ func TestFixtureReparseSecondPassTakesOver(t *testing.T) {
 	}
 }
 
-// TestFixtureDurlReplayFallsBackOnRefusal: when the re-request comes back with
-// no dash.video, the validated first response stays in place (upstream F10).
+// TestFixtureDurlReplayFallsBackOnRefusal: 最高清晰度那份不带 dash.video 时，回落默认清晰度，
+// 落点仍是「默认那份文档」（等价上游「保留第一份」的结论，只是回落方向相反）。
 func TestFixtureDurlReplayFallsBackOnRefusal(t *testing.T) {
 	res, qns, err := extractFixturePasses(t, "durl-replay-first", "durl-replay-empty")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(qns) != 2 || qns[1] != maxQn {
-		t.Fatalf("qn sequence = %v, want a re-request at %s", qns, maxQn)
+	if len(qns) != 2 || qns[0] != maxQn || qns[1] != "0" {
+		t.Fatalf("qn sequence = %v, want [%s 0]（最高清晰度被拒后回落默认）", qns, maxQn)
 	}
 	if len(res.Clips) != 2 || res.Clips[0] != "https://upos.example.com/replay-seg1.flv" {
 		t.Errorf("clips = %v, want the first pass's durl segments", res.Clips)
@@ -185,15 +188,15 @@ func TestFixtureDurlReplayFallsBackOnRefusal(t *testing.T) {
 	}
 }
 
-// TestFixtureFlvDurlStillReparses: an FLV/durl document also triggers the
-// qn=127 re-request (upstream expects two requests for this fixture).
+// TestFixtureFlvDurlStillReparses: FLV/durl 稿件没有 dash.video，所以「最高清晰度优先」照样会
+// 落回默认清晰度——两次请求与上游相同，省不下（这也正是优化只对 DASH 生效的边界）。
 func TestFixtureFlvDurlStillReparses(t *testing.T) {
 	res, qns, err := extractFixturePasses(t, "flv-durl", "flv-durl")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(qns) != 2 || qns[1] != maxQn {
-		t.Errorf("qn sequence = %v, want exactly [0 %s]", qns, maxQn)
+	if len(qns) != 2 || qns[0] != maxQn || qns[1] != "0" {
+		t.Errorf("qn sequence = %v, want exactly [%s 0]", qns, maxQn)
 	}
 	if len(res.Clips) != 2 {
 		t.Errorf("clips = %v, want the 2 durl segments", res.Clips)

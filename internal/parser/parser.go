@@ -258,27 +258,11 @@ func (p *Parser) ExtractTracks(ctx context.Context, aidOri, aid, cid, epid strin
 
 	result := &entity.ParsedResult{}
 
-	jsonStr, err := p.getPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, intlAPI, &appAPI, wantDrm, qn)
+	jsonStr, err := p.fetchPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, intlAPI, &appAPI, wantDrm, qn)
 	if err != nil {
 		return nil, err
 	}
 	result.WebJSONString = jsonStr
-
-	// 免二压重发 (upstream ParseDash, reparsePass 1): the first pass asks for
-	// qn=0, which can omit tracks the maximum tier would offer. A second pass at
-	// qn=127 is issued for every non-APP, non-INTL request; only a document that
-	// actually carries dash.video takes over — a refusal or a failure leaves the
-	// first document in place ("降级沿用第一轮结果").
-	if !intlAPI && !appAPI {
-		better, err := p.reparseMaxQn(ctx, encoding, aidOri, aid, cid, epid, tvAPI, wantDrm)
-		if err != nil {
-			return nil, err
-		}
-		if better != "" {
-			jsonStr = better
-			result.WebJSONString = better
-		}
-	}
 
 	// Handle intl API (two-pass: code=0 and code=1)
 	if intlAPI {
@@ -291,26 +275,42 @@ func (p *Parser) ExtractTracks(ctx context.Context, aidOri, aid, cid, epid strin
 // maxQn is the highest quality id the API accepts (upstream GetMaxQn).
 const maxQn = "127"
 
-// reparseMaxQn re-requests the playurl document at the maximum quality and
-// returns it only when it may take over: the document must parse and carry a
-// non-empty dash.video list. An empty string with a nil error means "keep the
-// first pass"; a non-nil error is a user cancellation, which must propagate
-// rather than be downgraded into the first response (upstream RF-17).
-func (p *Parser) reparseMaxQn(ctx context.Context, encoding, aidOri, aid, cid, epid string, tvAPI, wantDrm bool) (string, error) {
-	appAPI := false
-	next, err := p.getPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, false, &appAPI, wantDrm, maxQn)
+// fetchPlayJSON 取播放文档：非 INTL/APP 时优先请求最高清晰度（qn=127），只在它失败或
+// 不带 dash.video 时回落调用方给的 qn（默认 "0"）。
+//
+// 这是本仓对上游两遍请求的合并（优化，见 docs/ROADMAP.md O2）：上游先请求 qn=0、再重发
+// qn=127，而重发结果一旦带 dash.video 就**整份取代**前者——常见情况下第一份 qn=0 文档是
+// 白发的，单次 -I 解析的 5 个 GET 里它占一个。落点与上游一致：要么用 qn127 文档、要么用
+// qn0 文档，只是常见路径少一次请求。INTL/APP 不参与（上游同样不重发）。
+//
+// 取消必须原样向上传播（上游 RF-17）：两遍都失败时报回落那次的错误——旧流程在同样情形下
+// 报的正是 qn=0 这次的错误。
+func (p *Parser) fetchPlayJSON(ctx context.Context, encoding, aidOri, aid, cid, epid string, tvAPI, intlAPI bool, appAPI *bool, wantDrm bool, qn string) (string, error) {
+	if intlAPI || *appAPI {
+		return p.getPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, intlAPI, appAPI, wantDrm, qn)
+	}
+
+	first, err := p.getPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, false, appAPI, wantDrm, maxQn)
+	if err == nil && hasDashVideo(first) {
+		return first, nil
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	if err != nil {
+		util.LogDebug("最高清晰度请求失败，回落 qn=%s: %v", qn, err)
+	} else {
+		util.LogDebug("最高清晰度请求未返回 DASH 轨道，回落 qn=%s", qn)
+	}
+
+	fallback, ferr := p.getPlayJSON(ctx, encoding, aidOri, aid, cid, epid, tvAPI, false, appAPI, wantDrm, qn)
+	if ferr != nil {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		util.LogDebug("免二压重新请求失败（降级沿用第一轮结果）: %v", err)
-		return "", nil
+		return "", ferr
 	}
-	if !hasDashVideo(next) {
-		util.LogDebug("免二压重新请求未返回轨道（降级沿用第一轮结果）")
-		return "", nil
-	}
-	return next, nil
+	return fallback, nil
 }
 
 // hasDashVideo reports whether a playurl document offers a usable DASH video

@@ -353,7 +353,12 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 	for retry := 0; retry < pageRetryLimit; retry++ {
 		// Fetch chapter/view points (upstream FetchPointsAsync; failure degrades
 		// to a warning and an empty chapter list).
-		page.Points = fetchPoints(ctx, w.HTTPClient, page.Cid, page.Aid)
+		//
+		// -I 只打印流信息，章节不会进产物（混流在 OnlyShowInfo 之前就返回了）：这条
+		// player/wbi/v2 请求纯属浪费，单次解析的 5 个 GET 里它占一个（优化，见 ROADMAP O2）。
+		if !w.Cfg.OnlyShowInfo {
+			page.Points = fetchPointsFunc(ctx, w.HTTPClient, page.Cid, page.Aid)
+		}
 
 		// Parse tracks
 		result, err := p.ExtractTracks(ctx, aidOri, page.Aid, page.Cid, page.Epid,
@@ -1026,6 +1031,10 @@ func (w *Workflow) decryptDrm(ctx context.Context, result *entity.ParsedResult, 
 	}
 	return nil
 }
+
+// fetchPointsFunc 是给用例留的接缝：fetchPoints 的 URL 硬编码 api.bilibili.com（与上游一致），
+// 用例无法用假服务器拦下它，替换这个变量即可在不联网的前提下断言「-I 不抓章节」。
+var fetchPointsFunc = fetchPoints
 
 // fetchPoints fetches chapter/view points for a page (upstream FetchPointsAsync).
 // Failures degrade to a warning and an empty list.
