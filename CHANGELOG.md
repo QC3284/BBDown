@@ -10,6 +10,28 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [1.6.20-go.1] - 2026-09-24
+
+方向变更后的第一个**优化**版本（`AGENTS.md`：以上游为基线，持续做优化与新功能）。只改请求模式，
+`-I` 输出与改前逐行一致。
+
+### 优化
+
+- **解析阶段少发一次 playurl**：上游先请求 qn=0、再重发 qn=127，重发带 `dash.video` 就整份取代前者
+  ——常见情况下第一份文档是白发的。现改为 **qn=127 优先**，只在它失败或不带 `dash.video` 时回落
+  到调用方的 qn（默认 0）。落点与上游一致（要么用 qn127 文档、要么用 qn0 文档）；FLV/durl 稿件
+  没有 dash 轨道，仍会回落一次（与上游同为 2 次请求，省不下）。
+- **`-I` 不再抓章节**：`--only-show-info` 只打印流信息、不产出混流产物，章节（`player/wbi/v2`）用不到。
+
+实测（同一视频 BV1ZH4y167mH，同一网络与账号）：单次 `-I` 解析 **5 → 3 个 HTTP 请求**，墙钟
+**0.53 s → 0.27~0.32 s**；去掉每次都变的 URL 行后，输出 32 行逐行一致。
+
+### 说明
+
+- 这两条是相对上游的**有意偏离**（请求模式不同、结果等价），登记见
+  [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4.35；候选清单见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+- 同步更新了三条钉住旧请求顺序的 fixture 用例（`TestFixtureReparseSecondPassTakesOver`、
+  `TestFixtureDurlReplayFallsBackOnRefusal`、`TestFixtureFlvDurlStillReparses`）：断言落点不变，只改顺序期望。
 ## [1.6.20-go] - 2026-09-19
 
 上游 v1.6.20 是一次**重构版本**（下载流水线拆分 + 资源管理 + async I/O）。逐项定性见
