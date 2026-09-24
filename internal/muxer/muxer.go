@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QC3284/BBDown/internal/entity"
@@ -202,7 +203,7 @@ func muxByFFmpeg(ctx context.Context, url, videoPath, audioPath, outPath, desc, 
 }
 
 // CheckFFmpegDOVI reports whether ffmpeg supports Dolby Vision muxing
-// (libavutil major >= 5, upstream CheckFFmpegDOVI).
+// (libavutil > 57 or 57.17+, upstream ExternalToolHelper.CheckFFmpegDOVIAsync).
 // doviProbeTimeout bounds the ffmpeg version probe. A hung or broken binary
 // must not stall the download: the probe runs before muxing on the critical
 // path (upstream guards CheckFFmpegDOVI with a 5s async timeout).
@@ -212,7 +213,31 @@ var doviProbeTimeout = 5 * time.Second
 // is done (see the WaitDelay comment in CheckFFmpegDOVI).
 var doviProbeWaitDelay = 2 * time.Second
 
+// doviProbeCache 按 ffmpeg 二进制路径缓存探测结果：探测要启动一次 ffmpeg 进程且在混流关键
+// 路径上，而同一进程内同一二进制的版本不会变——多P 杜比视界稿件此前每P都探一次。serve 下
+// 不同任务可能配不同 --ffmpeg-path，所以按路径存而不是全局一次（本仓优化，见 ROADMAP O6）。
+var (
+	doviProbeMu    sync.Mutex
+	doviProbeCache = map[string]bool{}
+)
+
 func CheckFFmpegDOVI() bool {
+	doviProbeMu.Lock()
+	if v, ok := doviProbeCache[FFMPEG]; ok {
+		doviProbeMu.Unlock()
+		return v
+	}
+	doviProbeMu.Unlock()
+
+	v := probeFFmpegDOVI()
+
+	doviProbeMu.Lock()
+	doviProbeCache[FFMPEG] = v
+	doviProbeMu.Unlock()
+	return v
+}
+
+func probeFFmpegDOVI() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), doviProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, FFMPEG, "-version")
@@ -232,10 +257,22 @@ func CheckFFmpegDOVI() bool {
 	if err != nil {
 		return false
 	}
-	return major >= 5
+	minor, err := strconv.Atoi(m[2])
+	if err != nil {
+		return false
+	}
+	// 上游 ExternalToolHelper.CheckFFmpegDOVIAsync：libavutil > 57 或 57.17+（≈ ffmpeg 6.0+）。
+	// 本仓此前写成 major >= 5——对任何真实 libavutil（55~60）都成立，等于恒 true；它与
+	// 「正则丢反斜杠」两个 bug 恰好互相掩盖（一个恒 false、一个恒 true），于是杜比视界要么
+	// 一律回退 mp4box、要么一律用 ffmpeg，只是从没按版本判断过。
+	return major > 57 || (major == 57 && minor >= 17)
 }
 
-var doviVersionRegex = regexp.MustCompile(`libavutils+(d+). +(d+).`)
+// 用 POSIX 字符类而不是 \s/\d：等价的 [`libavutil\s+(\d+)\. +(\d+)\.`]（上游 BBDownUtil），
+// 但不受这层编辑链的转义影响。此前那版字面量把反斜杠全丢了（`libavutils+(d+). +(d+).`），
+// 永远匹配不到 ffmpeg 的 "libavutil  58.  2.100"，于是 CheckFFmpegDOVI 恒 false——杜比视界
+// 一律回退 mp4box，没装 mp4box 的机器直接混流失败。
+var doviVersionRegex = regexp.MustCompile("libavutil[[:space:]]+([0-9]+)[.][[:space:]]+([0-9]+)[.]")
 
 // ffmpegMetaString builds an FFMETADATA chapters file (upstream GetFFmpegMetaString).
 func ffmpegMetaString(points []entity.ViewPoint) string {

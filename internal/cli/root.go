@@ -119,7 +119,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "1.6.20-go.2",
+	Version: "1.6.20-go.3",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -368,7 +368,7 @@ func init() {
 	rootCmd.Flags().IntVar(&optMuxerTimeout, "muxer-timeout", 30, "混流超时(分钟)")
 	rootCmd.Flags().IntVar(&optRetryCount, "retry-count", 3, "重试次数")
 	rootCmd.Flags().IntVar(&optRetryDelay, "retry-delay", 3000, "重试间隔(毫秒)")
-	rootCmd.Flags().IntVar(&optThreadSegmentSize, "thread-segment-size", 20, "分片大小(MB)")
+	rootCmd.Flags().IntVar(&optThreadSegmentSize, "thread-segment-size", 0, "分片大小(MB)，0=自动（约按并发数份）")
 
 	// Serve flags
 	serveCmd.Flags().StringVarP(&optServeListen, "listen", "l", "http://127.0.0.1:23333", "API服务器监听地址")
@@ -433,7 +433,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand).
-	util.CheckUpdateAsync(context.Background(), client, "v1.6.20-go.2")
+	util.CheckUpdateAsync(context.Background(), client, "v1.6.20-go.3")
 
 	wf := workflow.New(cfg, client)
 

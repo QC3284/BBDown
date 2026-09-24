@@ -80,6 +80,34 @@ func (c DownloadConfig) userAgent() string {
 	return util.RandomUserAgent()
 }
 
+// planSegmentBytes 规划分片大小：显式指定 --thread-segment-size 时按用户值，未指定（0）时按
+// 「分片数 ≈ 并发上限」倒推。
+//
+// 旧行为是固定 20MB：40MB 文件只切 2 片，而并发上限是 8——中等大小文件白白浪费 6 个连接。
+// 下界 1MB 避免小文件切出上百片，上界 20MB 与旧默认一致，避免大文件分片过多。
+// 多线程的**触发门槛**仍由 segmentSize()（默认 20MB）决定，与分片大小解耦。
+func planSegmentBytes(size int64, cfg DownloadConfig) int64 {
+	const minSeg = int64(1) << 20
+	const maxSeg = int64(20) << 20
+	if cfg.SegmentSizeMB > 0 {
+		if seg := int64(cfg.SegmentSizeMB) << 20; seg > 0 {
+			return seg
+		}
+	}
+	parallel := int64(maxConcurrentClips())
+	if parallel < 1 {
+		parallel = 1
+	}
+	seg := size / parallel
+	if seg < minSeg {
+		seg = minSeg
+	}
+	if seg > maxSeg {
+		seg = maxSeg
+	}
+	return seg
+}
+
 // maxConcurrentClips caps parallel range requests per file (upstream uses
 // MaxDegreeOfParallelism = min(8, max(1, CPU count))).
 func maxConcurrentClips() int {
@@ -543,7 +571,7 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 		return err
 	}
 
-	segSize := int64(cfg.segmentSize()) * 1024 * 1024
+	segSize := planSegmentBytes(size, cfg)
 	var clips []clipRange
 	var offset int64
 	idx := 0
