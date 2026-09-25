@@ -260,7 +260,7 @@ func (p *Parser) ExtractTracks(ctx context.Context, aidOri, aid, cid, epid strin
 }
 
 // maxQn is the highest quality id the API accepts (upstream GetMaxQn).
-const maxQn = "127"
+const maxQn = "129" // 最高档改为 HDR Vivid（上游基线 127；见 docs/UPSTREAM_ALIGNMENT.md §4.41）
 
 // fetchPlayJSON 取播放文档：非 INTL/APP 时优先请求最高清晰度（qn=127），只在它失败或
 // 不带 dash.video 时回落调用方给的 qn（默认 "0"）。

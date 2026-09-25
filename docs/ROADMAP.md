@@ -14,7 +14,7 @@
 | P0 | 412 风控 | **已完成（`2.1.0`）**：412 时轮换自动 UA + 退避重试（3 次/1s），显式 `--user-agent` 不轮换；依据 ea0e825/5d2b088，但**不照抄 UA 池**（探针实测低频下 UA 类别不是主因） | 上游 4xx 一律直接抛出 | 已发布 |
 | P1 | 字幕接口 | **已定性（真实缺口）**：我们只有三条老接口（`x/web-interface/view`、`x/player/wbi/v2`、`x/player/v2`），没有新接口 | 3625f8f 改用 `x/v2/subtitle/web/view?oid=<cid>&pid=<aid>&context_ext=...&type=1&cur_production_type=0&preferred_language=ai-zh&playlist_switch=0`，`Accept: application/octet-stream`，**响应是 protobuf**（`SubtitleWebReply`），且**放弃了 player/view 系回退** | **高**（不是换 URL：要加 protobuf 解码） |
 | P2 | 登录态请求配置 | 用浏览器 UA 时不配套浏览器指纹头 | 46f08da「完善登录态浏览器请求配置」 | 中 |
-| P3 | 特性对照 | HDR Vivid 未解析；配音已有 | 2cd4084 增加 HDR Vivid 解析；ccd06fd 配音语言选择与分P调度解耦 | 低~中 |
+| P3 | 特性对照 | **HDR Vivid 已完成（`2.2.0`）**：QualityMap 加 129、APP 最高档提到 129、解析最高档同步；配音语言与分P调度解耦仍待做 | 2cd4084；ccd06fd | 低~中 |
 
 **2026-09-25 探针复现（先量再学）**：同一接口 `/x/web-interface/view`、各 8 次、间隔 0.8s——
 浏览器 UA 与传输型 UA **都是 8/8 个 200**，没有任何 412。结论：**低频率下 UA 类别不是 412 的主因**

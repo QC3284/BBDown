@@ -115,13 +115,17 @@ func DoReq(ctx context.Context, client *util.HTTPClient, aid, cid, epID, qn stri
 	return convertToDashJSON(msg)
 }
 
+// maxAppQn 是 APP 协议请求的最高清晰度：129 = HDR Vivid（上游基线是 127；见 §4.41）。
+// 提到常量是因为 127 → 129 曾撞掉两条写死字面量的用例。
+const maxAppQn = 129
+
 // encodePlayViewReq builds the PlayViewReq protobuf (fields upstream sets).
 func encodePlayViewReq(id, cid, qn int64, codec int) []byte {
 	var b []byte
 	b = appendVarintField(b, 1, uint64(id))  // epId / aid
 	b = appendVarintField(b, 2, uint64(cid)) // cid
 	if qn == 0 {
-		qn = 127
+		qn = maxAppQn
 	}
 	b = appendVarintField(b, 3, uint64(qn))                         // qn
 	b = appendVarintField(b, 5, 4048)                               // fnval

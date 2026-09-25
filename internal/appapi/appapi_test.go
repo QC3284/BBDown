@@ -32,8 +32,8 @@ func TestEncodePlayViewReqRoundTrip(t *testing.T) {
 	if got[2] != 279786 {
 		t.Errorf("field 2 (cid) = %d, want 279786", got[2])
 	}
-	if got[3] != 127 {
-		t.Errorf("field 3 (qn, 0 => 127) = %d", got[3])
+	if got[3] != maxAppQn {
+		t.Errorf("field 3 (qn, 0 => %d) = %d", maxAppQn, got[3])
 	}
 	if got[5] != 4048 {
 		t.Errorf("field 5 (fnval) = %d, want 4048", got[5])

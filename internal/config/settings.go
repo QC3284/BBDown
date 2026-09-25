@@ -2,6 +2,7 @@ package config
 
 // QualityMap maps Bilibili quality IDs to display names.
 var QualityMap = map[string]string{
+	"129": "HDR Vivid", // 上游 v1.6.20 没有这一档（C# 2.x 接手线 BBDownT 新增）；APP 协议最高清晰度相应提到 129
 	"127": "8K 超高清",
 	"126": "杜比视界",
 	"125": "HDR 真彩",

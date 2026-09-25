@@ -10,6 +10,26 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.2.0] - 2026-09-25
+
+**HDR Vivid（清晰度 129）** 与 **字幕语言短键 `zh`**。
+
+### 新增
+
+- **HDR Vivid**：`QualityMap` 增加 `129 = HDR Vivid`，APP 协议请求的最高清晰度由 `127` 提到 `129`（`maxAppQn`
+  常量），解析路径的「最高清晰度优先」也随 `maxQn` 提到 129。上游 v1.6.20 **没有这一档**——来源是同生态
+  C# 2.x 接手线 BBDownT 的 2cd4084，差异登记见 §4.41。
+
+### 修复
+
+- **字幕语言短键 `zh`**：新版字幕接口（`x/v2/subtitle/web/view`）用无短横线的短键，而 `normalizeSubtitleLangKey`
+  只补短横线后的大小写，导致 `zh` 落到 `und`（文件名与选择都会错）。依 BBDownT 同一处修补补上。
+
+### 说明
+
+- 127 → 129 这次档位变更撞掉三条写死字面量的用例（`rec.count("127")`、`appapi` 的 `got[3] != 127`）。
+  已按纪律改成**常量驱动**（`maxQn` / `maxAppQn`），并在用例里写明理由：清晰度档位会随平台演进，
+  写死字面量的用例会在下一次档位变更时误报。
 ## [2.1.0] - 2026-09-25
 
 **P0 风控基础设施**：HTTP 412（风控拦截）不再当场失败，而是**换一个自动 UA 退避重试**。

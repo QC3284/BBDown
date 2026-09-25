@@ -16,8 +16,9 @@ import (
 )
 
 // Playurl 请求策略（本仓优化，见 docs/ROADMAP.md O2）：
-// 上游先请求 qn=0、再重发 qn=127，重发带 dash.video 就整份取代前者——常见情况下第一份是白发的。
-// 本仓改为 qn=127 优先，仅当它失败或不带 dash.video 时回落 qn=0。
+// 上游先请求 qn=0、再重发最高清晰度，重发带 dash.video 就整份取代前者——常见情况下第一份是白发的。
+// 本仓改为最高清晰度优先（maxQn，当前 129 = HDR Vivid），仅当它失败或不带 dash.video 时回落调用方的 qn。
+// 用例一律用 maxQn 常量而不是字面量：清晰度档位会随平台演进（127 → 129 就撞过一次）。
 //
 // 夹具用的正是上游录制的这一对：dash-reparse-pass1（qn=0）/ dash-reparse-pass2（qn=127）。
 //
@@ -54,7 +55,7 @@ func extractWithPlayurlDocs(t *testing.T, maxDoc, lowDoc string) (*entity.Parsed
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec.record(r.URL.String())
 		body := lowDoc
-		if strings.Contains(r.URL.RawQuery, "qn=127") {
+		if strings.Contains(r.URL.RawQuery, "qn="+maxQn) {
 			body = maxDoc
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -91,8 +92,8 @@ func TestPlayurlPrefersMaxQnInOneRequest(t *testing.T) {
 	lowDoc := fixtureBody(t, "dash-reparse-pass1")
 
 	got, rec := extractWithPlayurlDocs(t, maxDoc, lowDoc)
-	if n := rec.count("127"); n != 1 {
-		t.Errorf("qn=127 请求 %d 次，期望 1 次", n)
+	if n := rec.count(maxQn); n != 1 {
+		t.Errorf("qn=%s 请求 %d 次，期望 1 次", maxQn, n)
 	}
 	if n := rec.count("0"); n != 0 {
 		t.Errorf("qn=0 请求 %d 次，期望 0 次（最高清晰度已可用）", n)
@@ -113,8 +114,8 @@ func TestPlayurlFallsBackToCallerQn(t *testing.T) {
 	lowDoc := fixtureBody(t, "dash-reparse-pass1")
 
 	got, rec := extractWithPlayurlDocs(t, strings.ReplaceAll(noDash, "'", string('"')), lowDoc)
-	if n := rec.count("127"); n != 1 {
-		t.Errorf("qn=127 请求 %d 次，期望 1 次", n)
+	if n := rec.count(maxQn); n != 1 {
+		t.Errorf("qn=%s 请求 %d 次，期望 1 次", maxQn, n)
 	}
 	if n := rec.count("0"); n != 1 {
 		t.Errorf("回落 qn=0 请求 %d 次，期望 1 次", n)
