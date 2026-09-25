@@ -124,7 +124,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "2.6.0",
+	Version: "2.7.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -413,7 +413,8 @@ func init() {
 	}
 
 	// Register subcommands
-	rootCmd.AddCommand(doctorCmd) // 本仓特色：一条命令定位「为什么下不动」
+	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(resumeCmd) // 本仓特色：一条命令定位「为什么下不动」
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(loginTVCmd)
 	rootCmd.AddCommand(serveCmd)
@@ -452,13 +453,17 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.6.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.7.0")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// firstErr 保留**第一条真实错误**：只报「N/M 个任务失败」而不带原因，等于让用户无法自救
-	// （2.2.0 的教训：真实解析错误被这层吞掉，用户只看到一句失败）。
+	return downloadTargets(ctx, cmd, cfg, client, targets)
+}
+
+// downloadTargets 执行一批目标，并维护**未完成任务清单**（bbdown resume 的底座）：
+// 成功的从清单移除，失败/被取消的登记（含最后错误）。抽成函数让 runDownload 与 resume 共用同一条路径。
+func downloadTargets(ctx context.Context, cmd *cobra.Command, cfg config.MyOption, client *util.HTTPClient, targets []string) error {
 	var firstErr error
 	failures := runTargets(ctx, targets, func(ctx context.Context, target string) error {
 		one := cfg
@@ -473,10 +478,14 @@ func runDownload(cmd *cobra.Command, args []string) error {
 			if firstErr == nil {
 				firstErr = err
 			}
-			// 批量时逐条记录（谁失败了），单目标时原因随返回值打印，不重复。
 			if len(targets) > 1 {
 				util.LogError("%s 失败: %v", target, err)
 			}
+			if perr := upsertPending(cfg.WorkDir, target, err.Error()); perr != nil {
+				util.LogWarn("记录未完成任务失败: %v", perr)
+			}
+		} else if rerr := removePending(cfg.WorkDir, target); rerr != nil {
+			util.LogWarn("清理未完成任务失败: %v", rerr)
 		}
 		return err
 	})
