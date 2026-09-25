@@ -95,6 +95,19 @@
 `sub add --filter <正则>`（按稿件标题过滤，RE2；非法正则当场报错且不落盘），`sub list` 显示过滤条件
 （空过滤时该行与改前逐字相同），`sub check` 应用；旧订阅文件（无 Filter 字段）兼容。
 
+## 下一批（未完成，接着做）
+
+1. **P1 字幕 protobuf**：现役三条老接口（`x/web-interface/view`、`x/player/wbi/v2`、`x/player/v2`）在**未登录**时
+   拿不到字幕（真机实测），新接口 `x/v2/subtitle/web/view`（`Accept: application/octet-stream`）返回 **protobuf**，
+   需要 `SubtitleWebReply` 的字段号：先试 BBDownT 仓库的生成代码（不在 `.proto` 里，可能是 protobuf-net 的
+   `[ProtoMember]` 分散定义），拿不到就抓一次真实响应（登录后）按 wire 格式反推；然后用 `protowire` 手解
+   `lan`/`lan_doc`/`subtitle_url` 三个字段，新接口作首选、老三条保留回退，补夹具用例 + 变异。
+2. **测试辅助迁移**：`internal/workflow/fakecdn_test.go` 已提供 `newFakeCDN`/`newFakeAPI`（自动给出
+   `ForceReplaceHost=false`、`AllowPcdn=true` 的配置）；把 `overwrite_test.go`、`printurls_test.go`、
+   `hdr_reminder_test.go`、`onlyshowinfo_chapters_test.go` 改成用它，消掉「假地址被生产逻辑改写」这一类坑。
+3. **下一批功能候选**（凑齐后发 `2.8.0`）：NFO/侧车元数据（Kodi/Emby 入库）、`--compat` 智能选档（自动避开
+   HDR Vivid/杜比视界）、订阅调度（`sub check` 定时/并发）。
+
 ### 待办（代理披露的未覆盖点，如实记录）
 
 - F5：三处 CLI 调用点（runDownload/runWatchLater/runSubCheck 的 applyProgressJSON）删掉不会变红——需要真实网络
