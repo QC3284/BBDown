@@ -40,8 +40,12 @@ func TestPlanSegmentBytes(t *testing.T) {
 	}
 }
 
-// TestAdaptiveSegmentsBeatFixedSegmentsOnThrottledServer 用限速服务器量收益：
-// 每条连接约 256KB/20ms（≈12.5MB/s），40MB 文件在固定 20MB（2 片）与自动（≈8 片）下的墙钟。
+// TestAdaptiveSegmentsDownloadCorrectlyOnThrottledServer 在限速服务器上把两种分片策略都跑一遍：
+// **只断言正确性**（都成功、内容一致），墙钟与连接数只记日志。
+//
+// 为什么不比墙钟：这条用例原本断言「自动分片更快」，在 windows-latest 上偶发失败（同一个提交，tag 那次
+// 通过、main 那次失败）——墙钟比较在慢 runner 上就是时序竞态（AGENTS.md 测试纪律）。行为不变量（分片
+// 大小如何规划）由 TestPlanSegmentBytes 确定性守护，收益数字来自本地实测（见 ROADMAP O4）。
 func TestAdaptiveSegmentsBeatFixedSegmentsOnThrottledServer(t *testing.T) {
 	const total = 40 << 20
 	body := make([]byte, total)
@@ -97,7 +101,8 @@ func TestAdaptiveSegmentsBeatFixedSegmentsOnThrottledServer(t *testing.T) {
 	adaptive, adaptiveConns := run(0)
 	t.Logf("固定 20MB：%v（%d 条连接）｜自动：%v（%d 条连接）", fixed.Round(time.Millisecond), fixedConns,
 		adaptive.Round(time.Millisecond), adaptiveConns)
-	if adaptive >= fixed {
-		t.Errorf("自动分片应当更快：固定=%v 自动=%v", fixed, adaptive)
+	// 结构不变量用「至少不比固定策略少用连接」表达（NumCPU 少的 runner 上两者可能相等）。
+	if adaptiveConns < fixedConns {
+		t.Errorf("自动分片用了 %d 条连接，少于固定策略的 %d 条", adaptiveConns, fixedConns)
 	}
 }
