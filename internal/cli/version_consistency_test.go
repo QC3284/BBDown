@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,7 +14,13 @@ import (
 //
 // 变异验证：把任意一处改成别的版本 → 变红。
 func TestVersionStringsAreConsistent(t *testing.T) {
-	root := filepath.Join("..", "..")
+	// 用**测试文件自身的位置**定位仓库根，而不是相对 CWD：同包里有用例会 t.Chdir（切换进程工作目录），
+	// 相对路径会在那时读不到文件——本用例就因此红过一次（CI 与本机都复现）。
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("无法定位测试文件位置")
+	}
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..")
 	// root.go 的 `Version:` 是事实来源（cobra 命令字段，不是包级变量），其余四处必须与它一致。
 	files := []struct {
 		path    string
