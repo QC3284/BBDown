@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,17 @@ import (
 var (
 	apiRetries      = 3
 	apiRetryBackoff = 500 * time.Millisecond
+)
+
+// 风控（HTTP 412）的重试策略：共 3 次尝试、每次之间退避 1s，且**只轮换自动 UA**。
+//
+// 依据：上游把 4xx 一律视为确定性错误直接抛出；但 412 是 B 站的**限流/风控**信号（不是参数错误），
+// 等在原地重试同一 UA 往往还是 412，而换一个自动 UA 立刻就能过（同一生态的 C# 2.x 接手线 BBDownT
+// 2.1.x 就是这么做的：移除易触发 412 的默认 UA + 412 时轮换 UA 重试）。本仓的有意偏离，登记见
+// docs/UPSTREAM_ALIGNMENT.md §4.40。变量化是为了让用例把退避缩到毫秒。
+var (
+	riskControlMaxAttempts = 3
+	riskControlRetryDelay  = time.Second
 )
 
 // SetRetries overrides the retry count for this client (from --retry-count).
@@ -82,9 +94,13 @@ func credentialRedirectGuard(req *http.Request, via []*http.Request) error {
 type HTTPClient struct {
 	client    *http.Client
 	userAgent string
-	debugFn   func(string, ...interface{})
-	skipSSL   func() bool
-	cookieFn  func() string
+	// uaMu/uaExplicit 保护 UA 的读写：轮换会发生在并发请求中，且显式 --user-agent
+	// 必须**永不**被自动轮换覆盖。
+	uaMu       sync.RWMutex
+	uaExplicit bool
+	debugFn    func(string, ...interface{})
+	skipSSL    func() bool
+	cookieFn   func() string
 
 	// credentialHosts are user-opted-in hosts that may receive cookies in
 	// addition to the official Bilibili domains.
@@ -219,7 +235,7 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 		return "", nil, err
 	}
 
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", c.currentUserAgent())
 
 	cookieVal := ""
 	if c.cookieFn != nil {
@@ -257,8 +273,35 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 	// error the caller needs to see (upstream retries min(MaxRetryCount,3) times
 	// with exponential backoff).
 	attemptReq := req
+	riskAttempts := 0
 	for attempt := 0; ; attempt++ {
 		resp, err = c.client.Do(attemptReq)
+
+		// 风控（412）：换一个自动 UA 再试；显式 --user-agent 时保持原样（只退避重试）。
+		if err == nil && resp.StatusCode == http.StatusPreconditionFailed {
+			riskAttempts++
+			if riskAttempts >= riskControlMaxAttempts || ctx.Err() != nil {
+				break // 用尽风控尝试：按 4xx 原样抛出（下面统一处理）
+			}
+			rotated := c.rotateAutomaticUserAgent()
+			if c.debugFn != nil {
+				c.debugFn("GET %s 被风控拦截(412)，%v 后重试（第 %d/%d 次%s）", MaskUrl(url),
+					riskControlRetryDelay, riskAttempts+1, riskControlMaxAttempts,
+					map[bool]string{true: "，已轮换自动 UA", false: "，UA 为显式指定、不轮换"}[rotated])
+			}
+			resp.Body.Close()
+			select {
+			case <-ctx.Done():
+			case <-time.After(riskControlRetryDelay):
+			}
+			if ctx.Err() != nil {
+				return "", nil, ctx.Err()
+			}
+			attemptReq = req.Clone(ctx)
+			attemptReq.Header.Set("User-Agent", c.currentUserAgent())
+			continue
+		}
+
 		if err == nil && resp.StatusCode < http.StatusInternalServerError {
 			break
 		}
@@ -317,7 +360,7 @@ func (c *HTTPClient) GetWebLocation(ctx context.Context, url string) (string, er
 		if err != nil {
 			return url, err
 		}
-		req.Header.Set("User-Agent", c.userAgent)
+		req.Header.Set("User-Agent", c.currentUserAgent())
 		req.Header.Set("Cache-Control", "no-cache")
 
 		resp, err := c.client.Do(req)
@@ -386,14 +429,37 @@ func RandomUserAgent() string {
 
 // UserAgent returns the current user agent string.
 func (c *HTTPClient) UserAgent() string {
+	return c.currentUserAgent()
+}
+
+// currentUserAgent 读当前 UA（轮换可能发生在并发请求中）。
+func (c *HTTPClient) currentUserAgent() string {
+	c.uaMu.RLock()
+	defer c.uaMu.RUnlock()
 	return c.userAgent
+}
+
+// rotateAutomaticUserAgent 在「UA 不是用户显式指定」时换一个自动 UA，返回是否真的换了。
+// 显式 --user-agent（例如登录态下伪装某个浏览器）必须保持稳定，否则反而更像异常客户端。
+func (c *HTTPClient) rotateAutomaticUserAgent() bool {
+	c.uaMu.Lock()
+	defer c.uaMu.Unlock()
+	if c.uaExplicit {
+		return false
+	}
+	c.userAgent = randomUserAgent()
+	return true
 }
 
 // SetUserAgent sets a custom user agent.
 func (c *HTTPClient) SetUserAgent(ua string) {
-	if ua != "" {
-		c.userAgent = ua
+	if ua == "" {
+		return
 	}
+	c.uaMu.Lock()
+	defer c.uaMu.Unlock()
+	c.userAgent = ua
+	c.uaExplicit = true // 显式指定：412 时不再自动轮换（见 rotateAutomaticUserAgent）
 }
 
 // SetCookieFn overrides the cookie provider (e.g. after loading credentials
@@ -424,7 +490,7 @@ func (c *HTTPClient) PostForm(ctx context.Context, urlStr string, form url.Value
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", c.currentUserAgent())
 
 	resp, err := c.client.Do(req)
 	if err != nil {

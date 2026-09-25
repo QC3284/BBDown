@@ -122,7 +122,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "2.0.0",
+	Version: "2.1.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -446,7 +446,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.0.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.1.0")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
