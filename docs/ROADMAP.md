@@ -12,7 +12,7 @@
 | # | 项 | 现状（本仓） | BBDownT 的做法 | 优先级 |
 |---|---|---|---|---|
 | P0 | 412 风控 | **已完成（`2.1.0`）**：412 时轮换自动 UA + 退避重试（3 次/1s），显式 `--user-agent` 不轮换；依据 ea0e825/5d2b088，但**不照抄 UA 池**（探针实测低频下 UA 类别不是主因） | 上游 4xx 一律直接抛出 | 已发布 |
-| P1 | 字幕接口 | 未核对 | 3625f8f「适配新版字幕接口」（2026-09） | 中（可能已失效） |
+| P1 | 字幕接口 | **已定性（真实缺口）**：我们只有三条老接口（`x/web-interface/view`、`x/player/wbi/v2`、`x/player/v2`），没有新接口 | 3625f8f 改用 `x/v2/subtitle/web/view?oid=<cid>&pid=<aid>&context_ext=...&type=1&cur_production_type=0&preferred_language=ai-zh&playlist_switch=0`，`Accept: application/octet-stream`，**响应是 protobuf**（`SubtitleWebReply`），且**放弃了 player/view 系回退** | **高**（不是换 URL：要加 protobuf 解码） |
 | P2 | 登录态请求配置 | 用浏览器 UA 时不配套浏览器指纹头 | 46f08da「完善登录态浏览器请求配置」 | 中 |
 | P3 | 特性对照 | HDR Vivid 未解析；配音已有 | 2cd4084 增加 HDR Vivid 解析；ccd06fd 配音语言选择与分P调度解耦 | 低~中 |
 
@@ -20,6 +20,9 @@
 浏览器 UA 与传输型 UA **都是 8/8 个 200**，没有任何 412。结论：**低频率下 UA 类别不是 412 的主因**
 （此前那轮 412 是高频解析自己招来的）。因此：**不照抄 UA 池改动**，只实现「412 → 轮换自动 UA + 退避重试」
 （成功路径零变化），UA 池本身降级为「需要更高强度/更贴近真实场景的复现证据再决定」。
+**P1 待办（下一步）**：仓库已有 protobuf 依赖（`internal/drm/proto`），计划用 `protowire` 只手解需要的字段
+（lan / lan_doc / subtitle_url）——先从 BBDownT 的生成代码取字段号，再补夹具回放用例；新接口作为**首选**，
+我们现有的三条老接口保留为回退（覆盖度只增不减）。
 来源：[BBDownT releases](https://github.com/LOVAHE/BBDownT/releases) 与其提交 10db034/5d2b088/ea0e825/46f08da/3625f8f/2cd4084/ccd06fd。
 注意：BBDownT 与基线不是同一代码线，**不能直接移植**，只能作为规格与线索来源；跟进时同样要按本仓规矩
 补回归用例、做变异验证，并在差异台账登记。
