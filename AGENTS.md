@@ -2,8 +2,8 @@
 
 ## 项目
 
-BBDown —— 命令行哔哩哔哩下载器，**上游 C# 版 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)
-的 Go 语言重写**。
+BBDown —— 命令行哔哩哔哩下载器，**BBDown 生态的 Go 主线实现**：起步自 C# 版
+[aliveranme/BBDown](https://github.com/aliveranme/BBDown) v1.6.20 的重写，此后独立演进。
 
 - `cmd/bbdown/` —— 入口
 - `internal/cli/` —— cobra 命令、参数归一化、配置文件合并
@@ -14,10 +14,11 @@ BBDown —— 命令行哔哩哔哩下载器，**上游 C# 版 [aliveranme/BBDow
 - `internal/server/` —— `serve` HTTP API
 - `internal/live/` `internal/article/` `internal/substore/` `internal/login/` `internal/drm/`
 
-## 最高约束：以上游为基线，持续做优化与新功能
+## 最高约束：独立实现，多源参考
 
-上游是**基线**而不是天花板：同步上游（吸收其修复与行为）仍是常规工作，但本项目**允许并鼓励**在
-基线之上做优化与新功能。动手前仍然先确认上游怎么做——目的从「保持一致」变成「知道差异在哪」：
+本仓不是上游的影子：它起步于 C# 版 v1.6.20 的重写，但**独立演进**——版本号、功能与风控策略都走自己的线。
+上游（`AliverAnme/BBDown`）是**参考基线之一**，不再是唯一规格来源。动手前查上游，目的从「保持一致」
+变成「知道差异在哪、以及别人解决过什么」：
 
 - 上游源码就在本地 git 对象库里（remote `upstream`，tags `v1.6.11`~`v1.6.20`），**无需联网**：
   ```bash
@@ -29,8 +30,9 @@ BBDown —— 命令行哔哩哔哩下载器，**上游 C# 版 [aliveranme/BBDow
   新行为优先移植其断言当基线，再叠加我们自己的。
 - **本仓库的注释也会过时**：曾有一条 `matching C#: no early return` 的注释与上游行为完全相反。
   有疑问就查上游真身，不要信注释。
-- 版本号语义为 `<上游基线>-go[.N]`：`1.6.20-go` = 基于上游 v1.6.20 的首个发布，
-  `1.6.20-go.3` = 其上的第 3 个发布（修复/优化/新功能都走这个序号，换基线时才重置）。
+- 版本号语义是**我们自己的** `MAJOR.MINOR.PATCH`：`2.0.0` = 独立实现的首发（起步自上游 v1.6.20，
+  但编号不再跟随它）。历史 `1.6.20-go[.N]` 条目保留在 `CHANGELOG.md`，该线不再新增。
+- 与上游的行为对应关系写在 `CHANGELOG.md` 与 `docs/UPSTREAM_ALIGNMENT.md`，**不写进版本号**。
 
 ### 两条硬规矩：偏离留痕、改动有证据
 
@@ -85,12 +87,20 @@ go build ./... && go vet ./... && go test ./...
 ### 三个 BBDown 仓库的关系（别搞混）
 
 - `nilaoda/BBDown` —— **原始仓库，已归档**（README 只剩归档说明），不再维护；
-- `AliverAnme/BBDown` —— 本仓的**基线**（git remote `upstream`）：原仓的 fork，继续走 C# 1.6.x，我们按它对齐；
+- `AliverAnme/BBDown` —— **参考基线之一**（git remote `upstream`）：原仓的 fork，继续走 C# 1.6.x；我们起步自它，但独立演进；
 - `LOVAHE/BBDownT` —— **另一条接手线**（非 fork，C# 2.x，默认分支 `v2`，dotnet tool 分发）：也接手自原仓，
   但代码线不同，**不能直接同步**。它的提交/发布说明是**第二规格来源**，尤其风控相关——例如 2.1.x 的
   「移除易触发 412 的默认 User-Agent」「412 时轮换 UA 重试最多 3 次」「完善登录态浏览器请求配置」。
   我们踩到同类问题时（412/风控/接口变更），先去查它做过什么，再决定是否跟进（跟进的同样要登记差异）。
-## 与上游同步
+## 与外部源同步（四源）
+
+规格来源有四个，任一更新都可触发动作，不必等某个仓库发版：
+
+1. `AliverAnme/BBDown` —— 参考基线（tags `v1.6.11`~`v1.6.20`，本地 git 对象库即可查）；
+2. `LOVAHE/BBDownT` —— C# 2.x 接手线，**风控与接口变更的情报价值最高**；
+3. `bilibili-API-collect` —— 接口规格；
+4. **实测** —— 探针脚本 + `--debug` 日志；与前三者冲突时**以实测为准**。
+
 
 ```bash
 git fetch upstream --tags
@@ -99,9 +109,10 @@ git show <tag>:CHANGELOG.md          # 逐版本行为要点
 git show <tag>:docs/REVIEW_FINDINGS.md
 ```
 
-上游发版后：更新 `docs/UPSTREAM_ALIGNMENT.md` 的 §1 参照源与 §4 判定表，按新增条目补用例，
-再把版本号前移（`CHANGELOG.md` + 四处硬编码：横幅 `cmd/bbdown/main.go`、`internal/cli/root.go` 的
-`Version` 与更新检查、`internal/cli/commands.go` 的更新检查 + `PKGBUILD`）。
+外部源有更新时：并入四源评估 → 值得跟的补用例 + 变异验证 → 在 `docs/UPSTREAM_ALIGNMENT.md` 的 §4 判定表
+登记（有意偏离 / 尚未对齐）→ 记 `CHANGELOG.md`。**版本号只随我们自己的发布前移**，五处硬编码：
+横幅 `cmd/bbdown/main.go`、`internal/cli/root.go` 的 `Version` 与更新检查、`internal/cli/commands.go`
+的更新检查、`PKGBUILD`。
 
 ## serve 子命令的坑
 

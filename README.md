@@ -2,10 +2,10 @@
 
 命令行式哔哩哔哩下载器。Bilibili Downloader.
 
-> **本分支为 Go 语言重写版本，与上游 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.20）功能一致。**
-> 版本号形如 `<上游版本>-go`，即「已对齐到哪一版上游」的声明；对账基线与逐条判定见 `docs/UPSTREAM_ALIGNMENT.md`。
-> **以上游为基线，并在其上做优化与新功能**：与上游不同的行为逐条列在下方「与上游的关系」，
-> 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+> **本仓是 BBDown 生态的 Go 主线实现**：起步自 C# 版 [aliveranme/BBDown](https://github.com/aliveranme/BBDown) v1.6.20 的重写，此后独立演进。
+> 版本号走自己的线（`2.0.0` = 独立实现首发）；与上游的行为对应关系由 `CHANGELOG.md` 与 `docs/UPSTREAM_ALIGNMENT.md` 承载，不写进版本号。
+> **上游是参考基线之一，不是天花板**：与它不同的行为逐条列在下方「与上游的关系」，候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+> 规格来源共四个：上游、C# 2.x 接手线 [BBDownT](https://github.com/LOVAHE/BBDownT)、[bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect)、以及**实测**（冲突时以实测为准）。
 >（用户明确要求：重绘由数据到达驱动，上游是 1/8 秒定时器驱动，判定见 §4.31）。Go 重写由 AI 辅助完成。
 
 ## 安装
@@ -201,10 +201,10 @@ make test        # go test ./...
 
 ## 与上游的关系
 
-基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.20）Go 语言重写。
-**上游是基线，不是天花板**：基线行为（CLI 选项、默认值、API 端点、解析/下载/混流）保持对齐，
-同时在其上做优化与新功能。已知差异逐条登记在
-[docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4，候选清单见 [docs/ROADMAP.md](docs/ROADMAP.md)：
+基于 [aliveranme/BBDown](https://github.com/aliveranme/BBDown)（C# 版 v1.6.20）Go 语言重写，此后**独立演进**。
+行为对应关系（CLI 选项、默认值、API 端点、解析/下载/混流）以 `CHANGELOG.md` 与
+[docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4 为准——那里逐条说明是「有意偏离」还是「尚未对齐」；
+候选清单见 [docs/ROADMAP.md](docs/ROADMAP.md)：
 
 - **进度条实时化**：重绘由数据到达驱动（16ms 节流 + 停滞时 125ms 心跳），上游是 1/8 秒定时器（§4.31）。
 - **根命令的 `--work-dir` 是持久标志**：所有子命令都可用（上游只有部分命令声明它）。
@@ -244,7 +244,7 @@ make test        # go test ./...
 - 本软件仅供学习交流，**请勿用于商业用途或传播下载内容**。
 - 使用本软件下载视频时，请遵守哔哩哔哩 [用户协议](https://www.bilibili.com/protocal/licence.html) 及相关法律法规。
 - 下载受版权保护的内容可能构成侵权，请仅下载您拥有合法权限的内容。
-- **本分支以上游为基线，会主动增加优化与新功能**；与上游的差异逐条登记在「与上游的关系」与 `docs/UPSTREAM_ALIGNMENT.md`。
+- **本仓独立演进**：会主动增加优化与新功能，并跟踪生态里的其他实现（如 C# 2.x 接手线 BBDownT 的风控改动）；差异逐条登记在「与上游的关系」与 `docs/UPSTREAM_ALIGNMENT.md`。
 - 使用 `--cookie` 或 `--access-token` 时，凭据将以明文存储于本地文件，请注意保管。
 - **禁止将本软件用于任何违法用途**，使用者自行承担一切法律后果。
 
