@@ -60,6 +60,7 @@ BBDown —— 命令行哔哩哔哩下载器，**BBDown 生态的 Go 主线实�
 ```bash
 make build            # go build -ldflags="-s -w" -o bin/BBDown ./cmd/bbdown
 make test             # go test ./...
+make smoke            # 真机冒烟（需联网）：doctor + 三条解析路径 + 真实下载 + 产物 ffprobe + 进度 JSON
 
 # 提交前必须全过
 gofmt -l internal/ cmd/     # 必须无输出

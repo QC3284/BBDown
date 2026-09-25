@@ -627,6 +627,11 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		if !w.Cfg.SkipSubtitle && !w.Cfg.DanmakuOnly && !w.Cfg.CoverOnly && !w.Cfg.OnlyShowInfo {
 			util.LogDebug("获取字幕...")
 			subs, _ := util.GetSubtitles(ctx, w.HTTPClient, page.Aid, page.Cid, page.Epid, page.Index, w.Cfg.UseIntlAPI, w.Cfg.Cookie)
+			// 显式要字幕却一个字幕都没有时，必须说清楚——否则用户只看到「任务完成」却没有任何产物，
+			// 分不清「该视频没有字幕」「没登录」和「下载失败」（真机实测踩到，见 §4.43）。
+			if len(subs) == 0 && w.Cfg.SubOnly {
+				util.LogWarn("未找到可用字幕：可能需要登录（bbdown login）、选择别的语言，或该视频没有字幕")
+			}
 			if w.Cfg.SkipAi && len(subs) > 0 {
 				var filtered []entity.Subtitle
 				for _, s := range subs {
