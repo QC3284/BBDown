@@ -10,6 +10,28 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.8.0] - 2026-09-26
+
+**P1：新版字幕接口（protobuf）**——真机确认字幕缺失后补齐。
+
+背景：现行 web 端字幕走 `x/v2/subtitle/web/view`，响应的 `Content-Type` 是 `application/octet-stream`，
+内容是 **protobuf**（不是 JSON）。我们此前只有三条老接口（`x/web-interface/view`、`x/player/wbi/v2`、
+`x/player/v2`），未登录时拿不到任何字幕；同生态 C# 2.x 接手线 BBDownT 的 2.1.3 也换到了新接口。
+
+- 新接口作为**首选**，老三条保留为回退（不同账号/地区/稿件命中的接口不同，覆盖度只增不减）；
+- 只手解需要的三个字段，**不引入 protobuf 运行时**：字段号取自 BBDownT 的
+  `BBDownT.Core/APP/Response/dmviewreply.proto`——`SubtitleWebReply{subtitle=1}`、
+  `VideoSubtitle{subtitles=3}`、`SubtitleItem{lan=3, lanDoc=4, subtitleUrl=5}`；
+- 协议相对地址（`//aisubtitle...`）自动补成 `https:`；缺 `lan`/`url` 的条目跳过，不产出半条字幕；
+- 解析失败/响应损坏一律返回空并走回退，**不 panic**（`protoFields` 遇到不认识的 wire type 即停）。
+
+用例：`internal/util/subtitle_web_test.go`（手工构造 protobuf 载荷，覆盖多条、缺字段跳过、空/垃圾数据）。
+变异验证：把 `lan` 的字段号从 3 改成 2 → 变红。
+
+### 如实说明
+
+- 这条路径**未在真机验证**：字幕需要登录（`bbdown login`），本机环境未登录，无法端到端复现。用例是
+  按上游 proto 字段号 + 手工构造载荷验证的；等你登录后跑 `make smoke` 或 `--sub-only` 才能确认线上形态。
 ## [2.7.0] - 2026-09-26
 
 **`bbdown resume`：跨会话接着下**（本仓特色功能）。

@@ -97,7 +97,7 @@
 
 ## 下一批（未完成，接着做）
 
-1. **P1 字幕 protobuf**：现役三条老接口（`x/web-interface/view`、`x/player/wbi/v2`、`x/player/v2`）在**未登录**时
+1. ~~**P1 字幕 protobuf**~~ **已完成（`2.8.0`）**：字段号取自 BBDownT 的 `dmviewreply.proto`，手解三个字段、新接口优先、老三条回退；**待登录后真机确认**。原计划：：现役三条老接口（`x/web-interface/view`、`x/player/wbi/v2`、`x/player/v2`）在**未登录**时
    拿不到字幕（真机实测），新接口 `x/v2/subtitle/web/view`（`Accept: application/octet-stream`）返回 **protobuf**，
    需要 `SubtitleWebReply` 的字段号：先试 BBDownT 仓库的生成代码（不在 `.proto` 里，可能是 protobuf-net 的
    `[ProtoMember]` 分散定义），拿不到就抓一次真实响应（登录后）按 wire 格式反推；然后用 `protowire` 手解

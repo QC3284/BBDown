@@ -22,9 +22,13 @@ func GetSubtitles(ctx context.Context, client *HTTPClient, aid, cid, epid string
 			subtitles = getIntlSubAPI2(ctx, client, aid, cid, epid, index)
 		}
 	} else {
-		if cookie == "" {
+		// 新版接口（protobuf）优先：它是当前 web 端在用的那个（BBDownT 的 2.1.3 也换到了它）。
+		// 老三条保留为回退——不同账号/地区/稿件命中的接口不一样，覆盖度只增不减。
+		subtitles = getSubWebAPI(ctx, client, aid, cid)
+		if subtitles == nil && cookie == "" {
 			subtitles = getSubAPI3(ctx, client, aid, cid)
-		} else {
+		}
+		if subtitles == nil && cookie != "" {
 			subtitles = getSubAPI2(ctx, client, aid, cid)
 			if subtitles == nil {
 				subtitles = getSubAPI1(ctx, client, aid, cid)
