@@ -36,6 +36,8 @@ func TestFormatSubTime(t *testing.T) {
 
 func TestSubCode2(t *testing.T) {
 	cases := map[string]string{
+		"zh":    "chi", // 新版字幕接口的短键
+		"ai-zh": "chi", // 小写形态：normalizeSubtitleLangKey 负责补成 ai-Zh
 		"zh-CN": "chi",
 		"en-US": "eng",
 		"ja":    "jpn",
