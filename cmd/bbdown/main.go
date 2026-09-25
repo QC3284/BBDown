@@ -10,7 +10,7 @@ import (
 func main() {
 	// Banner: ConsoleColor.DarkBlue background + ConsoleColor.White text, which in
 	// ANSI terms is 44 + 97 (White is the bright variant, not 37).
-	fmt.Print(util.AnsiBgDarkBlue + util.AnsiWhite + "BBDown version 2.4.0, Bilibili Downloader." + util.AnsiReset + "\r\n")
+	fmt.Print(util.AnsiBgDarkBlue + util.AnsiWhite + "BBDown version 2.4.1, Bilibili Downloader." + util.AnsiReset + "\r\n")
 	fmt.Print("遇到问题请首先到以下地址查阅有无相关信息：\r\nhttps://github.com/QC3284/BBDown/issues\r\n")
 	fmt.Println()
 

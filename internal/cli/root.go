@@ -122,7 +122,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "2.4.0",
+	Version: "2.4.1",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -447,11 +447,14 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.4.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.4.1")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
+	// firstErr 保留**第一条真实错误**：只报「N/M 个任务失败」而不带原因，等于让用户无法自救
+	// （2.2.0 的教训：真实解析错误被这层吞掉，用户只看到一句失败）。
+	var firstErr error
 	failures := runTargets(ctx, targets, func(ctx context.Context, target string) error {
 		one := cfg
 		one.URL = target
@@ -461,9 +464,14 @@ func runDownload(cmd *cobra.Command, args []string) error {
 			cmd.SilenceErrors = true
 			cmd.SilenceUsage = true
 		}
-		// 单目标时错误由 Execute 打印；批量时逐条记录，否则只剩最后一行的汇总。
-		if err != nil && len(targets) > 1 {
-			util.LogError("%s 失败: %v", target, err)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			// 批量时逐条记录（谁失败了），单目标时原因随返回值打印，不重复。
+			if len(targets) > 1 {
+				util.LogError("%s 失败: %v", target, err)
+			}
 		}
 		return err
 	})
@@ -471,6 +479,12 @@ func runDownload(cmd *cobra.Command, args []string) error {
 		return ctx.Err()
 	}
 	if failures > 0 {
+		if failures == 1 && firstErr != nil {
+			return firstErr
+		}
+		if firstErr != nil {
+			return fmt.Errorf("%d/%d 个任务失败，第一个错误：%w", failures, len(targets), firstErr)
+		}
 		return fmt.Errorf("%d/%d 个任务失败", failures, len(targets))
 	}
 	return nil

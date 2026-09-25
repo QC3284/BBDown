@@ -37,8 +37,11 @@ func TestUpstreamNumericOptionValidation(t *testing.T) {
 	for _, v := range []int{0, -5, 101} {
 		check(t, func(c *config.MyOption) { c.RetryCount = v }, "--retry-count")
 	}
-	// --thread-segment-size：0 会让分片切分不收敛
-	for _, v := range []int{0, -20, 1025} {
+	// --thread-segment-size：0 现在是**合法值**（= 自动分片，按并发数倒推，见 testplan/§4.42），
+	// 只有负数与超过 1024 才非法。旧契约把 0 判为非法、而 CLI 默认值又改成了 0，
+	// 于是默认参数的真实下载一直失败——这条用例当年没发现，因为它的 valid() 写死了 20，
+	// 没走「CLI 默认值」这条路（补的守卫见 default_options_test.go）。
+	for _, v := range []int{-20, 1025} {
 		check(t, func(c *config.MyOption) { c.ThreadSegmentSize = v }, "--thread-segment-size")
 	}
 	// --retry-delay / --delay-per-page：负数非法

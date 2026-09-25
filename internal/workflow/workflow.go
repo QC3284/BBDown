@@ -1490,8 +1490,11 @@ func (w *Workflow) validateNumericOptions() error {
 	if w.Cfg.RetryDelay < 0 || w.Cfg.RetryDelay > 600000 {
 		return fmt.Errorf("参数有误：--retry-delay 需在 0 ~ 600000 ms 之间，当前为 %d", w.Cfg.RetryDelay)
 	}
-	if w.Cfg.ThreadSegmentSize < 1 || w.Cfg.ThreadSegmentSize > 1024 {
-		return fmt.Errorf("参数有误：--thread-segment-size 需在 1 ~ 1024 MB 之间，当前为 %d（设为 0 会导致分片切分无法收敛）", w.Cfg.ThreadSegmentSize)
+	// 0 是**合法**值：表示「自动分片」（按并发数倒推，见 download.planSegmentBytes）。
+	// 这条校验曾只允许 1~1024，而 CLI 的默认值在 O4 里改成了 0 —— 于是从 1.6.20-go.3 起**默认参数
+	// 直接失败**，单元测试却全绿（没有任何用例走过「CLI 默认值 → 校验」这条路）。补了用例见 §4.42。
+	if w.Cfg.ThreadSegmentSize < 0 || w.Cfg.ThreadSegmentSize > 1024 {
+		return fmt.Errorf("参数有误：--thread-segment-size 需在 0 ~ 1024 MB 之间，当前为 %d（0 = 自动：按并发数倒推分片大小）", w.Cfg.ThreadSegmentSize)
 	}
 	if w.Cfg.DelayPerPage < 0 || w.Cfg.DelayPerPage > 600 {
 		return fmt.Errorf("参数有误：--delay-per-page 需在 0 ~ 600 秒之间，当前为 %d", w.Cfg.DelayPerPage)
