@@ -1,15 +1,10 @@
 package workflow
 
 import (
-	"bytes"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/download"
@@ -25,21 +20,10 @@ func TestPrintURLsDoesNotDownload(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 
-	payload := make([]byte, 32<<10)
-	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.ServeContent(w, r, "x.m4s", time.Time{}, bytes.NewReader(payload))
-	}))
-	defer cdn.Close()
-
-	playTmpl := "{'code':0,'data':{'dash':{'duration':10," +
-		"'video':[{'id':80,'codecid':7,'codecs':'avc1.640032','bandwidth':1000,'width':640,'height':360,'frame_rate':'30','base_url':'%s/v.m4s'}]," +
-		"'audio':[{'id':30280,'codecid':0,'codecs':'mp4a.40.2','bandwidth':64000,'base_url':'%s/a.m4s'}]}}}"
-	body := strings.ReplaceAll(fmt.Sprintf(playTmpl, cdn.URL, cdn.URL), "'", string('"'))
-	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(body))
-	}))
-	defer api.Close()
+	// 假 CDN + 假 API 用公共辅助：它会一并给出「关掉镜像替换 / 允许 PCDN」的配置，
+	// 免得每个用例都手写一遍，并再次踩「假地址被生产逻辑改写」的坑（见 fakecdn_test.go）。
+	cdn, noRewrite := newFakeCDN(t)
+	api := newFakeAPI(t, cdn.URL)
 
 	client := util.NewHTTPClient(func() bool { return true }, func() string { return "" }, nil)
 	pcfg := config.DefaultAppSettings()
@@ -53,8 +37,7 @@ func TestPrintURLsDoesNotDownload(t *testing.T) {
 	vInfo := &entity.VInfo{Title: "t", PagesInfo: []entity.Page{page}}
 	cfg := config.DefaultMyOption()
 	cfg.PrintURLs = true
-	cfg.ForceReplaceHost = false // 否则打印的是镜像改写后的地址（测试要断言夹具里的原始地址）
-	cfg.AllowPcdn = true         // 假 CDN 的 127.0.0.1 会被 PCDN 正则命中
+	cfg.ForceReplaceHost, cfg.AllowPcdn = noRewrite()
 	cfg.SkipCover = true
 	cfg.RetryDelay = 1
 	out := captureStdout(t, func() {
