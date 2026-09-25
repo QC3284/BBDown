@@ -105,7 +105,9 @@
 2. **测试辅助迁移**：`internal/workflow/fakecdn_test.go` 已提供 `newFakeCDN`/`newFakeAPI`（自动给出
    `ForceReplaceHost=false`、`AllowPcdn=true` 的配置）；把 `overwrite_test.go`、`printurls_test.go`、
    `hdr_reminder_test.go`、`onlyshowinfo_chapters_test.go` 改成用它，消掉「假地址被生产逻辑改写」这一类坑。
-3. **下一批功能候选**（凑齐后发 `2.8.0`）：NFO/侧车元数据（Kodi/Emby 入库）、`--compat` 智能选档（自动避开
+3. **NFO 侧车元数据**：渲染层已完成（`internal/download/nfo.go` 的 `RenderNFO` + 用例，字段/转义/单P不写 episode/
+   时间未知不写 aired）；**接线待做**——`--nfo` 开关 + 产物成功后写 `savePath + ".nfo"` + 变异验证。
+4. **下一批功能候选**（凑齐后发下一版）：`--compat` 智能选档（自动避开
    HDR Vivid/杜比视界）、订阅调度（`sub check` 定时/并发）。
 
 ### 待办（代理披露的未覆盖点，如实记录）
