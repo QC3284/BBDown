@@ -10,6 +10,17 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.3.0] - 2026-09-25
+
+**HDR Vivid 兼容性提醒**：HDR Vivid（129）是「最高档」而不是「最稳档」，但用户界面上看不出这一点。
+
+- 选中 HDR Vivid 轨道时给出一次提醒：需要支持 HDR Vivid 的设备与播放器，不兼容时画面会偏色或无法播放，
+  想要通用兼容性可用 `--dfn`/`-Q` 选普通档位；**只提醒、不阻断**；
+- 档位 ID 抽成 `config.HDRVividID` 常量（映射表与提醒共用），避免两处各写一份字面量、档位一变就静默失效；
+- 提醒在**选流之后**触发（`-I` 在选流前就返回，所以只覆盖下载路径）。
+
+用例：`internal/workflow/hdr_reminder_test.go`（129 有提醒、80 无提醒，走本地假 CDN 的完整下载路径）；
+变异验证：把提醒条件改成永不命中 → 变红。
 ## [2.2.0] - 2026-09-25
 
 **HDR Vivid（清晰度 129）** 与 **字幕语言短键 `zh`**。

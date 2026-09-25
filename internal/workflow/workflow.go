@@ -516,6 +516,12 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		util.Log("已选择的流:")
 		download.PrintSelectedTrack(selectedVideo, selectedAudio, page.Dur)
 
+		// HDR Vivid(129) 兼容提醒：它是「最高档」而非「最稳档」——不支持的屏幕/播放器上会偏色、发灰
+		// 甚至无法播放，而用户往往只看到「选了最高清晰度」。只提醒、不阻断：换档用 --dfn/-Q。
+		if selectedVideo != nil && selectedVideo.ID == config.HDRVividID {
+			util.LogWarn("所选清晰度为 HDR Vivid(%s)：需要支持 HDR Vivid 的设备与播放器，不兼容时画面会偏色或无法播放；想要通用兼容性可用 --dfn/-Q 选择普通档位", config.HDRVividID)
+		}
+
 		// Save path
 		savePath := download.FormatSavePath(savePathFormat, title, selectedVideo, selectedAudio, page, pagesCount, apiType, pubTime)
 		// Ensure mp4 extension for muxer output
