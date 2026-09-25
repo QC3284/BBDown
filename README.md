@@ -74,6 +74,9 @@ cat urls.txt | BBDown --urls-file -
 BBDown sub add mid:123456                       # 订阅 UP 主
 BBDown sub add mid:123456 --filter 4K           # 只要标题含 4K 的稿件
 BBDown sub list && BBDown sub check
+
+# 排障：一条命令自检外部工具 / 输出目录 / 接口与登录态（本仓特色）
+BBDown doctor
 ```
 
 ### 子命令
