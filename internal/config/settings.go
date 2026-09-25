@@ -87,7 +87,9 @@ type MyOption struct {
 	SkipSubtitle     bool   `json:"skip_subtitle" mapstructure:"skip_subtitle"`
 	SkipCover        bool   `json:"skip_cover" mapstructure:"skip_cover"`
 	// Overwrite 强制重新下载：默认（false）沿用上游语义——产物已存在且非空就跳过（本仓新增开关）。
-	Overwrite              bool   `json:"overwrite" mapstructure:"overwrite"`
+	Overwrite bool `json:"overwrite" mapstructure:"overwrite"`
+	// PrintURLs 只打印所选流的直链然后退出（不下载）：把本工具当作「解析器」接进 aria2c/脚本流程。
+	PrintURLs              bool   `json:"print_urls" mapstructure:"print_urls"`
 	ForceHTTP              bool   `json:"force_http" mapstructure:"force_http"`
 	DownloadDanmaku        bool   `json:"download_danmaku" mapstructure:"download_danmaku"`
 	DownloadDanmakuFormats string `json:"download_danmaku_formats" mapstructure:"download_danmaku_formats"`

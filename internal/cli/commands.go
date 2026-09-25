@@ -97,7 +97,7 @@ var serveCmd = &cobra.Command{
 		defer cancel()
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.5.0")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.6.0")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -607,6 +607,7 @@ func buildMyOption() config.MyOption {
 		SkipSubtitle:           optSkipSubtitle,
 		SkipCover:              optSkipCover,
 		Overwrite:              optOverwrite,
+		PrintURLs:              optPrintURLs,
 		ForceHTTP:              optForceHTTP,
 		DownloadDanmaku:        optDownloadDanmaku,
 		DownloadDanmakuFormats: optDanmakuFormats,

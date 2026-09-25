@@ -522,6 +522,20 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			util.LogWarn("所选清晰度为 HDR Vivid(%s)：需要支持 HDR Vivid 的设备与播放器，不兼容时画面会偏色或无法播放；想要通用兼容性可用 --dfn/-Q 选择普通档位", config.HDRVividID)
 		}
 
+		// --print-urls：只把所选流的直链打出来（一行一个），不下载——方便接 aria2c/脚本（本仓特色）。
+		if w.Cfg.PrintURLs {
+			if selectedVideo != nil && selectedVideo.BaseURL != "" {
+				fmt.Println(selectedVideo.BaseURL)
+			}
+			for _, clip := range result.Clips {
+				fmt.Println(clip)
+			}
+			if selectedAudio != nil && selectedAudio.BaseURL != "" {
+				fmt.Println(selectedAudio.BaseURL)
+			}
+			return true
+		}
+
 		// Save path
 		savePath := download.FormatSavePath(savePathFormat, title, selectedVideo, selectedAudio, page, pagesCount, apiType, pubTime)
 		// Ensure mp4 extension for muxer output

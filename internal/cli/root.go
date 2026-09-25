@@ -64,6 +64,7 @@ var (
 	optSkipSubtitle       bool
 	optSkipCover          bool
 	optOverwrite          bool
+	optPrintURLs          bool
 	optForceHTTP          bool
 	optAria2cProxy        string
 	optAddDfnSuffix       bool
@@ -123,7 +124,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "2.5.0",
+	Version: "2.6.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -342,6 +343,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&optSkipSubtitle, "skip-subtitle", false, "跳过字幕下载")
 	rootCmd.Flags().BoolVar(&optSkipCover, "skip-cover", false, "跳过封面下载")
 	rootCmd.Flags().BoolVar(&optOverwrite, "overwrite", false, "强制重新下载（忽略已存在的产物；默认沿用上游语义：存在则跳过）")
+	rootCmd.Flags().BoolVar(&optPrintURLs, "print-urls", false, "只打印所选流的直链（一行一个）后退出，不下载")
 	rootCmd.Flags().BoolVar(&optForceHTTP, "force-http", false, "强制HTTP协议")
 	// Deprecated compatibility options (upstream hidden flags).
 	rootCmd.Flags().StringVar(&optAria2cProxy, "aria2c-proxy", "", "aria2c代理(已弃用)")
@@ -450,7 +452,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.5.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.6.0")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
