@@ -56,36 +56,38 @@ func DefaultAppSettings() AppSettings {
 
 // MyOption holds CLI-level options for download tasks.
 type MyOption struct {
-	URL                    string `json:"url"`
-	UseTvAPI               bool   `json:"use_tv_api" mapstructure:"use_tv_api"`
-	UseAppAPI              bool   `json:"use_app_api" mapstructure:"use_app_api"`
-	UseIntlAPI             bool   `json:"use_intl_api" mapstructure:"use_intl_api"`
-	UseMP4box              bool   `json:"use_mp4box" mapstructure:"use_mp4box"`
-	EncodingPriority       string `json:"encoding_priority" mapstructure:"encoding_priority"`
-	DfnPriority            string `json:"dfn_priority" mapstructure:"dfn_priority"`
-	OnlyShowInfo           bool   `json:"only_show_info" mapstructure:"only_show_info"`
-	ShowAll                bool   `json:"show_all" mapstructure:"show_all"`
-	UseAria2c              bool   `json:"use_aria2c" mapstructure:"use_aria2c"`
-	Interactive            bool   `json:"interactive" mapstructure:"interactive"`
-	HideStreams            bool   `json:"hide_streams" mapstructure:"hide_streams"`
-	MultiThread            bool   `json:"multi_thread" mapstructure:"multi_thread"`
-	SimplyMux              bool   `json:"simply_mux" mapstructure:"simply_mux"`
-	VideoOnly              bool   `json:"video_only" mapstructure:"video_only"`
-	AudioOnly              bool   `json:"audio_only" mapstructure:"audio_only"`
-	DanmakuOnly            bool   `json:"danmaku_only" mapstructure:"danmaku_only"`
-	CoverOnly              bool   `json:"cover_only" mapstructure:"cover_only"`
-	SubOnly                bool   `json:"sub_only" mapstructure:"sub_only"`
-	Debug                  bool   `json:"debug" mapstructure:"debug"`
-	SkipMux                bool   `json:"skip_mux" mapstructure:"skip_mux"`
-	Insecure               bool   `json:"insecure" mapstructure:"insecure"`
-	DecryptDrm             bool   `json:"decrypt_drm" mapstructure:"decrypt_drm"`
-	AllowPreview           bool   `json:"allow_preview" mapstructure:"allow_preview"`
-	DrmKeyHex              string `json:"drm_key_hex" mapstructure:"drm_key_hex"`
-	DrmKidHex              string `json:"drm_kid_hex" mapstructure:"drm_kid_hex"`
-	Mp4decryptPath         string `json:"mp4decrypt_path" mapstructure:"mp4decrypt_path"`
-	WvdPath                string `json:"wvd_path" mapstructure:"wvd_path"`
-	SkipSubtitle           bool   `json:"skip_subtitle" mapstructure:"skip_subtitle"`
-	SkipCover              bool   `json:"skip_cover" mapstructure:"skip_cover"`
+	URL              string `json:"url"`
+	UseTvAPI         bool   `json:"use_tv_api" mapstructure:"use_tv_api"`
+	UseAppAPI        bool   `json:"use_app_api" mapstructure:"use_app_api"`
+	UseIntlAPI       bool   `json:"use_intl_api" mapstructure:"use_intl_api"`
+	UseMP4box        bool   `json:"use_mp4box" mapstructure:"use_mp4box"`
+	EncodingPriority string `json:"encoding_priority" mapstructure:"encoding_priority"`
+	DfnPriority      string `json:"dfn_priority" mapstructure:"dfn_priority"`
+	OnlyShowInfo     bool   `json:"only_show_info" mapstructure:"only_show_info"`
+	ShowAll          bool   `json:"show_all" mapstructure:"show_all"`
+	UseAria2c        bool   `json:"use_aria2c" mapstructure:"use_aria2c"`
+	Interactive      bool   `json:"interactive" mapstructure:"interactive"`
+	HideStreams      bool   `json:"hide_streams" mapstructure:"hide_streams"`
+	MultiThread      bool   `json:"multi_thread" mapstructure:"multi_thread"`
+	SimplyMux        bool   `json:"simply_mux" mapstructure:"simply_mux"`
+	VideoOnly        bool   `json:"video_only" mapstructure:"video_only"`
+	AudioOnly        bool   `json:"audio_only" mapstructure:"audio_only"`
+	DanmakuOnly      bool   `json:"danmaku_only" mapstructure:"danmaku_only"`
+	CoverOnly        bool   `json:"cover_only" mapstructure:"cover_only"`
+	SubOnly          bool   `json:"sub_only" mapstructure:"sub_only"`
+	Debug            bool   `json:"debug" mapstructure:"debug"`
+	SkipMux          bool   `json:"skip_mux" mapstructure:"skip_mux"`
+	Insecure         bool   `json:"insecure" mapstructure:"insecure"`
+	DecryptDrm       bool   `json:"decrypt_drm" mapstructure:"decrypt_drm"`
+	AllowPreview     bool   `json:"allow_preview" mapstructure:"allow_preview"`
+	DrmKeyHex        string `json:"drm_key_hex" mapstructure:"drm_key_hex"`
+	DrmKidHex        string `json:"drm_kid_hex" mapstructure:"drm_kid_hex"`
+	Mp4decryptPath   string `json:"mp4decrypt_path" mapstructure:"mp4decrypt_path"`
+	WvdPath          string `json:"wvd_path" mapstructure:"wvd_path"`
+	SkipSubtitle     bool   `json:"skip_subtitle" mapstructure:"skip_subtitle"`
+	SkipCover        bool   `json:"skip_cover" mapstructure:"skip_cover"`
+	// Overwrite 强制重新下载：默认（false）沿用上游语义——产物已存在且非空就跳过（本仓新增开关）。
+	Overwrite              bool   `json:"overwrite" mapstructure:"overwrite"`
 	ForceHTTP              bool   `json:"force_http" mapstructure:"force_http"`
 	DownloadDanmaku        bool   `json:"download_danmaku" mapstructure:"download_danmaku"`
 	DownloadDanmakuFormats string `json:"download_danmaku_formats" mapstructure:"download_danmaku_formats"`

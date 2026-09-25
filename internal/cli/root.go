@@ -63,6 +63,7 @@ var (
 	optWvdPath            string
 	optSkipSubtitle       bool
 	optSkipCover          bool
+	optOverwrite          bool
 	optForceHTTP          bool
 	optAria2cProxy        string
 	optAddDfnSuffix       bool
@@ -122,7 +123,7 @@ Examples:
   BBDown https://www.bilibili.com/video/BV1xx411c7mD
   BBDown --use-tv-api --interactive BV1xx411c7mD
   BBDown login`,
-	Version: "2.4.2",
+	Version: "2.5.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -340,6 +341,7 @@ func init() {
 	rootCmd.Flags().StringVar(&optWvdPath, "wvd-path", "", "device.wvd路径")
 	rootCmd.Flags().BoolVar(&optSkipSubtitle, "skip-subtitle", false, "跳过字幕下载")
 	rootCmd.Flags().BoolVar(&optSkipCover, "skip-cover", false, "跳过封面下载")
+	rootCmd.Flags().BoolVar(&optOverwrite, "overwrite", false, "强制重新下载（忽略已存在的产物；默认沿用上游语义：存在则跳过）")
 	rootCmd.Flags().BoolVar(&optForceHTTP, "force-http", false, "强制HTTP协议")
 	// Deprecated compatibility options (upstream hidden flags).
 	rootCmd.Flags().StringVar(&optAria2cProxy, "aria2c-proxy", "", "aria2c代理(已弃用)")
@@ -395,6 +397,7 @@ func init() {
 	watchLaterCmd.Flags().IntVar(&optWatchLaterLimit, "limit", 0, "最多下载前 N 个稍后再看视频(默认 0=全部)")
 	subAddCmd.Flags().StringVar(&optSubName, "name", "", "订阅显示名称(默认使用目标字符串)")
 	subAddCmd.Flags().StringVar(&optSubFilter, "filter", "", "标题过滤正则(仅下载标题匹配的新稿)")
+	doctorCmd.Flags().Bool("json", false, "以 JSON 输出自检结果（便于脚本/监控）")
 
 	// watchlater / sub check inherit the download option semantics (upstream).
 	for _, c := range []*cobra.Command{watchLaterCmd, subCheckCmd} {
@@ -447,7 +450,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.4.2")
+	util.CheckUpdateAsync(context.Background(), client, "v2.5.0")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()

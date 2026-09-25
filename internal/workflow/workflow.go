@@ -537,10 +537,16 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		// (acquired once for the page; see the declaration above).
 		productLock.acquire(savePath)
 
-		// Skip if exists
-		if info, err := os.Stat(savePath); err == nil && info.Size() > 0 {
+		// Skip if exists（上游语义）。--overwrite 时跳过这一步：归档里想重下/重编码时需要它，
+		// 否则只能手动删文件（本仓新增开关，见 §4.44）。
+		if shouldSkipProduct(w.Cfg.Overwrite, savePath) {
 			util.Log("%s 已存在, 跳过下载...", savePath)
 			return true
+		}
+		if w.Cfg.Overwrite {
+			if _, err := os.Stat(savePath); err == nil {
+				util.Log("--overwrite：忽略已存在的 %s，重新下载", savePath)
+			}
 		}
 
 		// Cover (normal path — skipped when in "only" mode)
@@ -1480,6 +1486,18 @@ func clampRoleAudioIndex(aIndex, audioCount int) int {
 		return audioCount - 1
 	}
 	return aIndex
+}
+
+// shouldSkipProduct 是「产物已存在 → 跳过下载」这条判定的**唯一真源**（默认 = 上游语义）；
+// `--overwrite` 在这里短路。抽成函数是为了让判定能被确定性单测，而不是在用例里复制一份逻辑。
+func shouldSkipProduct(overwrite bool, savePath string) bool {
+	return !overwrite && skipExistingProduct(savePath)
+}
+
+// skipExistingProduct 判断产物是否已存在且可用（非空）。
+func skipExistingProduct(savePath string) bool {
+	info, err := os.Stat(savePath)
+	return err == nil && info.Size() > 0
 }
 
 // validateNumericOptions rejects out-of-range numeric options (upstream

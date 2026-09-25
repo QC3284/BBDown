@@ -697,6 +697,20 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 **用例**：`internal/fetcher/upstream_apierror_test.go`（code=0/缺 code 不报错、字符串形态的 code、缺 message 仍带 code、
 消息格式逐字比对）；变异验证：撤掉 code 判断即变红。
 
+### 4.44 第三十九轮：`--overwrite` 与 `doctor --json`（**新功能**）
+
+| # | 项 | 性质 | 内容 |
+|---|---|---|---|
+| 1 | `--overwrite` | **有意偏离** | 上游默认「产物存在即跳过」；本仓保留该默认，另加开关可强制重下（归档换档/重编码场景） |
+| 2 | `doctor --json` | 新功能 | 自检结果机读化（`name`/`level`/`detail`），退出码同文本模式 |
+
+**用例与变异**：`TestSkipExistingProduct`（存在/空文件/不存在/`--overwrite` 四态，直接调生产函数 `shouldSkipProduct`）、
+`TestDoctorJSONIsMachineReadable`（真解析 JSON、检查小写键）。变异：去掉 `--overwrite` 短路、删掉 json tag，
+两处分别变红。
+
+**方法论收获**：写用例时又被环境绊了两次——假 CDN 的 `127.0.0.1` 被 PCDN 正则命中而改写域名、默认镜像替换
+把地址换成不存在的镜像站。**假环境的每个字符都可能被真实逻辑命中**：凡是用 `httptest` 造地址，先想一遍
+「生产代码里有没有基于 Host/IP 的正则或替换」。
 ### 4.43 第三十八轮：真机使用带出的三个问题（**修复 + 测试通道**）
 
 用户反馈「状态不是很好」，实际用一遍后确认——问题比单元测试能发现的大：

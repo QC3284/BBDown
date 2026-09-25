@@ -35,7 +35,11 @@ var doctorCmd = &cobra.Command{
 		client := buildHTTPClient(cfg)
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
-		if code := runDoctor(ctx, cfg, client, cmd.OutOrStdout()); code != 0 {
+		run := runDoctor
+		if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
+			run = runDoctorJSON
+		}
+		if code := run(ctx, cfg, client, cmd.OutOrStdout()); code != 0 {
 			return fmt.Errorf("自检未通过（按上面的 [fail] 项处理）")
 		}
 		return nil
@@ -44,9 +48,9 @@ var doctorCmd = &cobra.Command{
 
 // doctorResult 是一条自检结论。
 type doctorResult struct {
-	Name   string
-	Level  string // ok / warn / fail
-	Detail string
+	Name   string `json:"name"`
+	Level  string `json:"level"` // ok / warn / fail
+	Detail string `json:"detail"`
 }
 
 // doctorChecks 是自检项，抽成变量以便用例替换（避免测试真的去碰环境）。
@@ -56,16 +60,38 @@ var doctorChecks = []func(context.Context, config.MyOption, *util.HTTPClient) do
 	checkAPIAndLogin,
 }
 
-// runDoctor 跑完所有自检并返回退出码：有 fail 返回 1，否则 0。
-func runDoctor(ctx context.Context, cfg config.MyOption, client *util.HTTPClient, out io.Writer) int {
+// runDoctorResults 跑完所有自检，返回结果与退出码（有 fail 则 1）。
+func runDoctorResults(ctx context.Context, cfg config.MyOption, client *util.HTTPClient) ([]doctorResult, int) {
+	results := make([]doctorResult, 0, len(doctorChecks))
 	code := 0
 	for _, check := range doctorChecks {
 		res := check(ctx, cfg, client)
-		mark := map[string]string{"ok": "[ok]  ", "warn": "[warn]", "fail": "[fail]"}[res.Level]
-		fmt.Fprintf(out, "%s %s: %s\n", mark, res.Name, res.Detail)
+		results = append(results, res)
 		if res.Level == "fail" {
 			code = 1
 		}
+	}
+	return results, code
+}
+
+// runDoctorJSON 以 JSON 输出自检结果：给脚本/监控用（特色功能的机读形态）。
+func runDoctorJSON(ctx context.Context, cfg config.MyOption, client *util.HTTPClient, out io.Writer) int {
+	results, code := runDoctorResults(ctx, cfg, client)
+	data, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		fmt.Fprintf(out, "{\"error\": %q}\n", err.Error())
+		return 1
+	}
+	fmt.Fprintln(out, string(data))
+	return code
+}
+
+// runDoctor 跑完所有自检并按人类可读格式输出，返回退出码：有 fail 返回 1，否则 0。
+func runDoctor(ctx context.Context, cfg config.MyOption, client *util.HTTPClient, out io.Writer) int {
+	results, code := runDoctorResults(ctx, cfg, client)
+	for _, res := range results {
+		mark := map[string]string{"ok": "[ok]  ", "warn": "[warn]", "fail": "[fail]"}[res.Level]
+		fmt.Fprintf(out, "%s %s: %s\n", mark, res.Name, res.Detail)
 	}
 	if code == 0 {
 		fmt.Fprintln(out, "自检通过：没有发现阻塞性问题。")
