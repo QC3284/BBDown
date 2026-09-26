@@ -10,19 +10,6 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
-## [2.11.1] - 2026-09-26
-
-**机读模式的「清爽」底线：stdout 只留数据**。
-
-`--info-json` / `doctor --json` 此前把日志与横幅一起打进 stdout，管道消费要截取最后一段——机读功能等于半残。
-现在：日志让位 stderr（`util.SetConsoleOutput`，11 处写点统一走可切换流）、横幅与求助链接在机读模式下不打印
-（`IsMachineReadableArgs`）；**人看的模式一字未改**——清爽是「该安静的地方安静」，不是到处换皮。
-
-真机验证：`BBDown --info-json BV1xx411c7mD 2>/dev/null | python3 -c "json.load(sys.stdin)"` 通过
-（`字幕君交流场所 / video=6`）；改前同样管道会因横幅与日志解析失败。
-
-用例：`TestSetConsoleOutputRoutesLogs`、`TestIsMachineReadableArgs`（含 `-I`/`--print-urls`/`doctor` 不得误判的反例）。
-变异：分流改空实现 → 红；判定恒 false → 红。
 ## [2.11.0] - 2026-09-26
 
 **`--info-json`：解析结果机读化**（本仓特色功能）。
