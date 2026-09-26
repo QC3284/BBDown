@@ -10,6 +10,24 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.12.3] - 2026-09-26
+
+**修复 macOS CI 红**：`macOS` 上 `/var` 是指向 `/private/var` 的**符号链接**——`os.Chdir("/var/…")` 成功，
+但 `os.Getwd()` 返回解析后的 `/private/var/…`，守卫里「还原后是否仍等于原字符串」这条判据**必然**为假。
+
+这是 §4.58 那条教训（判据不跨平台）在修复它的代码里**复发**：把「路径相同」写成了字符串比较。
+
+修复：抽 `sameDir(a, b)`（目录存在时用 `os.Stat` + `os.SameFile`，比较的是底层对象：Unix 比 `dev+ino`、
+Windows 比卷序列号 + 文件索引；任一路径不可解析时才退到 `EvalSymlinks`/`Clean`），守卫与用例的所有路径比较改用它。
+新增 `TestWorkdirGuardAcceptsSymlinkedSpelling`（Linux/macOS 可跑，Windows 建符号链接需特权 → `t.Skip` 并写明原因）：
+三步覆盖「同一目录的不同写法」（符号链接写法 vs 解析写法）在三种方向下都不得判红。
+
+两处变异断言红：helper 改回字符串比较、只把「还原后复核」改回字符串比较（后者复现了 CI 的报错原文）。
+
+### 说明
+
+- 版本位：纯修复 → **patch**。
+- 守卫现在依赖的 7 条判据已逐条做过平台语义对照（6 条三平台一致；1 条「stray 字符串」仅用于打印、不参与判定），记入台账 §4.58。
 ## [2.12.2] - 2026-09-26
 
 **修复 `main` 在 windows-latest / macos-latest 的 CI 红**（同一提交的 tag 跑却通过，属平台相关，不是 flake）。
