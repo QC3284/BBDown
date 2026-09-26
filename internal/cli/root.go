@@ -66,6 +66,7 @@ var (
 	optOverwrite          bool
 	optPrintURLs          bool
 	optNFO                bool
+	optCompat             bool
 	optForceHTTP          bool
 	optAria2cProxy        string
 	optAddDfnSuffix       bool
@@ -128,13 +129,14 @@ var rootCmd = &cobra.Command{
   BBDown --print-urls <URL>               只打印所选流直链，不下载（接 aria2c/脚本）
   BBDown --urls-file list.txt             批量下载（每行一个，# 注释，- 表示 stdin）
   BBDown --nfo --progress-json <URL>      写侧车元数据 + 逐行 JSON 进度（媒体库/监控）
+  BBDown --compat <URL>                   兼容优先：避开 HDR Vivid/杜比视界档位
   BBDown --overwrite <URL>                忽略已存在产物，强制重下
   BBDown doctor                           环境自检（混流工具/输出目录/登录态/风控）
   BBDown resume                           重试上次未完成的任务
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.8.0",
+	Version: "2.9.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -355,6 +357,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&optOverwrite, "overwrite", false, "强制重新下载（忽略已存在的产物；默认沿用上游语义：存在则跳过）")
 	rootCmd.Flags().BoolVar(&optPrintURLs, "print-urls", false, "只打印所选流的直链（一行一个）后退出，不下载")
 	rootCmd.Flags().BoolVar(&optNFO, "nfo", false, "产物旁写同名 .nfo 侧车元数据（Kodi/Emby/Jellyfin 可读）")
+	rootCmd.Flags().BoolVar(&optCompat, "compat", false, "兼容优先：选档避开 HDR Vivid / 杜比视界（本机或多数播放器可能播不了）")
 	rootCmd.Flags().BoolVar(&optForceHTTP, "force-http", false, "强制HTTP协议")
 	// Deprecated compatibility options (upstream hidden flags).
 	rootCmd.Flags().StringVar(&optAria2cProxy, "aria2c-proxy", "", "aria2c代理(已弃用)")
@@ -464,7 +467,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.8.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.9.0")
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()

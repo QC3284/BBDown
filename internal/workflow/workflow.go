@@ -417,6 +417,15 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		}
 
 		// Sort
+		// --compat：先剔除 HDR Vivid/杜比视界这类「可能放不出来」的档位，再排序选择。
+		// （过滤属于选档策略，放在编排层：它同时知道 config 的档位表与 download 的排序规则。）
+		if w.Cfg.Compat {
+			before := len(result.VideoTracks)
+			result.VideoTracks = filterCompatTracks(result.VideoTracks)
+			if after := len(result.VideoTracks); after < before {
+				util.Log("--compat：已避开 %d 条 HDR/杜比视界档位（如需它们请去掉 --compat）", before-after)
+			}
+		}
 		result.VideoTracks = download.SortVideoTracks(result.VideoTracks, dfnPriority, encodingPriority, w.Cfg.VideoAscending)
 		result.AudioTracks = download.SortAudioTracks(result.AudioTracks, encodingPriority, w.Cfg.AudioAscending)
 
@@ -1514,6 +1523,27 @@ func shouldSkipProduct(overwrite bool, savePath string) bool {
 func skipExistingProduct(savePath string) bool {
 	info, err := os.Stat(savePath)
 	return err == nil && info.Size() > 0
+}
+
+// filterCompatTracks 过滤掉「本机/多数播放器可能播不了」的档位（HDR Vivid / 杜比视界），供 `--compat` 用：
+// 默认仍取最高档，兼容优先时宁可低一档，也不要下回来放不出来。
+//
+// 过滤后若一条不剩（整个稿件只有这些档位），**原样返回**——绝不把候选清空让用户下不了。
+func filterCompatTracks(tracks []entity.Video) []entity.Video {
+	if len(tracks) == 0 {
+		return tracks
+	}
+	kept := make([]entity.Video, 0, len(tracks))
+	for _, t := range tracks {
+		if t.ID == config.HDRVividID || config.QualityMap[t.ID] == "杜比视界" {
+			continue
+		}
+		kept = append(kept, t)
+	}
+	if len(kept) == 0 {
+		return tracks
+	}
+	return kept
 }
 
 // writeNFOSidecar 在产物旁写同名 .nfo（Kodi/Emby/Jellyfin 扫库用）：--nfo 未开、产物不存在、或写入失败

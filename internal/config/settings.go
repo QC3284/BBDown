@@ -91,7 +91,9 @@ type MyOption struct {
 	// PrintURLs 只打印所选流的直链然后退出（不下载）：把本工具当作「解析器」接进 aria2c/脚本流程。
 	PrintURLs bool `json:"print_urls" mapstructure:"print_urls"`
 	// WriteNFO 产物落地后写同名 .nfo 侧车元数据（Kodi/Emby/Jellyfin 可直接扫库）。
-	WriteNFO               bool   `json:"write_nfo" mapstructure:"write_nfo"`
+	WriteNFO bool `json:"write_nfo" mapstructure:"write_nfo"`
+	// Compat 兼容优先：选档时避开 HDR Vivid / 杜比视界（本机或多数播放器可能播不了）。
+	Compat                 bool   `json:"compat" mapstructure:"compat"`
 	ForceHTTP              bool   `json:"force_http" mapstructure:"force_http"`
 	DownloadDanmaku        bool   `json:"download_danmaku" mapstructure:"download_danmaku"`
 	DownloadDanmakuFormats string `json:"download_danmaku_formats" mapstructure:"download_danmaku_formats"`

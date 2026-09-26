@@ -10,6 +10,27 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.9.0] - 2026-09-26
+
+功能批次：**`--nfo` 侧车元数据**、**`--compat` 兼容优先选档**、**`--help` 首屏重构**。
+
+### 新增
+
+- **`--nfo`**：产物落地后写同名 `.nfo`（Kodi/Emby/Jellyfin 扫库直接读）。判定与写入抽成 `writeNFOSidecar`：
+  开关未开、产物不存在（`--skip-mux`/只下字幕）、生成或写入失败都只是「不写/告警」，**绝不影响下载结果**。
+- **`--compat`**：选档时避开 HDR Vivid(129) / 杜比视界(126)——与已有的 HDR 提醒配成一对（提醒是「你选了可能
+  放不出来的档」，`--compat` 是「那就别选它」）。只有这些档位时**原样返回**，绝不把候选清空让用户下不了。
+
+### 界面（用户提醒「界面可以优化」）
+
+- `--help` 首屏加**常用示例**：doctor / resume / --print-urls / --urls-file / --nfo / --progress-json /
+  --overwrite / --compat / login 逐条列出。此前这些能力在帮助里**完全不可见**——做完等于没做；
+- 配守卫 `TestRootHelpListsOwnFeatures`（逐条断言出现在帮助里，新功能忘了写帮助就变红）与
+  `TestOwnSubcommandsHaveShortHelp`（自研子命令必须有 Short）。
+
+### 说明
+
+- 版本位按内核式规则：功能批次 → minor（`2.8.0` → `2.9.0`）。
 ## [2.8.0] - 2026-09-26
 
 **P1：新版字幕接口（protobuf）**——真机确认字幕缺失后补齐。
