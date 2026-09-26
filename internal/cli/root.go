@@ -67,6 +67,7 @@ var (
 	optPrintURLs          bool
 	optNFO                bool
 	optCompat             bool
+	optLogFile            string
 	optForceHTTP          bool
 	optAria2cProxy        string
 	optAddDfnSuffix       bool
@@ -155,6 +156,13 @@ func init() {
 
 // Execute adds all child commands and runs root.
 func Execute() {
+	// --log-file 要在任何命令真正干活之前生效：放在根命令的 PersistentPreRun（cobra 在所有命令前调用它）。
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		if optLogFile != "" {
+			util.SetLogFile(optLogFile)
+			util.LogDebug("日志同时写入 %s", optLogFile)
+		}
+	}
 	util.SetDefaultDebugFn(func() bool { return debug })
 
 	// Normalize legacy single-dash aliases (upstream NormalizeCliArgs), then
@@ -358,6 +366,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&optPrintURLs, "print-urls", false, "只打印所选流的直链（一行一个）后退出，不下载")
 	rootCmd.Flags().BoolVar(&optNFO, "nfo", false, "产物旁写同名 .nfo 侧车元数据（Kodi/Emby/Jellyfin 可读）")
 	rootCmd.Flags().BoolVar(&optCompat, "compat", false, "兼容优先：选档避开 HDR Vivid / 杜比视界（本机或多数播放器可能播不了）")
+	rootCmd.PersistentFlags().StringVar(&optLogFile, "log-file", "", "同时把日志写入文件（追加；写失败会自动挂起并在控制台提示）")
 	rootCmd.Flags().BoolVar(&optForceHTTP, "force-http", false, "强制HTTP协议")
 	// Deprecated compatibility options (upstream hidden flags).
 	rootCmd.Flags().StringVar(&optAria2cProxy, "aria2c-proxy", "", "aria2c代理(已弃用)")

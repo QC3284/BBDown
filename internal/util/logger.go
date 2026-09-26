@@ -271,6 +271,12 @@ func (l *Logger) Printf(format string, args ...interface{}) {
 // Default package-level logger.
 var defaultLogger = NewLogger(nil)
 
+// SetLogFile 让默认 logger 同时把日志写入 path（追加）。
+//
+// 实现早就在 Logger.SetLogFile 里（含写失败自动挂起与恢复提示，对齐上游 AliverAnme 的文件日志），
+// 但此前**没有任何 CLI 入口调用它**——功能存在却不可达。本包装 + --log-file 开关把它接上。
+func SetLogFile(path string) { defaultLogger.SetLogFile(path) }
+
 // SetDefaultDebugFn sets the debug callback for the default logger.
 func SetDefaultDebugFn(fn func() bool) {
 	defaultLogger.debugMode = fn
