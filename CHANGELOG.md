@@ -10,6 +10,30 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.12.2] - 2026-09-26
+
+**修复 `main` 在 windows-latest / macos-latest 的 CI 红**（同一提交的 tag 跑却通过，属平台相关，不是 flake）。
+
+根因不是产品代码，是上一批新加的**测试守卫误判**：`internal/cli` 的工作目录守卫要求「收尾时进程 cwd 与开始时逐字相同」，
+而某个用例把 cwd 切进临时目录后用 `os.RemoveAll` 删掉、从不还原。**三平台 `getcwd` 语义差异决定了判红与否**：
+
+| 平台 | 行为 | 旧守卫结果 |
+|---|---|---|
+| Linux | 目录被删后 `getcwd(2)` 返回 ENOENT → `os.Getwd` 报错，比较被短路 | **不判红（假绿）** |
+| Windows | `GetCurrentDirectoryW` 不校验目录存在性，返回已删路径 | 判红 |
+| macOS | `getcwd(2)` 保留已删目录的 name cache，且**解析符号链接**（`/private/var/…` vs `/var/…`） | 判红 |
+
+修复：① 守卫改为「**先尝试 `os.Chdir` 还原，还原不了才判红**」，并把「cwd 偏离但已还原」降级为一行提示；
+② **真正的判据（原 cwd 里 `.bbdown-pending.json`/`.tmp` 出现或被改写）保留并加强**（前后快照：内容摘要 + mtime）；
+③ **修源头**：那个用例改用 `t.Chdir`（LIFO 清理：先还原 cwd 再删目录）。
+
+新增 4 条守卫语义用例（含跨平台可复现「cwd 指向已删除目录」：`os.Chdir` + `os.Remove`），两处变异分别断言红（去掉还原尝试、去掉文件快照），
+并做了「往包目录写清单 → 守卫必须红」的端到端探针。
+
+### 说明
+
+- 版本位：纯修复 → **patch**。
+- 教训已记台账 §4.58：**判据不跨平台的守卫比没有守卫更糟**——它把真问题（文件污染）掩盖在平台噪音里，Linux 上还会给出假绿。
 ## [2.12.1] - 2026-09-26
 
 **把 Web UI 的进度条做实**：`serve` 的 SSE 现在推**真实字节进度**；顺带清掉一个进了 git 的测试产物。

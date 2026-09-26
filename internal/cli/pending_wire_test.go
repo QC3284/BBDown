@@ -26,6 +26,13 @@ func TestDownloadTargetsRecordsFailuresForResume(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
+	// 被测路径会切工作目录：workflow.applyConfig 对非空 cfg.WorkDir 会 os.Chdir（生产行为）。
+	// 这个进程级副作用必须由 testing 包还原（t.Chdir 的 cleanup 比上面那条先跑，LIFO）：
+	// 裸 os.Chdir 后不还原会把 cwd 留在临时目录里，目录随后被 RemoveAll 掉，
+	// 而 Windows 的 GetCurrentDirectoryW / macOS 的 getcwd(2) 仍会返回那个已消失的路径——
+	// 整包守卫（workdir_guard_test.go）因此判红，还连带影响后面的用例（Linux 上 os.Getwd 直接报错）。
+	t.Chdir(dir)
+
 	// 假 host 一律 412：目标必然失败，且失败得很快（不需要真实网络）。
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusPreconditionFailed)
