@@ -27,7 +27,7 @@ func TestRenderProgressInfoFullFrame(t *testing.T) {
 		downloaded: 25 * mib,
 		total:      100 * mib,
 	})
-	want := "  25.0%   1.0 MB/s  ETA 00:01:15   25.0/100.0 MB"
+	want := " 25.00%  1.0 MB/s ETA 00:01:15 25.0/100.0 MB"
 	if got != want {
 		t.Errorf("帧格式不符：\n got %q\nwant %q", got, want)
 	}
@@ -47,10 +47,10 @@ func TestRenderProgressInfoOmitsUnknownFields(t *testing.T) {
 		in   progressFrame
 		want string
 	}{
-		{"总量已知但速率未知", progressFrame{downloaded: 25 * mib, total: 100 * mib}, "  25.0%   25.0/100.0 MB"},
-		{"速率已知但总量未知", progressFrame{speedBps: mib, downloaded: 25 * mib}, "   0.0%   1.0 MB/s"},
-		{"两者都未知", progressFrame{}, "   0.0%"},
-		{"零速不显示速率", progressFrame{downloaded: 0, total: 100 * mib}, "   0.0%    0.0/100.0 MB"},
+		{"总量已知但速率未知", progressFrame{downloaded: 25 * mib, total: 100 * mib}, " 25.00% 25.0/100.0 MB"},
+		{"速率已知但总量未知", progressFrame{speedBps: mib, downloaded: 25 * mib}, "  0.00%  1.0 MB/s"},
+		{"两者都未知", progressFrame{}, "  0.00%"},
+		{"零速不显示速率", progressFrame{downloaded: 0, total: 100 * mib}, "  0.00% 0.0/100.0 MB"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -298,7 +298,7 @@ func TestProgressReaderShowsTotalAndETA(t *testing.T) {
 	requireReportedRate(t, out, float64(transferred)/window.Seconds(), "单线程首帧")
 	requireETAConsistent(t, out)
 
-	want := "10.0%   5.0 MB/s  ETA 00:00:18   10.0/100.0 MB"
+	want := "10.00%  5.0 MB/s ETA 00:00:18 10.0/100.0 MB"
 	if !strings.Contains(out, want) {
 		t.Errorf("进度帧缺少 %q：%q", want, out)
 	}
@@ -351,7 +351,7 @@ func TestProgressReaderResumeFrameCountsBaseBytes(t *testing.T) {
 	requireETAConsistent(t, out)
 
 	// (base+current)/(base+total) = 60/100。
-	want := "60.0%   5.0 MB/s  ETA 00:00:08   60.0/100.0 MB"
+	want := "60.00%  5.0 MB/s ETA 00:00:08 60.0/100.0 MB"
 	if !strings.Contains(out, want) {
 		t.Errorf("续传进度帧没有按 (base+current)/(base+total) 出数：缺少 %q，实际 %q", want, out)
 	}
@@ -443,27 +443,5 @@ func TestProgressSnapshotSettlesRateFromWindowDelta(t *testing.T) {
 	pr.current = 16 * mib
 	if _, speed = pr.progressSnapshot(); math.Abs(speed-12*mib/2.0) > 1 {
 		t.Errorf("第二个窗口：速率 %v B/s，期望 %v B/s（本窗口 12 MiB / 2s）", speed, float64(12*mib)/2.0)
-	}
-}
-
-// TestProgressFrameIsNotIndentedToTheOldLogPrefix 进度帧顶格渲染：改前硬编码 28 个空格去对齐
-// 旧日志前缀，时间戳缩短后这 28 列不再对齐任何东西，还会把整行推到 80 列终端之外换行。
-//
-// 变异验证：把 renderProgressFrame 的 28 空格缩进加回去 → 本用例红。
-func TestProgressFrameIsNotIndentedToTheOldLogPrefix(t *testing.T) {
-	frame := renderProgressFrame(50<<20, 100<<20, 1<<20, '|')
-	if !strings.HasPrefix(frame, progressFill) {
-		t.Errorf("进度帧应以进度条（%q）开头且顶格：%q", progressFill, frame)
-	}
-	if strings.HasPrefix(frame, " ") {
-		t.Errorf("进度帧不该带旧的 28 列日志前缀缩进：%q", frame)
-	}
-	// 轨道字符：无色能力下也是 ░（日志里肉眼可读），不是 ASCII 的 "-"。
-	if !strings.Contains(frame, progressTrack) || strings.Contains(frame, "-") {
-		t.Errorf("进度条应以 %q 作轨道：%q", progressTrack, frame)
-	}
-	// 起始帧（还没有速率与总量）必须整行放进 80 列终端：改前那 28 列缩进下它已经 90 列。
-	if start := renderProgressFrame(0, 0, 0, '|'); DisplayWidth(start) > 80 {
-		t.Errorf("起始帧 %d 列，超过 80 列终端会折行：%q", DisplayWidth(start), start)
 	}
 }

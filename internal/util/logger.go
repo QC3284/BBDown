@@ -15,15 +15,21 @@ import (
 // hostile response cannot flood the terminal or the log file.
 const MaxLogFieldLen = 512
 
-// 终端里仍然直接使用的两条 ANSI 序列。
+// ANSI sequences mirroring the .NET ConsoleColor names the upstream C# uses.
 //
-// 颜色**角色**不在这里：CLI 的配色（BRAND/MUTED/TEXT + 三个状态色）与降级链都在
-// theme.go，调用点一律用 util.TagXxx，不再各拼各的 SGR 序列。这里只剩二维码要用的
-// 黑白前景（它是图形不是文字层级，不参与主题）与通用复位。
+// ConsoleColor.Red / Cyan / White are the *bright* variants of their colors, so they
+// map to the 9x SGR codes; printing 31/36/37 would render errors, prompts and the
+// banner darker than upstream on every terminal.
 const (
-	AnsiReset = "\033[0m"
-	AnsiBlack = "\033[30m" // 二维码深色模块
-	AnsiWhite = "\033[97m" // 二维码浅色模块 / 横幅遗留常量
+	AnsiReset      = "\033[0m"
+	AnsiBlack      = "\033[30m"  // ConsoleColor.Black      (二维码深色模块)
+	AnsiRed        = "\033[91m"  // ConsoleColor.Red        (LogError)
+	AnsiDarkYellow = "\033[33m"  // ConsoleColor.DarkYellow (LogWarn)
+	AnsiCyan       = "\033[96m"  // ConsoleColor.Cyan       (LogColor / 提示符)
+	AnsiDarkGray   = "\033[90m"  // ConsoleColor.DarkGray   (LogDebug)
+	AnsiWhite      = "\033[97m"  // ConsoleColor.White      (横幅前景)
+	AnsiBgDarkBlue = "\033[44m"  // ConsoleColor.DarkBlue   (横幅背景)
+	AnsiBgRed      = "\033[101m" // ConsoleColor.Red       (失败输出底色，同样取亮色档)
 )
 
 // SanitizeLogString makes a value safe to interpolate into a single log line.
@@ -227,222 +233,73 @@ func writeLine(path, line string) error {
 	return f.Sync()
 }
 
-// 事件时间戳的两档：默认只到时分秒（日期与毫秒对看日志的人没有价值，还把每行内容推后
-// 16 列），--debug 下才给全量——排查时序问题时才需要日期与毫秒。
-//
-// 日志**文件**不受 --debug 影响，始终写全量：文件是事后对账用的，跨天的记录只留 HH:MM:SS
-// 就没法定位，而终端上那 16 列每一行都在挤占内容。
-const (
-	eventTimeLayout      = "15:04:05"
-	eventTimeDebugLayout = "2006-01-02 15:04:05.000"
-	fileTimeLayout       = "2006-01-02 15:04:05.000"
-)
-
-// logClock 是事件时间戳的时钟。做成变量是为了让用例把「现在」钉死：毫秒与日期只在 --debug
-// 下出现这条规则要靠断言钉住，就必须能控制时间（真实墙钟跑两次可能跨秒、跨毫秒）。
-// 生产路径不设置它，就是 time.Now。
-var logClock = time.Now
-
-// SetLogClock 注入事件时间戳的时钟（fn 为 nil 表示还原真实墙钟），返回还原函数，调用方
-// 必须 defer 它。跨包用例（internal/cli 的日志断言）也要用它。
-func SetLogClock(fn func() time.Time) (restore func()) {
-	prev := logClock
-	if fn == nil {
-		logClock = time.Now
-	} else {
-		logClock = fn
-	}
-	return func() { logClock = prev }
+func timestamp() string {
+	return time.Now().Format("[2006-01-02 15:04:05.000]")
 }
-
-func (l *Logger) debug() bool { return l.debugMode != nil && l.debugMode() }
-
-// eventPrefix 是终端上一条事件行的前缀（含尾随两个空格）：默认 "19:20:37  "，
-// --debug 下是 "2026-09-26 19:20:37.865  "。
-//
-// 改前是方括号形态 "[19:20:37] "：时间戳是**次要信息**（主题里归 MUTED），方括号却给了它
-// 与正文同等的视觉重量，还把每行内容推后两列。去掉方括号后前缀宽度不变（8+2 或 23+2），
-// 消息仍然从同一列开始——列对齐是版式的一部分，不能因为掉括号就漂移。
-func (l *Logger) eventPrefix(now time.Time) string {
-	layout := eventTimeLayout
-	if l.debug() {
-		layout = eventTimeDebugLayout
-	}
-	return now.Format(layout) + "  "
-}
-
-// eventLine 组装一条事件行：MUTED 时间戳 + 正文；warn/error 另加符号与状态色。
-//
-// 符号（⚠ / ✗）是**版式**不是颜色：无色能力下（NO_COLOR / 管道 / TERM=dumb）它照旧出现，
-// 层级与可扫读性不依赖颜色。日志文件拿到的是同一个纯文本视图（见各 Log* 方法）。
-func (l *Logger) eventLine(now time.Time, tag Tag, marker, msg string) Line {
-	return NewLine().Add(TagMuted, l.eventPrefix(now)).Add(tag, marker+msg)
-}
-
-// writeEvent 是事件通道的唯一出口：终端写着色视图，日志文件写纯文本视图（含全量时间戳）。
-func (l *Logger) writeEvent(now time.Time, line Line, plain string) {
-	consoleWrite(func(w io.Writer) { fmt.Fprint(w, line.Render()+"\n") })
-	l.appendToFile(filePrefix(now) + plain)
-}
-
-// filePrefix 是日志文件里一行的前缀：始终全量时间戳（见上面的常量说明）。
-func filePrefix(now time.Time) string { return "[" + now.Format(fileTimeLayout) + "] " }
-
-// 事件行的符号：警告 ⚠、错误 ✗。它们与状态色一起出现，但本身是无色形态的一部分。
-const (
-	warnMarker  = "⚠ "
-	errorMarker = "✗ "
-)
 
 // Log prints a normal log line.
 func (l *Logger) Log(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	now := logClock()
-	l.writeEvent(now, l.eventLine(now, TagText, "", msg), msg)
+	line := timestamp() + " - " + msg
+	consoleWrite(func(w io.Writer) { fmt.Fprintln(w, line) })
+	l.appendToFile(line)
 }
 
-// LogError prints an error line: ✗ + 错误色（消息本身也走错误色，状态一眼可辨）。
+// LogError prints an error line in red.
 func (l *Logger) LogError(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	now := logClock()
-	l.writeEvent(now, l.eventLine(now, TagError, errorMarker, msg), errorMarker+msg)
+	line := timestamp() + " - " + msg
+	consoleWrite(func(w io.Writer) {
+		fmt.Fprint(w, timestamp()+" - ")
+		fmt.Fprint(w, AnsiRed+msg+AnsiReset+"\n")
+	})
+	l.appendToFile(line)
 }
 
-// LogWarn prints a warning line: ⚠ + 警告色。
+// LogWarn prints a warning line in yellow.
 func (l *Logger) LogWarn(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	now := logClock()
-	l.writeEvent(now, l.eventLine(now, TagWarn, warnMarker, msg), warnMarker+msg)
+	line := timestamp() + " - " + msg
+	consoleWrite(func(w io.Writer) {
+		fmt.Fprint(w, timestamp()+" - ")
+		fmt.Fprint(w, AnsiDarkYellow+msg+AnsiReset+"\n")
+	})
+	l.appendToFile(line)
 }
 
-// LogColor prints an attention line in BRAND (新版本、二维码过期这类「系统通知」：
-// 不是错误也不是警告，但需要被看见)。
+// LogColorNoTime prints a colored line in cyan without timestamp, indented to align.
+func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
+	consoleWrite(func(w io.Writer) { fmt.Fprint(w, "                            "+AnsiCyan+msg+AnsiReset+"\n") })
+	l.appendToFile("                             " + msg)
+}
+
+// LogColor prints a colored line in cyan.
 func (l *Logger) LogColor(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	now := logClock()
-	l.writeEvent(now, l.eventLine(now, TagBrand, "", msg), msg)
-}
-
-// LogTagged 打一条事件行：MUTED 时间戳 + 指定样式（角色/加粗）的正文，**不加**状态标记。
-//
-// 给「自带状态列」的表格用（doctor 的 +/!/x 三档）：状态符号是那一列的内容，再套一个 ⚠/✗
-// 会把那一列推歪、还变成双重标注。等级仍然由状态色表达。
-func (l *Logger) LogTagged(tag Tag, format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	now := logClock()
-	l.writeEvent(now, l.eventLine(now, tag, "", msg), msg)
+	line := timestamp() + " - " + msg
+	consoleWrite(func(w io.Writer) {
+		fmt.Fprint(w, timestamp()+" - ")
+		fmt.Fprint(w, AnsiCyan+msg+AnsiReset+"\n")
+	})
+	l.appendToFile(line)
 }
 
 // LogDebug prints a debug line in grey (only when debug mode is on).
-// 整行 MUTED：调试日志是次要信息，不该与正常运行日志抢注意力。
 func (l *Logger) LogDebug(format string, args ...interface{}) {
-	if !l.debug() {
+	if l.debugMode == nil || !l.debugMode() {
 		return
 	}
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	now := logClock()
-	l.writeEvent(now, l.eventLine(now, TagMuted, "", msg), msg)
-}
-
-// ---- 内容通道：不带时间戳、不带缩进 ----
-//
-// 控制台上有两类文字，混在一条通道上就是「输出乱」的根因：
-//
-//   - **事件**：过程（下载、重试、解析进度…），上面那组 Log* 方法打印，带时间戳；
-//   - **内容**：这次运行的结果（标题、UP、分P 列表、流表格、直链、任务卡、汇总行），
-//     由 Content* 打印——没有时间戳。它们不是「发生了一件事」，而是「结果就是这样」。
-//
-// 内容行以前走 LogColorNoTime：为了对齐日志前缀硬编码了 28 个空格，表格因此整段缩进、
-// 与表头对不上。内容通道**不加任何缩进**，缩进由调用方按排版自己决定（见 download 的
-// trackIndent / workflow 的 pageRow）。
-//
-// 与日志的一致性照旧：同一把 ConsoleLock + 「写之前先给进度条收尾」的 consoleWrite 约定
-// （见上面的说明），否则卡片/表格会与原地重绘的进度行挤在同一行。
-
-// Content 打一行内容（正文色，不额外设色）。参数按日志同款清洗：标题/UP 名等是服务端
-// 可控文本，里面的换行与 ANSI 序列不能伪造出一行内容（上游 RF-54/RF-70）。
-func (l *Logger) Content(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	l.contentText(msg+"\n", msg+"\n")
-}
-
-// ContentStyled 打一行**单段**样式的内容：整行一个角色（表头 MUTED、直链提示 MUTED…）。
-func (l *Logger) ContentStyled(tag Tag, format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	l.contentText(tag.Apply(msg)+"\n", msg+"\n")
-}
-
-// ContentLine 打一行**多段**样式的内容（信息行、表格行、段标题）。
-//
-// 各段文本按内容通道的约定清洗（服务端可控文本不得伪造换行/ANSI）；清洗只对脏文本生效，
-// 排版用的空格原样保留，所以「无色版式」与「着色版式」逐字符一致。
-func (l *Logger) ContentLine(line Line) {
-	line = line.Sanitize()
-	l.contentText(line.Render()+"\n", line.Plain()+"\n")
-}
-
-// ContentBlock 原样写出一段已排版好的**纯文本**：可多行、末尾换行与否由调用方决定，
-// **不做**单行清洗（多行会被压成一行）。各字段的清洗由调用方负责。
-func (l *Logger) ContentBlock(text string) { l.contentText(text, text) }
-
-// ContentBlockStyled 写出一段多段样式的多行内容（任务卡）：每行末尾补一个换行。
-func (l *Logger) ContentBlockStyled(block Block) {
-	block = block.Sanitize()
-	l.contentText(block.Render(), block.Plain())
-}
-
-// contentText 是内容通道的唯一出口：styled / plain 是同一段文本的两个视图（只差 SGR 序列），
-// 能力允许时写着色那份，否则写纯文本那份——降级链的落点就在这里。
-//
-// 落盘永远是 plain + 全量时间戳：日志文件里没有终端上下文，色彩码只会污染 grep。
-func (l *Logger) contentText(styled, plain string) {
-	now := logClock()
-	consoleWrite(func(w io.Writer) {
-		if ColorsEnabled() {
-			fmt.Fprint(w, styled)
-			return
-		}
-		fmt.Fprint(w, plain)
-	})
-	// 日志文件里没有终端上下文，一行裸文本没法与事件对齐，所以补上全量时间戳；
-	// 多行内容（任务卡）作为一段落下，不逐行补。
-	l.appendToFile(filePrefix(now) + strings.TrimRight(plain, "\n"))
+	line := timestamp() + " - " + msg
+	consoleWrite(func(w io.Writer) { fmt.Fprint(w, AnsiDarkGray+line+AnsiReset+"\n") })
+	l.appendToFile(line)
 }
 
 // Printf prints without timestamp prefix (for interactive prompts).
 func (l *Logger) Printf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 	consoleWrite(func(w io.Writer) { fmt.Fprint(w, msg) })
-}
-
-// defaultIsTerminalOut 是终端判定的默认实现：stdout 是字符设备即视为终端。
-//
-// 与进度条（download.isTerminalOut / isTerminalStdout）同一口径，并集中在这里，避免各包
-// 各养一份会漂移的判定。
-func defaultIsTerminalOut() bool {
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
-}
-
-// isTerminalOut 做成变量而不是直接调用：用例需要在不依赖真实终端的前提下驱动 TTY 分支
-// （CI 的 stdout 永远是管道，真实判定恒为假，彩色/直链截断那两条路径就测不到）。
-var isTerminalOut = defaultIsTerminalOut
-
-// IsTerminalOut 把同一份判定给其它包用（直链渲染、进度条），口径只有一份。
-func IsTerminalOut() bool { return isTerminalOut() }
-
-// SetTerminalForTest 注入终端判定（fn 为 nil 表示还原），返回还原函数，调用方必须 defer 它。
-func SetTerminalForTest(fn func() bool) (restore func()) {
-	prev := isTerminalOut
-	if fn == nil {
-		isTerminalOut = defaultIsTerminalOut
-	} else {
-		isTerminalOut = fn
-	}
-	return func() { isTerminalOut = prev }
 }
 
 // Default package-level logger.
@@ -484,28 +341,9 @@ func LogColor(format string, args ...interface{}) {
 	defaultLogger.LogColor(format, args...)
 }
 
-// Content 是内容通道的包级入口（见 Logger.Content）：无时间戳、无缩进、正文色。
-func Content(format string, args ...interface{}) {
-	defaultLogger.Content(format, args...)
-}
-
-// ContentStyled 打一行单段样式的内容（表头 MUTED、提示 MUTED…），见 Logger.ContentStyled。
-func ContentStyled(tag Tag, format string, args ...interface{}) {
-	defaultLogger.ContentStyled(tag, format, args...)
-}
-
-// ContentLine 打一行多段样式的内容（信息行、表格行、段标题），见 Logger.ContentLine。
-func ContentLine(line Line) { defaultLogger.ContentLine(line) }
-
-// ContentBlock 原样写出一段已排版好的纯文本（可多行），见 Logger.ContentBlock。
-func ContentBlock(text string) { defaultLogger.ContentBlock(text) }
-
-// ContentBlockStyled 写出一段多段样式的多行内容（任务卡），见 Logger.ContentBlockStyled。
-func ContentBlockStyled(block Block) { defaultLogger.ContentBlockStyled(block) }
-
-// LogTagged 是事件通道的「自带状态列」入口（见 Logger.LogTagged）。
-func LogTagged(tag Tag, format string, args ...interface{}) {
-	defaultLogger.LogTagged(tag, format, args...)
+// LogColorNoTime prints colored text without timestamp prefix.
+func LogColorNoTime(format string, args ...interface{}) {
+	defaultLogger.LogColorNoTime(format, args...)
 }
 
 // LogDebug is the package-level convenience function.

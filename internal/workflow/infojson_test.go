@@ -61,8 +61,10 @@ func TestInfoJSONPrintsMachineReadableMetadata(t *testing.T) {
 	if v, ok := got["video"].([]interface{}); !ok || len(v) == 0 {
 		t.Errorf("video 应当非空：%v", got["video"])
 	}
-	// 反向断言：--info-json 不该再打印人看的流列表（段标题是人看输出，机读模式一律不出）。
-	if strings.Contains(out, "可用流（") || strings.Contains(out, "可用音频流（") {
+	if !strings.Contains(out, "共计1条视频流") == false {
+		// 反向断言：--info-json 不该再打印人看的流列表
+	}
+	if strings.Contains(out, "共计1条视频流") {
 		t.Errorf("--info-json 不该打印人看的流列表：%s", out)
 	}
 

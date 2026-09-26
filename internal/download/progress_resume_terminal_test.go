@@ -21,8 +21,8 @@ import (
 // 这里证明**真实下载路径**把 base=offset 接上了：此前出问题的正是接线（单线程的终端分支
 // 忘了设 base，JSON 分支设了，同一次续传里两个百分比）。
 
-// framePercentPattern 抓进度帧里的百分比（" 53.1%"：设计稿定了一位小数）。
-var framePercentPattern = regexp.MustCompile(`([0-9]+\.[0-9])%`)
+// framePercentPattern 抓进度帧里的百分比（" 53.13%"）。
+var framePercentPattern = regexp.MustCompile(`([0-9]+\.[0-9]{2})%`)
 
 // newStreamCapture 接管 os.Stdout 并把写进去的内容累积起来，返回「读当前输出」的函数。
 //

@@ -26,24 +26,18 @@ func TestPrintAllTracksMatchesUpstream(t *testing.T) {
 
 	out := captureStdout(t, func() { PrintAllTracks(result, 100, false) })
 	for _, want := range []string{
-		"▎可用背景音频流（1）",
-		"▎可用配音（1 · 每条 2 条流）",
-		"▎可用流（1）",
-		"▎可用音频流（1）",
+		"共计1条背景音频流.",
+		"共计1条配音, 每条包含2条配音流.",
+		"共计1条视频流.",
+		"共计1条音频流.",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("清单缺少段标题 %q，实际输出 %q", want, out)
+			t.Errorf("清单缺少 %q，实际输出 %q", want, out)
 		}
 	}
 	// 背景音频/配音列表在视频列表之前（上游顺序）
-	if strings.Index(out, "可用背景音频流") > strings.Index(out, "可用流（1）") {
+	if strings.Index(out, "条背景音频流") > strings.Index(out, "条视频流") {
 		t.Errorf("背景音频应在视频流之前打印：%q", out)
-	}
-	// 标点与旧写法：不再有「共计N条…」与中文句尾的半角句点（改版前的两块问题）。
-	for _, old := range []string{"共计", "条视频流.", "条音频流.", "条背景音频流.", "条配音,", "已选择的流:"} {
-		if strings.Contains(out, old) {
-			t.Errorf("旧写法 %q 不该再出现：%q", old, out)
-		}
 	}
 	// 默认不打印取流地址
 	if strings.Contains(out, "https://cdn/") {

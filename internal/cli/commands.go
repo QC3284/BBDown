@@ -99,7 +99,7 @@ var serveCmd = &cobra.Command{
 		ctx := commandContext(cmd)
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.12.6")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.12.7")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -383,14 +383,7 @@ func runWatchLater(cmd *cobra.Command, args []string) error {
 		}
 		succeeded++
 	}
-	// 汇总行（内容通道，无时间戳）：这次批量下载的结果。与 downloadTargets 的收尾汇总
-	// 共用 batchSummaryLine——同一件事在两处是同一个版式与同一组颜色角色。
-	util.ContentLine(batchSummaryLine("稍后再看下载完成", batchSummary{
-		succeeded: succeeded,
-		failed:    failed,
-		elapsed:   elapsedUnknown,
-		products:  productsUnknown,
-	}))
+	util.Log("稍后再看下载完成：成功 %d 个，失败 %d 个", succeeded, failed)
 	if failed > 0 {
 		return fmt.Errorf("%d 个下载失败", failed)
 	}

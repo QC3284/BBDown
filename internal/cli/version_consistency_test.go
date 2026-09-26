@@ -27,7 +27,7 @@ func TestVersionStringsAreConsistent(t *testing.T) {
 		pattern string
 	}{
 		{filepath.Join(root, "internal", "cli", "root.go"), `Version: "([0-9][^"]*)"`},
-		{filepath.Join(root, "cmd", "bbdown", "main.go"), `bannerVersion = "([0-9][^"]*)"`},
+		{filepath.Join(root, "cmd", "bbdown", "main.go"), `BBDown version ([0-9][^,]*),`},
 		{filepath.Join(root, "internal", "cli", "root.go"), `"v([0-9][^"]*)"`},
 		{filepath.Join(root, "internal", "cli", "commands.go"), `"v([0-9][^"]*)"`},
 		{filepath.Join(root, "PKGBUILD"), `pkgver=([0-9][^\s]*)`},

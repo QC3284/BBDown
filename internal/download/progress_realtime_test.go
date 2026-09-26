@@ -44,7 +44,7 @@ func TestProgressReaderDrawsOnDataArrival(t *testing.T) {
 		pr.Close()
 	})
 
-	for _, want := range []string{"10.0%", "20.0%"} {
+	for _, want := range []string{"10.00%", "20.00%"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("输出缺少反映数据到达的帧 %s：进度帧没有跟着数据走（输出 %q）", want, out)
 		}
@@ -147,7 +147,7 @@ func TestAggregateFrameMatchesSingleThreadFrame(t *testing.T) {
 		t.Errorf("聚合行与单线程行不是同一个渲染函数：\n聚合   %q\n单线程 %q", aggFrame, singleFrame)
 	}
 	// 信息段本身也要有内容：防止两边一起退化成空帧（那时上面的相等断言会「假绿」）。
-	if !strings.Contains(singleFrame, "40.0%") || !strings.Contains(singleFrame, "40/100 B") {
+	if !strings.Contains(singleFrame, "40.00% 40/100 B") {
 		t.Errorf("信息段缺少百分比/总量：%q", singleFrame)
 	}
 }
@@ -174,7 +174,7 @@ func TestAggregateProgressRedrawsOnSignals(t *testing.T) {
 		<-stopped
 	})
 
-	for _, want := range []string{"0.0%", "40.0%"} {
+	for _, want := range []string{"0.00%", "40.00%"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("聚合渲染器缺少帧 %s：没有跟着信号重绘（输出 %q）", want, out)
 		}

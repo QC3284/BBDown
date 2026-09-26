@@ -15,9 +15,7 @@ import (
 // doctor 的表格化排版：状态符号（1 列）+ 名称列（按本次最长名称对齐）+ 详情列；详情超宽折行，
 // 续行缩进到详情列。--json 分支是机读契约，一字不动（另见 doctor_json_test.go）。
 
-// 默认事件前缀只到时分秒（日期与毫秒只在 --debug 下出现，见 util/logger.go 的
-// eventTimeLayout）；这里跟着改成时间档，否则表格断言拿到的是没剥掉前缀的行。
-var doctorLogPrefixRe = regexp.MustCompile(`^\d{2}:\d{2}:\d{2}  `)
+var doctorLogPrefixRe = regexp.MustCompile(`^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] - `)
 
 var doctorAnsiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
 

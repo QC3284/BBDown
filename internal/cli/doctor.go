@@ -102,17 +102,15 @@ func runDoctorJSON(ctx context.Context, cfg config.MyOption, client *util.HTTPCl
 func runDoctor(ctx context.Context, cfg config.MyOption, client *util.HTTPClient) int {
 	results, code := runDoctorResults(ctx, cfg, client)
 	for _, row := range renderDoctorRows(results) {
-		// 状态**已经是表里的第一列**（+ / ! / x），所以走 LogTagged 而不是 LogWarn/LogError：
-		// 后者会在行首再插一个 ⚠/✗，既把名称列推歪，又变成双重标注。等级改用状态色表达。
-		tag := util.TagText
+		logLine := util.Log
 		switch row.Level {
 		case "fail":
-			tag = util.TagError
+			logLine = util.LogError
 		case "warn":
-			tag = util.TagWarn
+			logLine = util.LogWarn
 		}
 		for _, line := range row.Lines {
-			util.LogTagged(tag, "%s", line)
+			logLine("%s", line)
 		}
 	}
 	if code == 0 {

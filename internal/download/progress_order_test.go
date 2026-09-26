@@ -108,7 +108,7 @@ func TestAggregateProgressClearsLineOnFinish(t *testing.T) {
 		<-stopped
 	})
 
-	if !strings.Contains(out, "50.0%") {
+	if !strings.Contains(out, "50.00%") {
 		t.Fatalf("没有画出进度帧：%q", out)
 	}
 	trimmed := strings.TrimSuffix(out, "\r")

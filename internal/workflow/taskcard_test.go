@@ -1,7 +1,6 @@
 package workflow
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 
@@ -14,77 +13,57 @@ import (
 
 // ---- 纯函数：排版规则 ----
 
-// labelEndColumn 返回标签结束处的显示列（右对齐判据：所有行的标签结束在同一列）。
-func labelEndColumn(t *testing.T, line, label string) int {
-	t.Helper()
-	i := strings.Index(line, label)
-	if i < 0 {
-		t.Fatalf("行里没有标签 %q：%q", label, line)
-	}
-	return download.DisplayWidth(line[:i]) + download.DisplayWidth(label)
-}
-
-// valueColumn 返回值起始处的显示列（标签之后到第一个非空格字符）。
-func valueColumn(t *testing.T, line, label string) int {
-	t.Helper()
-	i := strings.Index(line, label)
-	if i < 0 {
-		t.Fatalf("行里没有标签 %q：%q", label, line)
-	}
-	rest := line[i+len(label):]
-	pad := len(rest) - len(strings.TrimLeft(rest, " "))
-	return download.DisplayWidth(line[:i]) + download.DisplayWidth(label) + pad
-}
-
-// TestRenderTaskCardAlignsValuesByDisplayWidth 钉住卡片的标签列：标签 MUTED 且**右对齐**到
-// 固定显示列，值从同一个显示列开始——全角标签「输出路径」（8 显示列）与 ASCII 标签「BV」
-// （2 显示列）的值必须从同一列开始。
+// 值列按**显示宽度**对齐：全角标签「输出路径」（8 显示列）与 ASCII 标签「BV」（2 显示列）
+// 的值必须从同一列开始。
 //
-// 变异验证：把 taskCardBlock 里的 download.PadDisplayLeft 换回按字节补白（len(label)）或
-// 换回左对齐（PadDisplay）→ 标签结束列/值列不再是同一个数，本用例红。
+// 变异验证：把 renderTaskCard 里的 download.PadDisplay 换回按字节补白（len(label)），
+// CJK 标签的补白消失，值列错位，本用例变红。
 func TestRenderTaskCardAlignsValuesByDisplayWidth(t *testing.T) {
 	out := renderTaskCard(taskCard{
 		Title:      "示例稿件",
 		Bvid:       "BV1xx411c7mD",
 		Owner:      "某某UP",
 		Page:       "P2/共12P 第二话",
-		Video:      "1080P 高清 · 1920x1080 · 60fps · avc1.640032 · 2000 kbps · 1.22 MB",
-		Audio:      "M4A · 64 kbps · 80.00 KB",
+		Video:      "1080P 高清 · 1920x1080 · 60fps · avc1.640032 · 2000 kbps · ~1.22 MB",
+		Audio:      "M4A · 64 kbps · ~80.00 KB",
 		OutputPath: "out/示例稿件.mp4",
 	})
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	if lines[0] != taskCardHeader {
-		t.Fatalf("首行应是卡片段标题 %q，实际 %q", taskCardHeader, lines[0])
+		t.Fatalf("首行应是卡片表头 %q，实际 %q", taskCardHeader, lines[0])
 	}
 	labels := []string{"标题", "BV", "UP", "分P", "视频流", "音频流", "输出路径"}
 	if len(lines) != len(labels)+1 {
-		t.Fatalf("应有段标题 + %d 行，实际 %d 行：%q", len(labels), len(lines)-1, out)
+		t.Fatalf("应有表头 + %d 行，实际 %d 行：%q", len(labels), len(lines)-1, out)
 	}
 
-	const (
-		wantLabelEnd = 1 + 8 // 缩进 1 显示列 + 标签列宽 8 显示列（「输出路径」= 8 列）
-		wantValueCol = wantLabelEnd + taskCardGap
-	)
+	col := -1
 	for i, ln := range lines[1:] {
 		label := labels[i]
-		if got := labelEndColumn(t, ln, label); got != wantLabelEnd {
-			t.Errorf("第 %d 行的标签 %q 结束在第 %d 显示列，期望第 %d 列（右对齐）：%q",
-				i+1, label, got, wantLabelEnd, ln)
+		if !strings.HasPrefix(ln, taskCardIndent+label) {
+			t.Fatalf("第 %d 行的标签不是 %q：%q", i+1, label, ln)
 		}
-		if got := valueColumn(t, ln, label); got != wantValueCol {
-			t.Errorf("第 %d 行的值从第 %d 显示列开始，其余行是第 %d 列：%q", i+1, got, wantValueCol, ln)
+		rest := ln[len(taskCardIndent)+len(label):] // label 是前缀，按字节切安全
+		pad := len(rest) - len(strings.TrimLeft(rest, " "))
+		got := download.DisplayWidth(taskCardIndent+label) + pad
+		if col < 0 {
+			col = got
+			continue
+		}
+		if got != col {
+			t.Errorf("值列没有对齐：%q 的值从第 %d 显示列开始，其余行是第 %d 列", ln, got, col)
 		}
 	}
 }
 
 // 字段缺失（没有 BV / 音频流 / 输出路径，或单P 稿件没有分P 行）时整行省略，不留「只有标签」的空行。
 //
-// 变异验证：把 taskCardBlock 里的 continue 删掉（空值也写一行）→ 与 want 不等，本用例变红。
+// 变异验证：把 renderTaskCard 里的 continue 删掉（空值也写一行）→ 与 want 不等，本用例变红。
 func TestRenderTaskCardOmitsMissingRows(t *testing.T) {
 	out := renderTaskCard(taskCard{Title: "t", Video: "1080P 高清"})
 	want := taskCardHeader + "\n" +
-		"     标题  t\n" + // 缩进 1 + 右对齐补 4（标题 4 显示列）+ 间隔 2
-		"   视频流  1080P 高清\n" // 缩进 1 + 右对齐补 2（视频流 6 显示列）+ 间隔 2
+		taskCardIndent + "标题" + strings.Repeat(" ", taskCardLabelWidth-download.DisplayWidth("标题")+taskCardGap) + "t\n" +
+		taskCardIndent + "视频流" + strings.Repeat(" ", taskCardLabelWidth-download.DisplayWidth("视频流")+taskCardGap) + "1080P 高清\n"
 	if out != want {
 		t.Errorf("缺失字段没有整行省略：\n got %q\nwant %q", out, want)
 	}
@@ -115,13 +94,6 @@ func TestPrintTaskCardFinishesProgressLineFirst(t *testing.T) {
 	out := captureStdout(t, func() { printTaskCard(taskCard{Title: "t"}) })
 	if !strings.HasPrefix(out, "\n") {
 		t.Errorf("进度行还留在当前行时，卡片应先换行再打：%q", out)
-	}
-	// 卡片走内容通道：无时间戳、以标题行开头（改前是 28 列缩进的日志行）。
-	if !strings.HasPrefix(out, "\n"+taskCardHeader+"\n") {
-		t.Errorf("卡片应走内容通道（无时间戳、以标题行开头）：%q", out)
-	}
-	if regexp.MustCompile(`\[\d{2}:\d{2}:\d{2}\]`).MatchString(out) {
-		t.Errorf("卡片不该带日志时间戳：%q", out)
 	}
 }
 
@@ -170,7 +142,7 @@ func TestTaskCardWiring(t *testing.T) {
 			t.Errorf("任务卡缺少 %q：%q", want, out)
 		}
 	}
-	selected := strings.Index(out, "已选择的视频流")
+	selected := strings.Index(out, "已选择的流")
 	card := strings.Index(out, taskCardHeader)
 	started := strings.Index(out, "开始下载P1视频")
 	if selected < 0 || card < 0 || started < 0 {
@@ -191,14 +163,8 @@ func TestTaskCardWiring(t *testing.T) {
 	if !strings.Contains(outHide, taskCardHeader) {
 		t.Errorf("--hide-streams 不该把整张卡片也去掉：%q", outHide)
 	}
-	// 断言只覆盖卡片本身：--hide-streams 是「不要显示所有**可用**流」（见 --help），
-	// 「已选择的视频流/音频流」两段不在这个契约里（它们是你这次真正要下的东西）。
-	cardStart := strings.Index(outHide, taskCardHeader)
-	if cardStart < 0 {
-		t.Fatalf("--hide-streams 下应仍有卡片：%q", outHide)
-	}
-	if card := outHide[cardStart:]; strings.Contains(card, "视频流") || strings.Contains(card, "音频流") {
-		t.Errorf("--hide-streams 下卡片仍打了流信息：%q", card)
+	if strings.Contains(outHide, "视频流") || strings.Contains(outHide, "音频流") {
+		t.Errorf("--hide-streams 下卡片仍打了流信息：%q", outHide)
 	}
 
 	// 3) 三种「只解析/只输出数据」的模式各有输出契约，都不能混进任务卡。
@@ -208,7 +174,7 @@ func TestTaskCardWiring(t *testing.T) {
 	if strings.Contains(outInfo, taskCardHeader) {
 		t.Errorf("-I 不该打任务卡：%q", outInfo)
 	}
-	if !strings.Contains(outInfo, "可用流（1）") {
+	if !strings.Contains(outInfo, "共计1条视频流") {
 		t.Errorf("-I 的流清单没出现（用例没走到那条路径）：%q", outInfo)
 	}
 
