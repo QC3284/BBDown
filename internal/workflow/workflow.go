@@ -585,6 +585,12 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		}
 		util.LogDebug("SavePath: %s", savePath)
 
+		// 任务卡：解析完成、开始下载前把这次要下的东西收成一块（标题/BV、来源 UP 与分P、
+		// 视频流一行、音频流一行、输出路径），列对齐、不带时间戳前缀。
+		// -I、--print-urls、--info-json 各有自己的输出契约，都在上面提前 return 了，
+		// 所以这个调用点就等于「只有真实下载路径会打」。
+		printTaskCard(w.buildTaskCard(page, pagesCount, title, selectedVideo, selectedAudio, savePath))
+
 		// Hold the product lock across the existence check, the download and the mux
 		// (acquired once for the page; see the declaration above).
 		productLock.acquire(savePath)

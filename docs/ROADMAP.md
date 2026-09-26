@@ -111,7 +111,12 @@
    单包失败，空载连跑 8 次 0 失败，且每次都来不及抓到失败用例名 → 怀疑是**负载敏感的时序用例**（墙钟/进度/超时类）。
    下一步：在有负载的情况下连跑并落盘 `--- FAIL` 行（脚本已备：8 轮循环写 /tmp/flake.log），拿到名字再修；
    在那之前 CI 是判据。
-5. **`--info-json` 的输出分流（试过一次，失败，已回退；下面是诊断）**
+5. **进度条的两处已知回退（小）**：① 续传时 `x/y` 与 ETA 不含 `base`（高估剩余），修前先定「终端百分比是否改用 base+current」；
+   ② 多线程**聚合**渲染仍是旧格式，可直接复用 `renderProgressInfo`。
+6. **宽度表收敛（小）**：`displayWidth`/`padDisplay` 现有三份同名实现（`internal/download/tracklayout.go` 已导出，
+   `internal/cli/doctor.go` 与 `internal/workflow/taskcard.go` 各私有）。收敛方向：后两者改用 `download.DisplayWidth`
+   （两个包都已 import download），或统一上移 `internal/util`；做的时候三处用例都要保留「显示宽度一致」这条判据。
+6. **`--info-json 的输出分流（试过一次，失败，已回退；下面是诊断）**
 
    目标：机读模式下 stdout 只留 JSON（日志走 stderr、横幅不打印）。**第一次尝试（提交 f828cba，已 revert）**：
    把 logger 的 11 处 `fmt.Print` 改成 `fmt.Fprint(consoleOut, …)`。两个坑：

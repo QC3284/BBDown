@@ -1235,18 +1235,7 @@ func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool)
 	if len(result.VideoTracks) > 0 {
 		util.Log("共计%d条视频流.", len(result.VideoTracks))
 		for i, v := range result.VideoTracks {
-			pDur := pageDur
-			if pDur == 0 {
-				pDur = v.Dur
-			}
-			size := v.Size
-			if size <= 0 {
-				size = float64(pDur) * float64(v.Bandwidth) * 1024 / 8
-			}
-			line := fmt.Sprintf("%d. [%s] [%s] [%s] [%s] [%d kbps] [~%s]",
-				i, v.Dfn, v.Res, v.Codecs, v.FPS, v.Bandwidth, util.FormatFileSize(size))
-			line = strings.ReplaceAll(line, "[] ", "")
-			util.LogColorNoTime("%s", line)
+			util.LogColorNoTime("%s", formatVideoTrackLine(i, v, pageDur))
 			// --only-show-info：每条流后面直接给出可下载地址（上游 Console.WriteLine(v.baseUrl)），
 			// 少了这一行，-I 拿到的就只是体积/码率清单，脚本无法据此取流。
 			if onlyShowInfo {
@@ -1265,40 +1254,16 @@ func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool)
 	}
 }
 
-// formatAudioTrackLine 渲染一条音频流的清单行（上游三处音频列表共用同一格式）。
-func formatAudioTrackLine(index int, a entity.Audio, pageDur int) string {
-	pDur := pageDur
-	if pDur == 0 {
-		pDur = a.Dur
-	}
-	return fmt.Sprintf("%d. [%s] [%d kbps] [~%s]",
-		index, a.Codecs, a.Bandwidth, util.FormatFileSize(float64(pDur)*float64(a.Bandwidth)*1024/8))
-}
-
 // PrintSelectedTrack shows the chosen tracks (matching C# format).
+//
+// 与流清单共用 tracklayout.go 的列宽：行首是 [视频]/[音频] 标签而不是序号，
+// 但名称列、码率列、体积列都落在与清单行相同的显示列上。
 func PrintSelectedTrack(video *entity.Video, audio *entity.Audio, pageDur int) {
 	if video != nil {
-		pDur := pageDur
-		if pDur == 0 {
-			pDur = video.Dur
-		}
-		size := video.Size
-		if size <= 0 {
-			size = float64(pDur) * float64(video.Bandwidth) * 1024 / 8
-		}
-		line := fmt.Sprintf("[视频] [%s] [%s] [%s] [%s] [%d kbps] [~%s]",
-			video.Dfn, video.Res, video.Codecs, video.FPS, video.Bandwidth, util.FormatFileSize(size))
-		line = strings.ReplaceAll(line, "[] ", "")
-		util.LogColorNoTime("%s", line)
+		util.LogColorNoTime("%s", formatVideoTrackRow("[视频]", *video, pageDur))
 	}
 	if audio != nil {
-		pDur := pageDur
-		if pDur == 0 {
-			pDur = audio.Dur
-		}
-		line := fmt.Sprintf("[音频] [%s] [%d kbps] [~%s]",
-			audio.Codecs, audio.Bandwidth, util.FormatFileSize(float64(pDur)*float64(audio.Bandwidth)*1024/8))
-		util.LogColorNoTime("%s", line)
+		util.LogColorNoTime("%s", formatAudioTrackRow("[音频]", *audio, pageDur))
 	}
 }
 

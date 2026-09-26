@@ -24,7 +24,7 @@ import (
 // 风控（412）、以及输出目录可写/磁盘余量。排障时任何一环都可能卡住，而用户看到的往往只是一句
 // 失败。doctor 把这些点逐条探一遍并给出可执行的下一步。两条 C# 接手线都没有这个命令。
 
-// doctorCmd 是 bbdown doctor 子命令。退出码：有 [fail] 项则为 1，便于脚本判读。
+// doctorCmd 是 bbdown doctor 子命令。退出码：有失败项（符号 x）则为 1，便于脚本判读。
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "自检：外部工具、输出目录、接口与登录态",
@@ -38,13 +38,13 @@ var doctorCmd = &cobra.Command{
 		// JSON 是机读契约：写 cmd 的输出流（纯 stdout、无时间戳/无色码），供脚本与监控解析。
 		if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
 			if code := runDoctorJSON(ctx, cfg, client, cmd.OutOrStdout()); code != 0 {
-				return fmt.Errorf("自检未通过（按上面的 [fail] 项处理）")
+				return fmt.Errorf("自检未通过（按上面的失败项处理）")
 			}
 			return nil
 		}
 		// 人类可读输出走 util 日志：这样 --log-file 也能抓到自检结果（见 runDoctor）。
 		if code := runDoctor(ctx, cfg, client); code != 0 {
-			return fmt.Errorf("自检未通过（按上面的 [fail] 项处理）")
+			return fmt.Errorf("自检未通过（按上面的失败项处理）")
 		}
 		return nil
 	},
@@ -90,35 +90,188 @@ func runDoctorJSON(ctx context.Context, cfg config.MyOption, client *util.HTTPCl
 	return code
 }
 
-// runDoctor 跑完所有自检并按人类可读格式输出，返回退出码：有 fail 返回 1，否则 0。
+// runDoctor 跑完所有自检并按列对齐的表格输出，返回退出码：有 fail 返回 1，否则 0。
 //
 // 输出走 util 日志而不是直接写 os.Stdout：doctor 此前绕过了 logger，用户带 --log-file 跑完
-// 自检去提 issue 时，日志文件里恰恰缺了 [fail] 那几行。形态（[ok]/[warn]/[fail] + 结论行）
-// 与改前逐字一致，只多了日志时间戳与分级配色。
+// 自检去提 issue 时，日志文件里恰恰缺了 fail 那几行。每个**物理行**单独过一次日志（折行后的
+// 续行同色），而不是把多行文本塞进一条日志——util 的 SanitizeLogString 会把换行压成空格。
 func runDoctor(ctx context.Context, cfg config.MyOption, client *util.HTTPClient) int {
 	results, code := runDoctorResults(ctx, cfg, client)
-	for _, res := range results {
-		line := fmt.Sprintf("%s %s: %s", doctorMark(res.Level), res.Name, res.Detail)
-		switch res.Level {
+	for _, row := range renderDoctorRows(results) {
+		logLine := util.Log
+		switch row.Level {
 		case "fail":
-			util.LogError("%s", line)
+			logLine = util.LogError
 		case "warn":
-			util.LogWarn("%s", line)
-		default:
-			util.Log("%s", line)
+			logLine = util.LogWarn
+		}
+		for _, line := range row.Lines {
+			logLine("%s", line)
 		}
 	}
 	if code == 0 {
 		util.Log("自检通过：没有发现阻塞性问题。")
 	} else {
-		util.LogError("存在阻塞性问题：先按上面的 [fail] 项处理，仍不行请带上本输出提 issue。")
+		util.LogError("存在阻塞性问题：先按上面标 x 的失败项处理，仍不行请带上本输出提 issue。")
 	}
 	return code
 }
 
-// doctorMark 把结论等级映射成标记；[ok] 补两个空格，让三档在终端里对齐。
+// doctorRow 是一个自检项排版后的结果：结论等级 + 若干物理行（首行是「符号 名称 详情」，
+// 详情超宽时续行缩进到详情列）。
+type doctorRow struct {
+	Level string
+	Lines []string
+}
+
+// doctorWrapWidth 是一条自检消息（不含日志时间戳）允许的最大显示列数。
+//
+// 取固定值而不是读终端宽度：自检输出同时进终端与 --log-file，日志文件里没有「终端宽度」，
+// 固定宽度才能让两处折行与缩进完全一致；用例也能直接收窄它，把折行路径钉死。
+var doctorWrapWidth = 100
+
+// doctorMarkWidth 是状态符号的显示列数：三档符号都取 1 列，名称列的起点才固定。
+const doctorMarkWidth = 1
+
+// renderDoctorRows 把自检结果排成列对齐的表格：状态符号 + 名称列（按本次最长名称对齐）+
+// 详情列；详情超过 doctorWrapWidth 时折行，续行缩进到详情列，仍能看出属于哪一项。
+//
+// 名称列宽按**显示列**算而不是 rune 数：名称中英混排（"ffmpeg/mp4box" 与 "接口/登录态"），
+// 按 rune 补空格在终端里对不齐。改前每行是「[ok] 名称: 详情」，详情长短不一没法扫。
+func renderDoctorRows(results []doctorResult) []doctorRow {
+	nameWidth := 0
+	for _, res := range results {
+		if w := displayWidth(res.Name); w > nameWidth {
+			nameWidth = w
+		}
+	}
+	detailCol := doctorMarkWidth + 1 + nameWidth + 2
+	detailWidth := doctorWrapWidth - detailCol
+	if detailWidth < 1 {
+		detailWidth = 1
+	}
+	rows := make([]doctorRow, 0, len(results))
+	for _, res := range results {
+		head := doctorMark(res.Level) + " " + padDisplay(res.Name, nameWidth) + "  "
+		chunks := wrapDisplay(res.Detail, detailWidth)
+		if len(chunks) == 0 {
+			chunks = []string{""}
+		}
+		lines := make([]string, 0, len(chunks))
+		for i, chunk := range chunks {
+			line := head + chunk
+			if i > 0 {
+				line = strings.Repeat(" ", detailCol) + chunk
+			}
+			if chunk == "" {
+				line = strings.TrimRight(line, " ") // 详情为空时不留行尾空格
+			}
+			lines = append(lines, line)
+		}
+		rows = append(rows, doctorRow{Level: res.Level, Lines: lines})
+	}
+	return rows
+}
+
+// doctorMark 把结论等级映射成状态符号：+ 通过 / ! 警告 / x 失败。
+//
+// 用单字符符号而不是旧的 [ok]/[warn]/[fail]：括号词每档宽度不同（旧实现得给 [ok] 补两个空格
+// 才勉强对齐），符号短、噪声少；等级另由颜色与末尾结论行区分。
 func doctorMark(level string) string {
-	return map[string]string{"ok": "[ok]  ", "warn": "[warn]", "fail": "[fail]"}[level]
+	switch level {
+	case "fail":
+		return "x"
+	case "warn":
+		return "!"
+	default:
+		return "+"
+	}
+}
+
+// displayWidth 返回字符串在终端里占的列数：中文、全角与 emoji 2 列，控制字符/组合记号 0 列，
+// 其余 1 列。与 internal/download/tracklayout.go 的同名函数是同一张表（两条输出都要列对齐，
+// 而那份未导出、跨包用不了）——改表时两处要一起改。
+func displayWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		w += runeDisplayWidth(r)
+	}
+	return w
+}
+
+// runeDisplayWidth 是 displayWidth 的单字符版本；范围按 Unicode East Asian Width 的宽/全角块
+// 与常见 emoji 块整理，够覆盖 doctor 的名称与详情。
+func runeDisplayWidth(r rune) int {
+	switch {
+	case r < 0x20 || (r >= 0x7F && r < 0xA0): // C0/C1 控制字符
+		return 0
+	case r == 0x200B || r == 0x200C || r == 0x200D || r == 0xFEFF: // 零宽字符
+		return 0
+	case r >= 0x0300 && r <= 0x036F: // 组合记号
+		return 0
+	}
+	switch {
+	case r >= 0x1100 && r <= 0x115F, // 谚文字母
+		r >= 0x2E80 && r <= 0x303E,   // CJK 部首、康熙部首、CJK 符号与标点
+		r >= 0x3041 && r <= 0x33FF,   // 假名、注音、CJK 兼容
+		r >= 0x3400 && r <= 0x4DBF,   // CJK 扩展 A
+		r >= 0x4E00 && r <= 0x9FFF,   // CJK 基本区
+		r >= 0xA000 && r <= 0xA4CF,   // 彝文
+		r >= 0xAC00 && r <= 0xD7A3,   // 谚文音节
+		r >= 0xF900 && r <= 0xFAFF,   // CJK 兼容表意文字
+		r >= 0xFE10 && r <= 0xFE19,   // 竖排标点
+		r >= 0xFE30 && r <= 0xFE6F,   // CJK 兼容形式
+		r >= 0xFF00 && r <= 0xFF60,   // 全角 ASCII
+		r >= 0xFFE0 && r <= 0xFFE6,   // 全角符号
+		r >= 0x1F300 && r <= 0x1F64F, // emoji
+		r >= 0x1F900 && r <= 0x1F9FF, // emoji 补充
+		r >= 0x20000 && r <= 0x3FFFD: // CJK 扩展 B 及以上
+		return 2
+	}
+	return 1
+}
+
+// padDisplay 在右侧补空格，让结果至少占 width 个显示列；已经够宽时原样返回——宁可让这一行
+// 变宽，也不截断信息。
+func padDisplay(s string, width int) string {
+	if n := width - displayWidth(s); n > 0 {
+		return s + strings.Repeat(" ", n)
+	}
+	return s
+}
+
+// wrapDisplay 把文本按显示列宽折成若干行：只在整字符边界断开（详情中英混排、以无空格的中文
+// 为主，不做词法断行）；断行处若是空格就丢掉，续行的缩进由调用方补。单字符本身超宽时允许该行
+// 变宽（与 padDisplay 同一取舍：不丢信息）。空串返回 nil。
+func wrapDisplay(s string, width int) []string {
+	if s == "" {
+		return nil
+	}
+	if width < 1 {
+		return []string{s}
+	}
+	var (
+		out  []string
+		cur  strings.Builder
+		used int
+	)
+	for _, r := range s {
+		w := runeDisplayWidth(r)
+		if used+w > width && cur.Len() > 0 {
+			out = append(out, strings.TrimRight(cur.String(), " "))
+			cur.Reset()
+			used = 0
+			if r == ' ' {
+				continue
+			}
+		}
+		cur.WriteRune(r)
+		used += w
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }
 
 // checkMuxTools 检查混流工具：ffmpeg 必需（含杜比视界支持探测），mp4box 仅在部分场景需要。

@@ -33,7 +33,7 @@ func stubDoctorChecks(t *testing.T) {
 
 // TestDoctorOutputGoesToConsoleAndLogFile：自检结果必须**同时**出现在终端与 --log-file 里。
 // 改前 doctor 直接 fmt.Fprintf(os.Stdout, ...) 绕过 logger：用户带 --log-file 跑完 doctor 提 issue 时，
-// 日志文件里恰恰缺了 [fail] 那几行——最该留下的东西没有留下。
+// 日志文件里恰恰缺了失败项那几行——最该留下的东西没有留下。
 //
 // 变异验证：把 runDoctor 的 util.Log/util.LogError 换回 fmt.Fprintf(os.Stdout, ...)，
 // 日志文件那一半断言变红（文件不会被写出/为空）。
@@ -58,7 +58,8 @@ func TestDoctorOutputGoesToConsoleAndLogFile(t *testing.T) {
 	}
 	logged := string(body)
 
-	for _, want := range []string{"[ok]", "假工具", "桩：一切正常", "[fail]", "假接口", "桩：被风控拦截(HTTP 412)", "存在阻塞性问题"} {
+	// 状态符号由 doctor_table_test.go 逐档钉住（+ / ! / x），这里只管「两处都拿得到」。
+	for _, want := range []string{"+ ", "假工具", "桩：一切正常", "x ", "假接口", "桩：被风控拦截(HTTP 412)", "存在阻塞性问题"} {
 		if !strings.Contains(console, want) {
 			t.Errorf("终端输出缺少 %q：%q", want, console)
 		}

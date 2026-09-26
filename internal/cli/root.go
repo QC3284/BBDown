@@ -141,7 +141,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.11.0",
+	Version: "2.11.1",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -235,19 +235,85 @@ func usageArgs(v cobra.PositionalArgs) cobra.PositionalArgs {
 	}
 }
 
-// reportError 按上游 SetExceptionHandler 的语义打印失败：消息 + 一句升级提示；
-// 只有用法错误才附 usage（Spectre 在解析失败时打印帮助文本）。失败细节（堆栈）不进
-// 终端——上游同样只把它写进日志文件。
+// 失败块的行首标签：两个字 + 全角冒号，建议与命令的内容因此从同一列开始（有序、好扫）。
+const (
+	errorAdviceLabel  = "提示："
+	errorCommandLabel = "命令："
+)
+
+// upgradeHint 是上游 SetExceptionHandler 的固定句：只在错误无法归类时保留。
+const upgradeHint = "请尝试升级到最新版本后重试!"
+
+// adviceInput 是「参数/输入」类的建议：用法错误与运行期输入错误共用同一条文案，
+// 「每类错误一种说法」靠共用常量钉住，而不是靠两处手写保持一致。
+const adviceInput = "检查下载目标与参数写法：URL、BV/av 号、分P 选择器"
+
+// reportError 按上游 SetExceptionHandler 的语义打印失败块：红底标题行（原因）→ 建议行 →
+// 可执行命令（给不出就省略第三行）。只有用法错误才附 usage（Spectre 在解析失败时打印帮助
+// 文本）。失败细节（堆栈）不进终端——上游同样只把它写进日志文件。
+//
+// 三段有序是有意的：改前是「原因 + 一句固定升级提示」，无论 412、断网还是目录不可写，用户
+// 拿到的下一步都一样。现在第二行按错误类型给建议、第三行给可以直接复制的命令，固定句退回
+// 兜底位置（只在无法归类时出现）。
 func reportError(err error, w io.Writer) {
-	// 上游 SetExceptionHandler 把这两行设成 ConsoleColor.Red 底 + White 字（都是亮色档，
-	// 对应 ANSI 101/97）——它是给用户的行动指引，不该淹没在普通日志里。
+	// 上游 SetExceptionHandler 把「异常那一行」设成 ConsoleColor.Red 底 + White 字（都是亮色档，
+	// 对应 ANSI 101/97）——它是给用户的行动指引，不该淹没在普通日志里。只有原因行保留红底：
+	// 建议与命令是正文，整块刷红反而看不清。
 	fmt.Fprintln(w, util.AnsiBgRed+util.AnsiWhite+err.Error()+util.AnsiReset)
+	advice, command := errorAdvice(err)
+	fmt.Fprintln(w, errorAdviceLabel+advice)
+	if command != "" {
+		fmt.Fprintln(w, errorCommandLabel+command)
+	}
 	var ue usageError
 	if errors.As(err, &ue) {
 		fmt.Fprintln(w, rootCmd.UsageString())
-		return
 	}
-	fmt.Fprintln(w, util.AnsiBgRed+util.AnsiWhite+"请尝试升级到最新版本后重试!"+util.AnsiReset)
+}
+
+// errorAdvice 按错误给出「下一步做什么」：建议（第 2 行）+ 可执行命令（第 3 行，可为空）。
+//
+// 失败来自解析/下载/混流多层，都是 fmt.Errorf 拼出来的文本，没有统一的错误类型可判；这里按
+// 错误文本里的确定性标记归类，判断顺序（风控 → 读写权限 → 网络 → 参数 → 登录态）即优先级：
+//   - 412 的文案自带「更换网络出口」字样，风控必须排在网络之前；
+//   - IO 错误（permission denied 等）比网络错误更具体，也排在网络之前；
+//   - 登录态兜在最后，让「需要大会员权限」这类内容错误按最贴切的那一类给建议。
+func errorAdvice(err error) (advice, command string) {
+	// 用法错误（未知标志/参数个数不对）的消息形态由 cobra 决定，不能只靠文本标记：按类型先判。
+	var ue usageError
+	if errors.As(err, &ue) {
+		return adviceInput, "bbdown --help"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case containsAny(msg, "412", "风控"):
+		return "疑似触发 B 站风控：等几分钟到几十分钟再试，或更换网络出口（连续重试会加重风控）", "bbdown doctor"
+	case containsAny(msg, "permission denied", "access is denied", "read-only file system", "no space left on device", "不可写"):
+		return "检查输出目录是否可写、磁盘是否还有余量，或用 --work-dir 换到可写目录", "bbdown doctor"
+	case containsAny(msg,
+		"dial tcp", "connection refused", "connection reset", "connection timed out",
+		"no such host", "i/o timeout", "context deadline exceeded", "tls handshake", "x509:",
+		"proxyconnect", "network is unreachable", "no route to host", "unexpected eof",
+		"请求超时", "连接超时"):
+		return "检查网络、代理与 TLS 证书：DNS 解析失败、连接被拒、超时都属这一层", "bbdown doctor"
+	case containsAny(msg, "输入有误", "无法识别", "格式不正确", "请提供视频地址", "unknown flag",
+		"unknown command", "invalid argument", "flag needs an argument", "参数", "不合法"):
+		return adviceInput, "bbdown --help"
+	case containsAny(msg, "未登录", "登录已过期", "请先登录", "登录态", "cookie 已过期", "sessdata", "大会员", "需要登录", "credential", "凭据"):
+		return "登录态缺失或已过期：扫码登录后再试（高清与字幕需要登录）", "bbdown login"
+	}
+	// 归不了类的才退回上游那句固定提示；给不出可执行命令就不打第三行。
+	return upgradeHint, ""
+}
+
+// containsAny 判断 s（调用方已转小写）是否含任一标记。
+func containsAny(s string, markers ...string) bool {
+	for _, m := range markers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // silenceOnCancel 在错误是用户 Ctrl+C 取消时，屏蔽 cobra 自带的 "Error: ..."
@@ -507,7 +573,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.11.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.11.1")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。

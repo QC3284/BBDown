@@ -80,7 +80,8 @@ func TestDoctorReportsLoggedInState(t *testing.T) {
 func TestDoctorWarnsWhenNotLoggedIn(t *testing.T) {
 	nav := strings.ReplaceAll("{'code':0,'data':{'isLogin':false}}", "'", string('"'))
 	out, code := doctorWith(t, true, nav, 0)
-	if !strings.Contains(out, "未登录") || !strings.Contains(out, "[warn]") {
+	// 状态符号见 doctor_table_test.go：warn 是「!」，行首符号 + 对齐的名称列。
+	if !strings.Contains(out, "未登录") || !strings.Contains(out, "! 接口/登录态") {
 		t.Errorf("未登录应当是 warn 并给出登录指引，实际输出：%s", out)
 	}
 	if code != 0 {
@@ -105,7 +106,7 @@ func TestDoctorFailsWhenFFmpegMissing(t *testing.T) {
 
 	nav := strings.ReplaceAll("{'code':0,'data':{'isLogin':true,'uname':'t','vipStatus':0}}", "'", string('"'))
 	out, code := doctorWith(t, false, nav, 0)
-	if !strings.Contains(out, "[fail]") || !strings.Contains(out, "未找到") {
+	if !strings.Contains(out, "x ffmpeg") || !strings.Contains(out, "未找到") {
 		t.Errorf("缺少 ffmpeg 应当 fail，实际输出：%s", out)
 	}
 	if code != 1 {
