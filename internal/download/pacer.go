@@ -48,7 +48,62 @@ func (p progressPacer) Signals() <-chan struct{} {
 	return p.signals
 }
 
+// progressClock 是重绘循环需要的时间能力：取当前时刻、一次性延迟、周期心跳。
+// 生产走 realProgressClock；用例注入手动时钟（pacer_test.go 的 fakeProgressClock）后，
+// 帧节奏完全由用例推进——「一段时间里画了多少帧」这类判据不再随 runner 快慢漂移。
+type progressClock interface {
+	Now() time.Time
+	NewTimer(d time.Duration) progressTimer
+	NewTicker(d time.Duration) progressTicker
+}
+
+type progressTimer interface {
+	C() <-chan time.Time
+	Stop()
+}
+
+type progressTicker interface {
+	C() <-chan time.Time
+	Stop()
+}
+
+type realProgressClock struct{}
+
+func (realProgressClock) Now() time.Time { return time.Now() }
+
+func (realProgressClock) NewTimer(d time.Duration) progressTimer {
+	t := time.NewTimer(d)
+	return &realProgressTimer{timer: t, ch: t.C}
+}
+
+func (realProgressClock) NewTicker(d time.Duration) progressTicker {
+	t := time.NewTicker(d)
+	return &realProgressTicker{ticker: t, ch: t.C}
+}
+
+type realProgressTimer struct {
+	timer *time.Timer
+	ch    <-chan time.Time
+}
+
+func (t *realProgressTimer) C() <-chan time.Time { return t.ch }
+func (t *realProgressTimer) Stop()               { t.timer.Stop() }
+
+type realProgressTicker struct {
+	ticker *time.Ticker
+	ch     <-chan time.Time
+}
+
+func (t *realProgressTicker) C() <-chan time.Time { return t.ch }
+func (t *realProgressTicker) Stop()               { t.ticker.Stop() }
+
 // runProgressLoop 是两条下载路径共用的重绘循环：事件驱动 + 节流 + 静默心跳。
+// 时间走生产时钟；用例走 runProgressLoopWithClock（见 pacer_test.go）。
+func runProgressLoop(signals <-chan struct{}, done <-chan struct{}, heartbeat bool, line *progressLine, render func()) {
+	runProgressLoopWithClock(realProgressClock{}, signals, done, heartbeat, line, render)
+}
+
+// runProgressLoopWithClock 是 runProgressLoop 的实现，时间源可注入。
 //
 // 节奏：
 //
@@ -61,10 +116,10 @@ func (p progressPacer) Signals() <-chan struct{} {
 //     调用方据 stopped/finished 通道保证这一步先于后续日志。
 //
 // render 只在调用它的这条协程里执行，闭包里的帧序号、速度状态无需加锁。
-func runProgressLoop(signals <-chan struct{}, done <-chan struct{}, heartbeat bool, line *progressLine, render func()) {
-	last := time.Now()
+func runProgressLoopWithClock(clock progressClock, signals <-chan struct{}, done <-chan struct{}, heartbeat bool, line *progressLine, render func()) {
+	last := clock.Now()
 	var (
-		delayTimer *time.Timer
+		delayTimer progressTimer
 		delayC     <-chan time.Time
 	)
 	defer func() {
@@ -74,9 +129,9 @@ func runProgressLoop(signals <-chan struct{}, done <-chan struct{}, heartbeat bo
 	}()
 	var beatC <-chan time.Time
 	if heartbeat {
-		beat := time.NewTicker(idleHeartbeat)
+		beat := clock.NewTicker(idleHeartbeat)
 		defer beat.Stop()
-		beatC = beat.C
+		beatC = beat.C()
 	}
 
 	render() // 首帧：下载一开始进度条就在，而不是 125ms 后才出现
@@ -86,24 +141,33 @@ func runProgressLoop(signals <-chan struct{}, done <-chan struct{}, heartbeat bo
 			line.clear()
 			return
 		case <-signals:
-			elapsed := time.Since(last)
+			elapsed := clock.Now().Sub(last)
 			switch {
 			case elapsed >= minFrameInterval:
+				// 立即重绘前先撤掉在途的延迟 timer：不撤的话它随后还会响一次，在同一个
+				// 节流窗口里补画第二帧（全仓并行 + 并发编译的负载下实测「100 个信号
+				// 172ms 画出 14 帧」，超过 1 帧/16ms 的节流上界）。该 timer 只服务于
+				// 「距上一帧还差多少」，立即重绘后它已无意义。
+				if delayTimer != nil {
+					delayTimer.Stop()
+					delayTimer = nil
+					delayC = nil
+				}
 				render()
-				last = time.Now()
+				last = clock.Now()
 			case delayC == nil:
 				// 距上一帧太近：延迟到最小间隔再画，窗口内的信号被合并掉。
-				delayTimer = time.NewTimer(minFrameInterval - elapsed)
-				delayC = delayTimer.C
+				delayTimer = clock.NewTimer(minFrameInterval - elapsed)
+				delayC = delayTimer.C()
 			}
 		case <-delayC:
 			delayC = nil
 			render()
-			last = time.Now()
+			last = clock.Now()
 		case <-beatC:
-			if time.Since(last) >= idleHeartbeat {
+			if clock.Now().Sub(last) >= idleHeartbeat {
 				render()
-				last = time.Now()
+				last = clock.Now()
 			}
 		}
 	}

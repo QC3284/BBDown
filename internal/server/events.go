@@ -265,10 +265,14 @@ func writeEvent(w io.Writer, ev ServerEvent) error {
 
 // publishTaskEvent 把任务的当前状态推成一条事件。
 //
-// 进度粒度说明：download 层的逐字节进度没有对外 hook（本轮边界限定在 internal/server），
-// 所以进度事件发布在服务端**可观测**的边界上——入队、开始执行、拿到元数据、每件产物落盘、
-// 终止状态；downloaded 取产物字节数累计（API 的 TotalDownloadedBytes 字段，此前一直是 0）。
+// 进度粒度说明：这里发布的是**服务端边界**事件——入队、开始执行、拿到元数据、每件产物落盘、
+// 终止状态；downloaded 取产物字节数累计（也就是 API 的 TotalDownloadedBytes 字段），
 // 总量在没有可靠来源时保持 0（未知），页面据此显示「未知」而不是编一个数字。
+//
+// 逐字节的真实进度走**另一条帧**：下载层观察者 → progress.go 的 publishDownloadProgress，
+// 与这里发布的边界事件并存、字段语义不同（见 progress.go 顶部「两个进度口径」）。
+// 本函数是边界事件的唯一出口，**不要**把观察者的数字并进来：那会让 /get-tasks 与 SSE
+// 的口径混在一起（progress_contract_test.go 钉的就是这条边界）。
 func (s *APIServer) publishTaskEvent(typ string, task *DownloadTask, state string) {
 	if s.events == nil {
 		return

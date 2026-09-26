@@ -11,6 +11,31 @@ import (
 // 任务 Q：把下载层的「逐字节进度观察者」（download.ProgressEvent，见
 // internal/download/progressobserver.go）接到既有 SSE 进度流上。
 //
+// # 两个进度口径（有意不同，契约由 progress_contract_test.go 钉住）
+//
+//   - SSE 帧（GET /events 的 task_progress）：**真实字节进度**。percent 是 0~100，
+//     downloaded/total 是整份文件口径（含续传 base），与 --progress-json 逐字段同义；
+//     单一来源是下载层观察者。
+//   - 任务 API（/get-tasks 的 Progress / TotalDownloadedBytes）：**服务端边界值**。
+//     Progress 执行期间保持 0、只在任务成功时置 1.0（processTask）；TotalDownloadedBytes
+//     只随产物落盘累加（onArtifactSaved，同一路径去重）。两者都只反映「服务端可观测的边界」
+//     ——入队 / 开始执行 / 拿到元数据 / 每件产物落盘 / 终止，不是传输中的字节数。
+//
+// 为什么不把观察者的最新值回写任务字段（评估过的一致性方案①，未采用）：
+//
+//  1. ProgressEvent 没有**文件身份**，Current 是单个 DownloadFile 的整份文件口径
+//     （progressobserver.go）：一个任务要下多件产物（多 P / 分离音视频）时，把它写进
+//     任务级字段会让字节数在文件切换时回跳——除非再给观察者加「文件身份 + 何时收尾」的契约，
+//     那是 internal/download 的接口扩张，不在本文件范围内；
+//  2. aria2c 路径**没有**观察者（台账 §4.57 记的代价：黑盒，只有开始/结束），产物字节数
+//     是那里唯一的进度信号——回写会把这类任务的服务端进度永久钉在 0；
+//  3. /get-tasks 与 bbdown-tasks.json 是上游兼容的既有契约（Progress 0~1、字节数），
+//     改语义要动持久化记录与既有用例，而收益只是「轮询客户端也能看到实时百分比」——
+//     Web UI 与需要实时进度的客户端本来就该订阅 /events。
+//
+// 所以这里选择**显式声明 + 用例钉住**：契约写在 DownloadTask 的字段注释与本段，
+// 由 progress_contract_test.go 机械保证（观察者不改任务字段、SSE 帧不读任务字段）。
+//
 // 本文件只做两件事，且都是**新增**的：既有事件（task_start / 元数据 / 产物落盘 /
 // task_done / task_failed）的发布点与字段语义一个都没改（见 events.go 的
 // publishTaskEvent）——字节进度是同一任务上多出来的 task_progress 帧，不和它们抢位：

@@ -40,18 +40,33 @@ const (
 	finishedRetention  = 30 * 24 * time.Hour
 	callbackTimeout    = 2 * time.Minute
 	maxRequestBodySize = 64 << 10 // 64KB
+
+	// defaultTaskFileName 是完成任务清单的默认文件名。相对路径 → 落在 serve **进程的工作目录**
+	// （对真实用户是设计：清单跟着工作目录走）。声明成常量而不是字面量，是因为
+	// workdir_guard_test.go 的包级守卫要盯住这个名字——两处必须指向同一个名字。
+	defaultTaskFileName = "bbdown-tasks.json"
 )
 
 // DownloadTask tracks a single download operation (upstream JSON contract).
 type DownloadTask struct {
-	JobID                string     `json:"JobId"`
-	Aid                  string     `json:"Aid"`
-	URL                  string     `json:"Url"`
-	TaskCreateTime       int64      `json:"TaskCreateTime"`
-	Title                string     `json:"Title,omitempty"`
-	Pic                  string     `json:"Pic,omitempty"`
-	VideoPubTime         int64      `json:"VideoPubTime,omitempty"`
-	TaskFinishTime       int64      `json:"TaskFinishTime,omitempty"`
+	JobID          string `json:"JobId"`
+	Aid            string `json:"Aid"`
+	URL            string `json:"Url"`
+	TaskCreateTime int64  `json:"TaskCreateTime"`
+	Title          string `json:"Title,omitempty"`
+	Pic            string `json:"Pic,omitempty"`
+	VideoPubTime   int64  `json:"VideoPubTime,omitempty"`
+	TaskFinishTime int64  `json:"TaskFinishTime,omitempty"`
+	// 进度口径（契约由 progress_contract_test.go 钉住，理由见 progress.go 顶部注释）：
+	//   - Progress 是任务级进度的**服务端边界值**（0~1）：执行期间保持 0，只在任务成功时
+	//     置 1.0（见 processTask）。它**不是**实时字节进度；
+	//   - TotalDownloadedBytes 是**已落盘产物**的字节数合计（onArtifactSaved 累加、同一路径
+	//     去重），不是传输中的字节数；aria2c 路径没有逐字节观察者（§4.57），产物字节数
+	//     是那里唯一的进度信号。
+	// 实时字节进度只在 SSE（GET /events）的 task_progress 帧上：percent 0~100、
+	// downloaded/total 为整份文件口径（含续传 base），单一来源是下载层观察者。
+	// 两个口径**有意不同**——把观察者回写任务字段会让多产物任务的字节数回跳，也会让
+	// aria2c 任务的进度永远停在 0（详见 progress.go）。
 	Progress             float64    `json:"Progress"`
 	DownloadSpeed        string     `json:"DownloadSpeed,omitempty"`
 	TotalDownloadedBytes int64      `json:"TotalDownloadedBytes"`
@@ -193,7 +208,7 @@ func NewAPIServer(listenURL string, maxConcurrent int, serveToken, notifyWebhook
 		notifyWebhook: notifyWebhook,
 		semaphore:     make(chan struct{}, maxConcurrent),
 		acceptLimiter: make(chan struct{}, maxConcurrent*9),
-		taskFile:      "bbdown-tasks.json",
+		taskFile:      defaultTaskFileName,
 		auth:          newAuthGuard(),
 		queryLimiter:  make(chan struct{}, maxConcurrentQueries),
 		events:        newEventHub(maxEventClients),

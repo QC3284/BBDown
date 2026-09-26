@@ -44,6 +44,11 @@ type progressReader struct {
 	isTerminal bool
 	// json 为真时走逐行 JSON 事件（--progress-json），与终端无关。
 	json bool
+	// now 是结算速率窗口用的时间源，nil 表示真实墙钟。用例注入固定时钟后，「窗口长度」
+	// 就是输入的一部分，速率与 ETA 不再随 runner 快慢漂移——墙钟做分母时，-race / 慢
+	// runner 上的「10 MiB / 2s」会被算成 4.9 MB/s，让只断言格式的用例随机变红
+	// （见 progress_test.go 的 fakeClock）。
+	now func() time.Time
 	// observer 是上层（serve 的 SSE）挂进来的逐字节进度观察者，nil 表示没挂。
 	//
 	// 与终端进度帧 / JSON 事件走同一个渲染循环，所以回调天然在既有节流之后
@@ -153,7 +158,7 @@ func (pr *progressReader) renderLoop() {
 // 只由渲染协程调用（与改前一样，帧序号/速度状态是协程私有的），无需加锁。
 func (pr *progressReader) progressSnapshot() (downloaded int64, speedBps float64) {
 	current := atomic.LoadInt64(&pr.current)
-	now := time.Now()
+	now := pr.nowTime()
 	if elapsed := now.Sub(pr.lastTime).Seconds(); elapsed >= 1.0 {
 		delta := current - pr.lastBytes
 		if delta > 0 {
@@ -163,6 +168,15 @@ func (pr *progressReader) progressSnapshot() (downloaded int64, speedBps float64
 		pr.lastTime = now
 	}
 	return pr.withBase(current), pr.speedBps
+}
+
+// nowTime 返回结算时刻：默认真实墙钟；用例注入固定时钟（pr.now）后时间不再流逝，
+// 速率只由「字节增量 / 注入的窗口长度」决定。
+func (pr *progressReader) nowTime() time.Time {
+	if pr.now != nil {
+		return pr.now()
+	}
+	return time.Now()
 }
 
 // renderObserverLoop 是「无终端、无 --progress-json，只有观察者」时的渲染循环

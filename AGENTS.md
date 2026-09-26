@@ -83,6 +83,16 @@ go build ./... && go vet ./... && go test ./...
   `t.Skip` 保护并说明依赖。
 - 解析层改动优先接到 `internal/parser/testdata/` 的夹具回放基座上（`fixture_test.go`）。
 - 计时相关的用例把超时做成变量（如 `readStallTimeout`、`downloadStallTimeout`）以便测试收窄。
+- **判据必须跨平台**（两次真栽过：`2.12.1`/`2.12.2` 的工作目录守卫，同一提交在 ubuntu 绿、windows/macOS 红）：
+  1) 涉及**路径**的比较一律用 `os.Stat` + `os.SameFile`（比较底层对象），**禁止字符串相等**——macOS 上 `/var` 是 `/private/var` 的符号链，
+     `os.Chdir("/var/…")` 成功但 `os.Getwd()` 返回解析后的路径；Windows 盘符大小写与 8.3 短名同理；
+  2) 涉及**已删除目录中的 cwd**：Linux 的 `getcwd(2)` 返回 ENOENT（比较被短路 → 假绿）、Windows 返回已消失路径、macOS 保留 name cache——
+     不要依赖这些差异；
+  3) 涉及**时间/mtime 粒度**（NTFS 100ns / APFS 1ns / HFS+ 1s）、**权限与符号链接创建能力**（Windows 需特权）时，用显式 `t.Skipf` 写明原因，
+     不要靠「本机跑得过」；
+  4) 写守卫时**先列一张「判据 × 三平台语义」表**再写代码；表里有任何一条不一致，就把判据换成与平台无关的形式，或显式吸收该差异
+     （如字符串仅用于打印、判定改用底层对象比较）。
+     教训原文见 `docs/UPSTREAM_ALIGNMENT.md` §4.58 —— 其中最值得记的是：**这条规则在修复它自己的代码里复发过一次**。
 - **不要用固定 `time.Sleep` 等待异步副作用**：慢速 CI runner（尤其 windows-latest）上会变成时序竞态。
   改为轮询可观测的状态（磁盘字节数、channel 信号）并设上限。
 - **断言失败前先释放资源**：若被测协程还挂在网络上，`t.Fatal` 会走 defer（如 `srv.Close()`）等待挂起的 handler，

@@ -881,3 +881,104 @@ README 的「已知有意差异」，而 §4.32 那两条（下载 URL 的 Debug
 
 
 
+
+### 4.58 第五十三轮：守卫判据跨平台化（**修复，两轮**）
+
+工作目录守卫（防测试把状态文件写进包目录）第一版把「收尾时 cwd 与开始逐字相同」当判据 → 同一提交 ubuntu 绿 / windows 红 / macos 红：
+Linux 上目录被删后 getcwd 返回 ENOENT（比较被短路 → **假绿**）、Windows 返回已消失路径、macOS 保留 name cache 且解析符号链接。
+第二版改为「先还原、还原不了才红」，但「还原后是否仍等于原字符串」**再次平台相关**：macOS 上 /var 是 /private/var 的符号链，
+chdir 成功而 Getwd 返回解析路径。第三版抽 sameDir（os.Stat + os.SameFile 比较底层对象；不可解析时才退 EvalSymlinks/Clean）→ 三平台全绿。
+
+**机械规则已写进 AGENTS.md 测试纪律**：路径比较禁止字符串相等；写守卫前先列「判据 × 三平台语义」表；
+平台受限场景（Windows 建符号链接 / 删进程当前目录）显式 t.Skipf 写明原因。**最值得记的是：这条规则在修复它自己的代码里复发过一次。**
+
+### 4.57 第五十一/五十二轮：进度观察者、SSE 真实进度、测试卫生（**优化 + 修复**）
+
+- **进度观察者**：ProgressEvent{Current,Total,SpeedBps} + WithProgressObserver(ctx, fn) + ProgressObserverFromContext(ctx)；
+  context 携带、**无包级全局**（§4.56 的教训）；回调在既有节流之后（去掉节流 → 16MiB/35.8ms 产生 534 帧，用例上限 10 帧）；
+  单线程与多线程都覆盖，续传含 base，末帧计满。
+- **SSE 真实进度**：internal/server/progress.go 单一映射纯函数（total<=0 → percent/total 均 0、**不估算**；Current>Total 只夹 percent；NaN/Inf 归 0）
+  + 第二道节流（≥100ms/任务）。代价：aria2c 无逐字节观察者（黑盒）；节流丢帧不补发（成功路径由 task_done 兜底）；
+  观察者只覆盖真实下载阶段（解析/混流停在最后一帧）；/get-tasks 的 Progress 与 TotalDownloadedBytes 仍是**服务端边界值**
+  （与 SSE 数字不一致，**有意不改既有 API 契约**，由 progress_contract_test.go 机械钉住）。
+- **测试卫生**：internal/cli/.bbdown-pending.json 曾被误提交进 git（587bd09）；删文件 + 测试注入 t.TempDir() + 包级 TestMain 守卫
+  （cli 与 server 各一；server 侧覆盖 bbdown-tasks.json 与原子写临时文件）。实测：改前一次全量测试改写 2 个文件 → 改后 0 个。
+
+### 4.56 第五十轮：serve Web UI + SSE、机读模式输出分流（**新功能 + 修复**）
+
+- **GET /**：go:embed 单文件页面（无框架/无 CDN/离线可用，二进制 +8 KB）；未注册路径仍 404。
+- **GET /events**：task_start / task_progress / task_done / task_failed + hello 握手 + 25s 心跳；64 连接上限、单连接 64 帧队列
+  （满则丢帧不阻塞发布者）、回放 64 条 + 客户端按 seq 去重；percent 0~100 与 --progress-json 同口径；
+  页面与 /health 同级免 token，/events 带任务数据故配 token 时需带。**两条 C# 线都没有 Web UI/SSE，属有意新增。**
+- **机读模式 stdout 只留数据**（--info-json / doctor --json）：日志让位 stderr、横幅不打印；真机管道由 rc=1 变 rc=0。
+  **第一次尝试失败**（f828cba，已 revert）：把输出目标冻结在变量里 + 改全局状态不还原 → 破坏「替换 os.Stdout 捕获输出」的既有手法并跨用例泄漏；
+  第二次用「动态解析 + 作用域让位 + defer 还原」，并**先写守卫用例再动实现**。
+
+### 4.55 第四十九轮：进度条口径统一与宽度表收敛（**修复 + 有意偏离**）
+
+- **真实缺陷**：续传时终端百分比用「本次传输占比」而 --progress-json 用「含已就位字节的实际占比」，同一次续传两个数字。
+  统一为含 base 的实际进度（速率仍按本次增量）：实测 100MiB（已就位 50MiB、再读 10MiB）终端行 10.00% / ETA 00:00:18 → **60.00% / ETA 00:00:08**，与 JSON 一致。
+- **多线程聚合行**改用同一渲染路径；**宽度表**三份实现收敛到 download.DisplayWidth / PadDisplay
+  （跨包变异：改坏单一来源 → cli 与 workflow 的对齐用例同时红）。
+
+### 4.54 第四十八轮（续）：任务卡与进度条信息密度（**有意偏离上游排版**）
+
+任务卡（值列固定第 12 显示列、值过 SanitizeLogString 防伪造行；-I / --info-json / --print-urls 不打）
++ 进度条加总量与 ETA（速率口径与 --progress-json 统一为 delta/elapsed）。
+代价：续传 x/y 与 ETA 曾不含 base（已由 §4.55 修）；--hide-streams 时卡片省两条流行；页面级重试会重打卡片；聚合渲染曾是旧格式（已由 §4.55 统一）。
+
+### 4.53 第四十八轮：界面「清爽」三件（**有意偏离上游排版**）
+
+用户标准：清爽优先、简洁就算了——信息不砍，只做秩序。
+- **流列表 / 已选择的流**：去方括号、按显示宽度（中文/全角 2 列）对齐；四种行宽 4 种 → 1 种（70 列），码率列 4 位置 → 1 个；-I 的直链行未改。
+- **失败块**：原因（红底标题行）/ 提示（风控·权限·网络·参数·登录态 分类）/ 命令（可复制，给不出则省略）；固定句只在无法归类时保留。
+  归类是文本标记启发式——**只少给建议，不给错建议**。
+- **doctor 表格**：+ / ! / x 符号 + 名称列按最长名补位 + 详情列折行缩进；--json **逐字节未改**。
+
+### 4.52 第四十七轮：--info-json（**新功能**）
+
+解析结果机读化：标题/BV/aid/cid/分P/时长/视频轨道/音频轨道/分片；字段 snake_case 与 doctor --json、--progress-json 一致；
+空轨道写 [] 不写 null，空 clips 省略；只解析不下载、不打印人看列表。（输出分流后来由 §4.56 解决。）
+
+### 4.51 第四十六轮：收尾三件（**优化/修复**）
+
+M3U 时长改用真实分P时长；M3U 列表**读回旧文件并合并**（-p 1 重跑条目 1 → 3，不再缩减）；
+下载层 412 最终错误带可操作提示（提示语单一来源 util.StatusHint，非 412 逐字不变）。
+
+### 4.50 第四十五轮：三条线并行（**新功能 + 优化 + 有意偏离**）
+
+- Ctrl+C 双击语义（首次优雅取消 + 提示 / 二次强制退出 130 / 退出前恢复终端）——根因：signal.NotifyContext 第一次取消后不注销信号，第二次被吞；
+  首次取消退出码也补齐 130。
+- --write-m3u 侧车播放列表（按分P排序、按路径去重、写失败只告警）。
+- 重试分类（planTrackRetry 唯一决策点）：确定性 4xx **不重试**（上游 C# 连 4xx 一起重试——**有意偏离**）；网络错误有候选立刻换；
+  无候选短退避 ≤500ms；412 退避 1s→2s→4s 上限 8s 且需先成功轮换 UA。实测 403 GET 3→1、分片 9→3。
+
+### 4.49 第四十四轮：--log-file（**新功能，接线**）
+
+Logger.SetLogFile 早已实现（含写失败自动挂起与恢复提示），但**没有任何 CLI 入口**——加 --log-file 持久标志并在 PersistentPreRun 生效。
+
+### 4.48 第四十三轮：--nfo、--compat、帮助首屏（**新功能 + 界面**）
+
+--nfo 侧车元数据（Kodi/Emby/Jellyfin；失败只告警不影响下载）；--compat 选档避开 HDR Vivid/杜比视界（全被滤掉时原样返回，绝不把候选清空）；
+--help 首屏列出自研能力（**当时它们在帮助里完全不可见**），并加守卫用例防「做完不可见」。
+
+### 4.47 第四十二轮：新版字幕接口（protobuf，**新功能/对齐生态**）
+
+x/v2/subtitle/web/view 返回 protobuf；字段号取自 BBDownT 的 dmviewreply.proto（SubtitleWebReply{subtitle=1}、VideoSubtitle{subtitles=3}、
+SubtitleItem{lan=3,lanDoc=4,subtitleUrl=5}）。只手解三个字段（手写 varint），不引 protobuf 运行时；新接口优先、老三条回退；
+**只在有 cookie 时试**（匿名多打一次请求曾在 CI 挂过一次）。**未验证项**：字幕需登录，本机未登录，真机待复核。
+
+（注：本节起于文件末尾追加，编号与上面的降序排列不连续；`grep -n "^### 4\." 可查全部编号。）
+
+
+### 4.59 第五十四轮：进度节流真缺陷与时间判据去墙钟（**修复 + 测试基础设施**）
+
+- **真缺陷**：`pacer` 的「信号到达且窗口已过 → 立即重绘」分支没撤掉在途延迟 timer，timer 随后再响一次 → 同一个 16ms 窗口补画第二帧。
+  修法：立即重绘前 `delayTimer.Stop()` + 清空。根因确认方式很硬：旧判据在负载下偶发红（172ms 画 14 帧 > 上界 13），
+  先怀疑判据、后定位到实现——**「偶发红」的两种解释（判据太严 / 实现有 bug）必须用可注入时钟区分开**，不能靠放宽上界掩盖。
+- **测试基础设施**：`progressReader` 与 `pacer` 注入时钟；速率/ETA 改结构性判据（正数 + 输入推导区间 + 帧内自洽），
+  节流改确定性不变量（窗口未满只排 timer、同窗口合并、推过一窗补一帧、间隔 ≥ 0.8×）；7 处变异全断言红。
+  效果：`-race ./internal/download/` 由 FAIL 变连跑 3 次全绿；帧数用例 0.1~0.2s → 0.02s。
+- **跨平台**（U 交付的判据表）：注入时钟的窗口运算、float64 除法、Go 的格式化（不走 libc/locale）、ASCII 正则均三平台一致；
+  轮询上限只影响等待时长（Windows 粒度 ~15ms 只让它更慢，不参与判定）；本轮**未新增任何路径/权限/mtime 判据**，无需 `t.Skipf`。
+
