@@ -36,10 +36,11 @@ func TestEventTimestampShowsTimeOnlyByDefault(t *testing.T) {
 	l := NewLogger(nil)
 	out := captureStdout(t, func() { l.Log("事件 %d", 1) })
 
-	if want := "[19:19:41] 事件 1\n"; out != want {
+	if want := "19:19:41  事件 1\n"; out != want {
 		t.Errorf("默认事件行不符：\n得到 %q\n期望 %q", out, want)
 	}
-	for _, absent := range []string{"2026-09-26", ".967", " - "} {
+	// 方括号也去掉了：时间戳是次要信息（MUTED），方括号却给了它与正文同等的视觉重量。
+	for _, absent := range []string{"2026-09-26", ".967", " - ", "[", "]"} {
 		if strings.Contains(out, absent) {
 			t.Errorf("默认档位不该出现 %q：%q", absent, out)
 		}
@@ -55,7 +56,7 @@ func TestEventTimestampShowsDateAndMillisInDebug(t *testing.T) {
 	l := NewLogger(func() bool { return true })
 	out := captureStdout(t, func() { l.Log("事件") })
 
-	if want := "[2026-09-26 19:19:41.967] 事件\n"; out != want {
+	if want := "2026-09-26 19:19:41.967  事件\n"; out != want {
 		t.Errorf("--debug 事件行不符：\n得到 %q\n期望 %q", out, want)
 	}
 }
@@ -90,34 +91,50 @@ func TestContentLinesCarryNoTimestamp(t *testing.T) {
 	if out := captureStdout(t, func() { Content("内容 %s", "x") }); out != "内容 x\n" {
 		t.Errorf("内容行应当是裸文本 + 换行：%q", out)
 	}
-	// 非终端：着色参数被忽略（管道里不该出现 ANSI）。
-	out := captureStdout(t, func() { ContentColored(ContentCyan, "青色内容") })
-	if out != "青色内容\n" {
-		t.Errorf("非终端的内容行应当是纯文本：%q", out)
+	// 非终端：样式被忽略（管道里不该出现 ANSI），但版式一字不少——段标题的竖条、
+	// 分隔符、标签补白都是版式，降级只是不着色。
+	out := captureStdout(t, func() {
+		ContentStyled(TagMuted, "灰色内容")
+		ContentLine(NewLine().Add(TagBrand, "▎").Add(TagText, "段名").Add(TagMuted, "（6）"))
+	})
+	if out != "灰色内容\n▎段名（6）\n" {
+		t.Errorf("非终端的内容行应当是纯文本（版式不变）：%q", out)
 	}
 	if strings.Contains(out, "\x1b[") {
 		t.Errorf("非终端不该输出 ANSI 色码：%q", out)
 	}
 }
 
-// TestContentColorOnlyOnTerminalAndResetsBeforeNewline：TTY 下才着色，且颜色复位必须排在
-// 换行**之前**——套在整段末尾时复位会落到下一行行首，紧随其后的裸直链（fmt.Println 打的）
+// TestContentColorOnlyOnTerminalAndResetsBeforeNewline：能力允许时才着色，且颜色复位必须
+// 排在换行**之前**——套在整段末尾时复位会落到下一行行首，紧随其后的裸直链（fmt.Println 打的）
 // 就变成 "\x1b[0mhttp://…"，脚本按 ^http 取行全部落空。
 //
-// 变异验证：contentText 把 AnsiReset 拼在 text 之后（不拆换行）→ 最后两条断言红。
+// 分两段：单段样式（ContentStyled）与多段样式（ContentLine），两者的复位都要紧跟正文。
+//
+// 变异验证：把复位拼到换行之后（或让 Line 的复位延到行尾）→ 后两条断言红。
 func TestContentColorOnlyOnTerminalAndResetsBeforeNewline(t *testing.T) {
-	restore := SetTerminalForTest(func() bool { return true })
-	t.Cleanup(restore)
+	colorsOn256(t)
 
-	out := captureStdout(t, func() { ContentColored(ContentCyan, "青色内容") })
-	if want := AnsiCyan + "青色内容" + AnsiReset + "\n"; out != want {
-		t.Errorf("TTY 下的内容行不符：\n得到 %q\n期望 %q", out, want)
+	single := captureStdout(t, func() { ContentStyled(TagMuted, "灰色内容") })
+	if want := "\x1b[38;5;245m灰色内容" + AnsiReset + "\n"; single != want {
+		t.Errorf("TTY 下的单段内容行不符：\n得到 %q\n期望 %q", single, want)
 	}
-	if !strings.HasSuffix(out, AnsiReset+"\n") {
-		t.Errorf("颜色复位必须在换行之前：%q", out)
+	if !strings.HasSuffix(single, AnsiReset+"\n") {
+		t.Errorf("颜色复位必须在换行之前：%q", single)
 	}
-	if strings.HasPrefix(out, AnsiReset) {
-		t.Errorf("行首不该出现颜色复位：%q", out)
+	if strings.HasPrefix(single, AnsiReset) {
+		t.Errorf("行首不该出现颜色复位：%q", single)
+	}
+
+	// 末段着色时，复位同样要落在换行之前（多段行由 Line.Render 自己保证）。
+	multi := captureStdout(t, func() {
+		ContentLine(NewLine().Add(TagBrand, "▎").Add(TagText, "段名").Add(TagMuted, "（6）"))
+	})
+	if want := "\x1b[38;5;45m▎" + AnsiReset + "段名" + "\x1b[38;5;245m（6）" + AnsiReset + "\n"; multi != want {
+		t.Errorf("TTY 下的多段内容行不符：\n得到 %q\n期望 %q", multi, want)
+	}
+	if !strings.HasSuffix(multi, AnsiReset+"\n") {
+		t.Errorf("多段行的复位必须在换行之前：%q", multi)
 	}
 }
 
@@ -170,7 +187,7 @@ func TestContentBlockKeepsMultilineLayout(t *testing.T) {
 	SetProgressLineActive(true)
 	t.Cleanup(func() { SetProgressLineActive(false) })
 
-	block := "── 任务卡 ────\n 标题  x\n 音频流  M4A\n"
+	block := "▎任务卡\n     标题  x\n   音频流  M4A\n"
 	out := captureStdout(t, func() { ContentBlock(block) })
 	if want := "\n" + block; out != want {
 		t.Errorf("多行内容块应原样写出：\n得到 %q\n期望 %q", out, want)

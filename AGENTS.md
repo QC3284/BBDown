@@ -82,6 +82,8 @@ go build ./... && go vet ./... && go test ./...
 - 外部工具用**假可执行文件**（脚本 dump argv）而非真实调用；需要真实 ffmpeg 时用
   `t.Skip` 保护并说明依赖。
 - 解析层改动优先接到 `internal/parser/testdata/` 的夹具回放基座上（`fixture_test.go`）。
+- **验证「终端观感」必须看 TTY**：管道/重定向下按设计**无色**（`NO_COLOR`、`TERM=dumb`、非 TTY → 零 ANSI），所以用 `| sed 去 ANSI` 复核等于没看。
+  用 `script -qec "<cmd>" /dev/null` 抓伪终端，再对照「元素 × 色码」表；机器契约面（`-I` 裸 URL、`--print-urls`、`--info-json`、`--progress-json`）在管道下**逐字节不变**。
 - 计时相关的用例把超时做成变量（如 `readStallTimeout`、`downloadStallTimeout`）以便测试收窄。
 - **判据必须跨平台**（两次真栽过：`2.12.1`/`2.12.2` 的工作目录守卫，同一提交在 ubuntu 绿、windows/macOS 红）：
   1) 涉及**路径**的比较一律用 `os.Stat` + `os.SameFile`（比较底层对象），**禁止字符串相等**——macOS 上 `/var` 是 `/private/var` 的符号链，

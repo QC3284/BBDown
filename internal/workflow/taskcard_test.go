@@ -14,57 +14,77 @@ import (
 
 // ---- 纯函数：排版规则 ----
 
-// 值列按**显示宽度**对齐：全角标签「输出路径」（8 显示列）与 ASCII 标签「BV」（2 显示列）
-// 的值必须从同一列开始。
+// labelEndColumn 返回标签结束处的显示列（右对齐判据：所有行的标签结束在同一列）。
+func labelEndColumn(t *testing.T, line, label string) int {
+	t.Helper()
+	i := strings.Index(line, label)
+	if i < 0 {
+		t.Fatalf("行里没有标签 %q：%q", label, line)
+	}
+	return download.DisplayWidth(line[:i]) + download.DisplayWidth(label)
+}
+
+// valueColumn 返回值起始处的显示列（标签之后到第一个非空格字符）。
+func valueColumn(t *testing.T, line, label string) int {
+	t.Helper()
+	i := strings.Index(line, label)
+	if i < 0 {
+		t.Fatalf("行里没有标签 %q：%q", label, line)
+	}
+	rest := line[i+len(label):]
+	pad := len(rest) - len(strings.TrimLeft(rest, " "))
+	return download.DisplayWidth(line[:i]) + download.DisplayWidth(label) + pad
+}
+
+// TestRenderTaskCardAlignsValuesByDisplayWidth 钉住卡片的标签列：标签 MUTED 且**右对齐**到
+// 固定显示列，值从同一个显示列开始——全角标签「输出路径」（8 显示列）与 ASCII 标签「BV」
+// （2 显示列）的值必须从同一列开始。
 //
-// 变异验证：把 renderTaskCard 里的 download.PadDisplay 换回按字节补白（len(label)），
-// CJK 标签的补白消失，值列错位，本用例变红。
+// 变异验证：把 taskCardBlock 里的 download.PadDisplayLeft 换回按字节补白（len(label)）或
+// 换回左对齐（PadDisplay）→ 标签结束列/值列不再是同一个数，本用例红。
 func TestRenderTaskCardAlignsValuesByDisplayWidth(t *testing.T) {
 	out := renderTaskCard(taskCard{
 		Title:      "示例稿件",
 		Bvid:       "BV1xx411c7mD",
 		Owner:      "某某UP",
 		Page:       "P2/共12P 第二话",
-		Video:      "1080P 高清 · 1920x1080 · 60fps · avc1.640032 · 2000 kbps · ~1.22 MB",
-		Audio:      "M4A · 64 kbps · ~80.00 KB",
+		Video:      "1080P 高清 · 1920x1080 · 60fps · avc1.640032 · 2000 kbps · 1.22 MB",
+		Audio:      "M4A · 64 kbps · 80.00 KB",
 		OutputPath: "out/示例稿件.mp4",
 	})
 	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
 	if lines[0] != taskCardHeader {
-		t.Fatalf("首行应是卡片表头 %q，实际 %q", taskCardHeader, lines[0])
+		t.Fatalf("首行应是卡片段标题 %q，实际 %q", taskCardHeader, lines[0])
 	}
 	labels := []string{"标题", "BV", "UP", "分P", "视频流", "音频流", "输出路径"}
 	if len(lines) != len(labels)+1 {
-		t.Fatalf("应有表头 + %d 行，实际 %d 行：%q", len(labels), len(lines)-1, out)
+		t.Fatalf("应有段标题 + %d 行，实际 %d 行：%q", len(labels), len(lines)-1, out)
 	}
 
-	col := -1
+	const (
+		wantLabelEnd = 1 + 8 // 缩进 1 显示列 + 标签列宽 8 显示列（「输出路径」= 8 列）
+		wantValueCol = wantLabelEnd + taskCardGap
+	)
 	for i, ln := range lines[1:] {
 		label := labels[i]
-		if !strings.HasPrefix(ln, taskCardIndent+label) {
-			t.Fatalf("第 %d 行的标签不是 %q：%q", i+1, label, ln)
+		if got := labelEndColumn(t, ln, label); got != wantLabelEnd {
+			t.Errorf("第 %d 行的标签 %q 结束在第 %d 显示列，期望第 %d 列（右对齐）：%q",
+				i+1, label, got, wantLabelEnd, ln)
 		}
-		rest := ln[len(taskCardIndent)+len(label):] // label 是前缀，按字节切安全
-		pad := len(rest) - len(strings.TrimLeft(rest, " "))
-		got := download.DisplayWidth(taskCardIndent+label) + pad
-		if col < 0 {
-			col = got
-			continue
-		}
-		if got != col {
-			t.Errorf("值列没有对齐：%q 的值从第 %d 显示列开始，其余行是第 %d 列", ln, got, col)
+		if got := valueColumn(t, ln, label); got != wantValueCol {
+			t.Errorf("第 %d 行的值从第 %d 显示列开始，其余行是第 %d 列：%q", i+1, got, wantValueCol, ln)
 		}
 	}
 }
 
 // 字段缺失（没有 BV / 音频流 / 输出路径，或单P 稿件没有分P 行）时整行省略，不留「只有标签」的空行。
 //
-// 变异验证：把 renderTaskCard 里的 continue 删掉（空值也写一行）→ 与 want 不等，本用例变红。
+// 变异验证：把 taskCardBlock 里的 continue 删掉（空值也写一行）→ 与 want 不等，本用例变红。
 func TestRenderTaskCardOmitsMissingRows(t *testing.T) {
 	out := renderTaskCard(taskCard{Title: "t", Video: "1080P 高清"})
 	want := taskCardHeader + "\n" +
-		taskCardIndent + "标题" + strings.Repeat(" ", taskCardLabelWidth-download.DisplayWidth("标题")+taskCardGap) + "t\n" +
-		taskCardIndent + "视频流" + strings.Repeat(" ", taskCardLabelWidth-download.DisplayWidth("视频流")+taskCardGap) + "1080P 高清\n"
+		"     标题  t\n" + // 缩进 1 + 右对齐补 4（标题 4 显示列）+ 间隔 2
+		"   视频流  1080P 高清\n" // 缩进 1 + 右对齐补 2（视频流 6 显示列）+ 间隔 2
 	if out != want {
 		t.Errorf("缺失字段没有整行省略：\n got %q\nwant %q", out, want)
 	}

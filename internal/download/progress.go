@@ -10,12 +10,20 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/QC3284/BBDown/internal/util"
 	"golang.org/x/term"
 )
 
+// 进度条的字符与宽度。
+//
+// 填充 █ / 轨道 ░ 是**版式**而不是颜色：无色能力下（NO_COLOR / 管道 / TERM=dumb）它们照旧，
+// 日志里肉眼看进度也不靠颜色。20 格是有意的：40 格把「进度条 + 信息段」推到 80 列之外，
+// 在标准终端上会折行，原地重绘因此留下两行残影。
 const (
-	progressBlocks = 40
+	progressBlocks = 20
 	progressChars  = "|/-\\"
+	progressFill   = "█"
+	progressTrack  = "░"
 )
 
 // progressReader wraps an io.Reader and shows a progress bar.
@@ -257,43 +265,77 @@ func progressPercent(downloaded, total int64) float64 {
 // renderProgressFrame 渲染整帧：进度条 + 动画字符 + 信息段。单线程读取与多线程聚合
 // 两条路径共用（单一来源）——同一次下载在多线程下看到的进度行必须与单线程下逐字同格式。
 //
+// 颜色角色：填充 BRAND（进度是导航类信息）、轨道 MUTED、百分比 BOLD（关键值）、
+// 其余（动画字符/速率/ETA/总量）MUTED。周期表里的 5 个角色只用到这里声明的这 3 个，
+// 状态色不参与进度（进度不是「成功/警告/错误」）。
+//
 // 顶格渲染：改前这里硬编码 28 个空格去对齐旧日志前缀（"[日期 时分秒.毫秒] - "，恰好 28 列），
-// 时间戳缩短到 [时分秒] 之后这 28 列不再对齐任何东西，还把「40 列进度条 + 信息段」推到
-// 80 列终端之外换行。进度行是原地重绘的过场，不参与内容的层级缩进。
+// 时间戳缩短后这 28 列不再对齐任何东西，还把「40 列进度条 + 信息段」推到 80 列终端之外换行。
+// 进度行是原地重绘的过场，不参与内容的层级缩进。
 func renderProgressFrame(downloaded, total int64, speedBps float64, anim byte) string {
+	return progressFrameLine(downloaded, total, speedBps, anim).Render()
+}
+
+// progressFrameLine 是进度帧的分段形态（见 renderProgressFrame 的角色说明）。
+//
+// 动画字符跟在进度条后面，是**卡住时的生命体征**：帧由数据到达驱动，静默心跳会重画同一帧；
+// 没有它，一次停滞的下载在终端上与「正在跑」完全一样（这条不在设计稿的示例里，
+// 是刻意保留的功能线索）。
+func progressFrameLine(downloaded, total int64, speedBps float64, anim byte) util.Line {
 	blocks := int(progressPercent(downloaded, total) * progressBlocks)
-	bar := strings.Repeat("#", blocks) + strings.Repeat("-", progressBlocks-blocks)
-	return fmt.Sprintf("[%s] %c%s", bar, anim, renderProgressInfo(progressFrame{
+	line := util.NewLine().
+		Add(util.TagBrand, strings.Repeat(progressFill, blocks)).
+		Add(util.TagMuted, strings.Repeat(progressTrack, progressBlocks-blocks)).
+		Addf(util.TagMuted, " %c", anim).
+		Add(util.TagMuted, progressInfoGap) // 动画字符与信息段之间固定两列
+	return line.AddLine(progressInfoLine(progressFrame{
 		speedBps:   speedBps,
 		downloaded: downloaded,
 		total:      total,
 	}))
 }
 
-// renderProgressInfo 渲染进度行的信息段：
+// progressInfoGap 是进度条/动画字符与信息段之间的固定间隔。
+const progressInfoGap = "  "
+
+// 信息段各字段的固定宽度：百分比 6（整数位 + 小数位）+"%" / 速率 9 / ETA 12 / 总量 14。
 //
-//	50.00%  1.2 MB/s ETA 00:03:12 25.0/50.0 MB
+// 百分比取 %6.1f 而不是 %5.1f：100.0 是 5 位，加上 "%" 就是 6 列，用 5 位宽时**最后一帧**
+// 会把整行撑长一列，右侧总量跟着跳一格（真机抓帧里看得见：动画字符与 `100.0%` 贴死）。
+// 进度行是原地重绘的，宽度固定的字段越多，整行看起来越稳。
+const (
+	progressPercentFormat = "%6.1f%%"
+	progressSpeedFormat   = "  %9s"
+	progressETAFormat     = "  %12s"
+	progressAmountFormat  = "  %14s"
+)
+
+// renderProgressInfo 渲染进度行的信息段（纯文本形态）：
+//
+//	50.0%   1.2 MB/s  ETA 00:03:12   25.0/50.0 MB
 //
 // 省略规则（用例钉住）：速率未知（下载头一秒、或整段时间没有数据）就不显示速率与 ETA——
 // 没有速率算不出剩余时间；总量未知（拿不到 Content-Length 的路径）就不显示 x/y。
-// 百分比用 %6.2f 右对齐、速率右对齐到固定宽度，后面的 ETA 与总量才不会随数字位数左右抖动。
-func renderProgressInfo(f progressFrame) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%6.2f%%", progressPercent(f.downloaded, f.total)*100)
+// 每个字段都右对齐到固定宽度，数字位数变化时后面的列一律不动——列一抖整行就看起来在跳。
+func renderProgressInfo(f progressFrame) string { return progressInfoLine(f).Plain() }
+
+// progressInfoLine 是信息段的分段形态：百分比 BOLD，其余 MUTED。
+func progressInfoLine(f progressFrame) util.Line {
+	line := util.NewLine().Addf(util.TagTextBold, progressPercentFormat, progressPercent(f.downloaded, f.total)*100)
 	if f.speedBps > 0 {
-		fmt.Fprintf(&b, " %9s", formatSpeed(f.speedBps)+"/s")
+		line = line.Addf(util.TagMuted, progressSpeedFormat, formatSpeed(f.speedBps)+"/s")
 		if f.total > 0 {
 			remaining := f.total - f.downloaded
 			if remaining < 0 {
 				remaining = 0 // 末帧可能瞬时越过总长（分片计数先加后校验），夹到 0 而不是负 ETA
 			}
-			fmt.Fprintf(&b, " ETA %s", formatETA(float64(remaining)/f.speedBps))
+			line = line.Addf(util.TagMuted, progressETAFormat, "ETA "+formatETA(float64(remaining)/f.speedBps))
 		}
 	}
 	if f.total > 0 {
-		fmt.Fprintf(&b, " %s", formatTransferAmounts(f.downloaded, f.total))
+		line = line.Addf(util.TagMuted, progressAmountFormat, formatTransferAmounts(f.downloaded, f.total))
 	}
-	return b.String()
+	return line
 }
 
 // formatETA 把剩余秒数写成 hh:mm:ss（四舍五入到秒）。

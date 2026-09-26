@@ -13,6 +13,9 @@ import (
 	"github.com/QC3284/BBDown/internal/entity"
 )
 
+// eventStampRe 匹配事件行的时间戳前缀（"22:48:42  "）：稿件头/卡片都是内容行，不带它。
+var eventStampRe = regexp.MustCompile("^[0-9]{2}:[0-9]{2}:[0-9]{2}  ")
+
 // captureStdout 把 os.Stdout 换成管道，收集 fn 期间的全部终端输出。
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
@@ -55,11 +58,12 @@ func TestPrintVideoHeaderMatchesTargetForm(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("稿件头应当是「标题行 + 信息行」两行，实际 %d 行：%q", len(lines), out)
 	}
-	if !strings.HasPrefix(lines[0], "── 示例稿件 ") || !strings.HasSuffix(lines[0], "─") {
-		t.Errorf("首行应是标题行 ── 示例稿件 ────：%q", lines[0])
+	// 段标题是 1 字符竖条 ▎ + 标题（改前是补到 45 列的长横线 ── 标题 ────）。
+	if lines[0] != "▎示例稿件" {
+		t.Errorf("首行应是段标题 ▎示例稿件：%q", lines[0])
 	}
 	// 日期用本地时区的 YYYY-MM-DD（用例与实现取同一个时区，跨时区 CI 不会假红）。
-	wantInfo := " UP 碧诗 · P1/1 · 34:15 · BV17x411w7KC · " + time.Unix(vInfo.PubTime, 0).Format("2006-01-02")
+	wantInfo := "  UP 碧诗 · P1/1 · 34:15 · BV17x411w7KC · " + time.Unix(vInfo.PubTime, 0).Format("2006-01-02")
 	if lines[1] != wantInfo {
 		t.Errorf("信息行不符：\n得到 %q\n期望 %q", lines[1], wantInfo)
 	}
@@ -67,8 +71,12 @@ func TestPrintVideoHeaderMatchesTargetForm(t *testing.T) {
 		t.Errorf("发布日期应是 YYYY-MM-DD 结尾：%q", lines[1])
 	}
 	// 内容行不带时间戳前缀（改前每条都带 28 字符的 [日期 时分秒.毫秒] - ）。
-	if strings.Contains(out, "] ") {
-		t.Errorf("稿件头不该带日志时间戳前缀：%q", out)
+	// 事件时间戳的形态是 "HH:MM:SS  "（无方括号），这里按形态判，而不是找一个可能被
+	// 排版顺带带出来的字符组合。
+	for _, line := range lines {
+		if eventStampRe.MatchString(line) {
+			t.Errorf("稿件头不该带日志时间戳前缀：%q", line)
+		}
 	}
 
 	// 国际版不打印 bilibili.com 的 BV（上游 !myOption.UseIntlApi 条件）。
@@ -89,7 +97,7 @@ func TestVideoInfoRowOmitsEmptyFields(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("应有两行（标题行 + 信息行），实际 %q", out)
 	}
-	if want := " UP 12345 · P2/1 · 1:05 · BV17x411w7KC"; lines[1] != want {
+	if want := "  UP 12345 · P2/1 · 1:05 · BV17x411w7KC"; lines[1] != want {
 		t.Errorf("缺少 UP 名时应退回 mid、无发布日期时不留尾部：\n得到 %q\n期望 %q", lines[1], want)
 	}
 	if strings.Contains(out, "[]") || strings.Contains(out, "  ·") || strings.HasSuffix(strings.TrimSpace(lines[1]), "·") {

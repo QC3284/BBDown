@@ -142,7 +142,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.12.5",
+	Version: "2.12.6",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -267,28 +267,33 @@ const upgradeHint = "请尝试升级到最新版本后重试!"
 // 「每类错误一种说法」靠共用常量钉住，而不是靠两处手写保持一致。
 const adviceInput = "检查下载目标与参数写法：URL、BV/av 号、分P 选择器"
 
-// reportError 按上游 SetExceptionHandler 的语义打印失败块：红底标题行（原因）→ 建议行 →
-// 可执行命令（给不出就省略第三行）。只有用法错误才附 usage（Spectre 在解析失败时打印帮助
-// 文本）。失败细节（堆栈）不进终端——上游同样只把它写进日志文件。
+// reportError 打印失败块：原因行（✗ + 错误色 + BOLD）→ 建议行 → 可执行命令（给不出就省略
+// 第三行）。只有用法错误才附 usage（Spectre 在解析失败时打印帮助文本）。失败细节（堆栈）
+// 不进终端——上游同样只把它写进日志文件。
+//
+// 着色走与内容通道同一份能力判定（util.ColorsEnabled）。改前原因行是 Red 底 + White 字的
+// 反白块（ANSI 101/97）：整块背景色把终端里其它信息压下去，且与本仓「不使用背景色」的
+// 主题冲突——现在用错误色的 ✗ + BOLD 表达「这是失败」，明度层级不变。
 //
 // 三段有序是有意的：改前是「原因 + 一句固定升级提示」，无论 412、断网还是目录不可写，用户
 // 拿到的下一步都一样。现在第二行按错误类型给建议、第三行给可以直接复制的命令，固定句退回
 // 兜底位置（只在无法归类时出现）。
 func reportError(err error, w io.Writer) {
-	// 上游 SetExceptionHandler 把「异常那一行」设成 ConsoleColor.Red 底 + White 字（都是亮色档，
-	// 对应 ANSI 101/97）——它是给用户的行动指引，不该淹没在普通日志里。只有原因行保留红底：
-	// 建议与命令是正文，整块刷红反而看不清。
-	fmt.Fprintln(w, util.AnsiBgRed+util.AnsiWhite+err.Error()+util.AnsiReset)
+	fmt.Fprintln(w, util.TagErrorBold.Apply(errorMarker+err.Error()))
 	advice, command := errorAdvice(err)
-	fmt.Fprintln(w, errorAdviceLabel+advice)
+	// 标签 MUTED、值是正文：这与卡片/信息行是同一套层级（标签是次要信息，内容才是正文）。
+	fmt.Fprintln(w, util.NewLine().Add(util.TagMuted, errorAdviceLabel).Add(util.TagText, advice).Render())
 	if command != "" {
-		fmt.Fprintln(w, errorCommandLabel+command)
+		fmt.Fprintln(w, util.NewLine().Add(util.TagMuted, errorCommandLabel).Add(util.TagTextBold, command).Render())
 	}
 	var ue usageError
 	if errors.As(err, &ue) {
 		fmt.Fprintln(w, rootCmd.UsageString())
 	}
 }
+
+// errorMarker 是失败块原因行的行首标记（与事件通道的 LogError 同一个符号）。
+const errorMarker = "✗ "
 
 // errorAdvice 按错误给出「下一步做什么」：建议（第 2 行）+ 可执行命令（第 3 行，可为空）。
 //
@@ -669,7 +674,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	updateCheck(context.Background(), client, "v2.12.5")
+	updateCheck(context.Background(), client, "v2.12.6")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。
@@ -701,13 +706,39 @@ type batchSummary struct {
 	products int
 }
 
-// formatBatchSummary 把收尾统计拼成一行。耗时按 100ms 取整：一次批量下载报「1m2.3s」
-// 足够，没必要把亚毫秒抖动写进去。
+// elapsedUnknown 表示「这次收尾没有耗时可报」（如稍后再看的汇总：调用点拿不到时长）。
+// 与 productsUnknown 同一约定：负数 = 这一项不报，而不是报一个假 0。
+const elapsedUnknown = time.Duration(-1)
+
+// formatBatchSummary 把收尾统计拼成一行纯文本（着色形态见 batchSummaryLine）。
+// 耗时按 100ms 取整：一次批量下载报「1m2.3s」足够，没必要把亚毫秒抖动写进去。
 func formatBatchSummary(stats batchSummary) string {
-	line := fmt.Sprintf("下载完成：成功 %d 个，失败 %d 个，耗时 %s",
-		stats.succeeded, stats.failed, stats.elapsed.Round(100*time.Millisecond))
+	return batchSummaryLine("下载完成", stats).Plain()
+}
+
+// batchSummaryLine 渲染收尾汇总行：`✓ 下载完成   成功 1 · 失败 0 · 1.8s`。
+//
+// 角色：✓ 走成功色、文案 BOLD（这是本轮最重要的结论）、统计 MUTED（数字是次要信息）；
+// 有失败时标记换成 ⚠ + 警告色，且「失败 N」那一小段也走警告色——状态只用状态色表达，
+// 不靠把整行刷红。
+func batchSummaryLine(label string, stats batchSummary) util.Line {
+	marker, tag := "✓ ", util.TagSuccess
+	failedTag := util.TagMuted
+	if stats.failed > 0 {
+		marker, tag, failedTag = "⚠ ", util.TagWarn, util.TagWarn
+	}
+	line := util.NewLine().Add(tag, marker).Add(util.TagTextBold, label)
+	sep := func() { line = line.Add(util.TagMuted, " · ") }
+	line = line.Add(util.TagMuted, fmt.Sprintf("   成功 %d", stats.succeeded))
+	sep()
+	line = line.Add(failedTag, fmt.Sprintf("失败 %d", stats.failed))
 	if stats.products >= 0 {
-		line += fmt.Sprintf("，产出 %d 个文件", stats.products)
+		sep()
+		line = line.Add(util.TagMuted, fmt.Sprintf("产出 %d", stats.products))
+	}
+	if stats.elapsed >= 0 {
+		sep()
+		line = line.Add(util.TagMuted, stats.elapsed.Round(100*time.Millisecond).String())
 	}
 	return line
 }
@@ -755,7 +786,7 @@ func downloadTargets(ctx context.Context, cmd *cobra.Command, cfg config.MyOptio
 	// 任务 G-2：整批跑完时打一行收尾汇总（含部分失败——那正是要看到失败数的时候）。
 	// 被 Ctrl+C 打断时不打：「成功/失败数」没有意义，取消提示已由中断处理给出。
 	// 走内容通道（无时间戳）：汇总行是这次运行的结果，不是「发生了一件事」。
-	util.Content("%s", formatBatchSummary(batchSummary{
+	util.ContentLine(batchSummaryLine("下载完成", batchSummary{
 		succeeded: len(targets) - failures,
 		failed:    failures,
 		elapsed:   time.Since(started),

@@ -26,10 +26,10 @@ func TestPrintAllTracksMatchesUpstream(t *testing.T) {
 
 	out := captureStdout(t, func() { PrintAllTracks(result, 100, false) })
 	for _, want := range []string{
-		"── 可用背景音频流（1）",
-		"── 可用配音（1 · 每条 2 条流）",
-		"── 可用流（1）",
-		"── 可用音频流（1）",
+		"▎可用背景音频流（1）",
+		"▎可用配音（1 · 每条 2 条流）",
+		"▎可用流（1）",
+		"▎可用音频流（1）",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("清单缺少段标题 %q，实际输出 %q", want, out)

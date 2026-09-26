@@ -12,7 +12,7 @@ import (
 
 // taskCard 是「解析完成、开始下载前」那块紧凑信息卡的纯数据输入。
 //
-// 排版规则（字段缺失省略该行、标签按**显示宽度**对齐）全部放在纯函数 renderTaskCard 里：
+// 排版规则（字段缺失省略该行、标签按**显示宽度**右对齐）全部放在纯函数 renderTaskCard 里：
 // 调用点要经过整条解析/选流管线才走得到，而排版本身与管线无关，抽出来才能单测。
 type taskCard struct {
 	Title      string // 稿件标题（含 [试看] 之类已经生效的改动）
@@ -32,50 +32,63 @@ const (
 	taskCardGap        = 2
 )
 
-// taskCardHeader 是卡片的标题行，与流清单/分P 一样用 ── 标题 ──── 分隔（标题行不缩进）。
-var taskCardHeader = download.SectionTitle("任务卡")
+// taskCardHeader 是卡片的段标题，与流清单/分P 一样用 ▎ 竖条（标题行不缩进）。
+var taskCardHeader = download.Section{Name: "任务卡"}.Plain()
 
-// renderTaskCard 渲染任务卡：每个存在的字段一行，标签列对齐，值从固定的显示列开始。
+// taskCardRow 是卡片的一行字段：标签、值的样式角色、值本身。
+type taskCardRow struct {
+	label string
+	tag   util.Tag
+	value string
+}
+
+// taskCardRows 列出卡片的字段表。
 //
-// 返回整块文本（含末尾换行）。字段为空即整行省略——没有音频流、没有 BV、单P 稿件都不留空标签行。
-func renderTaskCard(c taskCard) string {
-	rows := []struct{ label, value string }{
-		{"标题", c.Title},
-		{"BV", c.Bvid},
-		{"UP", c.Owner},
-		{"分P", c.Page},
-		{"视频流", c.Video},
-		{"音频流", c.Audio},
-		{"输出路径", c.OutputPath},
+// 「关键值 BOLD」只给 BV 号：它是这张卡里唯一的**标识符**（输出路径又长又带用户名，
+// 加粗只会让整行变吵；标题是正文，加粗会与段标题同级）。
+func taskCardRows(c taskCard) []taskCardRow {
+	return []taskCardRow{
+		{"标题", util.TagText, c.Title},
+		{"BV", util.TagTextBold, c.Bvid},
+		{"UP", util.TagText, c.Owner},
+		{"分P", util.TagText, c.Page},
+		{"视频流", util.TagText, c.Video},
+		{"音频流", util.TagText, c.Audio},
+		{"输出路径", util.TagText, c.OutputPath},
 	}
-	var b strings.Builder
-	b.WriteString(taskCardHeader)
-	b.WriteByte('\n')
-	for _, r := range rows {
+}
+
+// renderTaskCard 渲染任务卡的纯文本形态（含末尾换行）。
+func renderTaskCard(c taskCard) string { return taskCardBlock(c).Plain() }
+
+// taskCardBlock 渲染任务卡：每个存在的字段一行，标签 MUTED 且**右对齐**到固定显示列，
+// 值从同一个显示列开始（值列因此严格上下对齐）。
+//
+// 字段为空即整行省略——没有音频流、没有 BV、单P 稿件都不留空标签行。
+func taskCardBlock(c taskCard) util.Block {
+	block := util.Block{download.Section{Name: "任务卡"}.Line()}
+	for _, r := range taskCardRows(c) {
 		if r.value == "" {
 			continue
 		}
-		b.WriteString(taskCardIndent)
-		// 补白复用流清单排版的同一套规则（download.PadDisplay）：全角标签算 2 显示列，
+		// 补白复用流清单排版的同一套规则（download.PadDisplayLeft）：全角标签算 2 显示列，
 		// 卡片与流清单不会各按各的口径对齐。
-		b.WriteString(download.PadDisplay(r.label, taskCardLabelWidth))
-		b.WriteString(strings.Repeat(" ", taskCardGap))
+		label := taskCardIndent + download.PadDisplayLeft(r.label, taskCardLabelWidth) + strings.Repeat(" ", taskCardGap)
 		// 值来自接口（标题/UP 名/路径都是服务端可控文本），而卡片是直接写终端的：
 		// 这里补上日志同款的清洗，免得标题里的换行或 ANSI 序列伪造出一行卡片（上游 RF-54/RF-70）。
-		b.WriteString(util.SanitizeLogString(r.value))
-		b.WriteByte('\n')
+		block = block.Add(util.NewLine().Add(util.TagMuted, label).Add(r.tag, util.SanitizeLogString(r.value)))
 	}
-	return b.String()
+	return block
 }
 
-// printTaskCard 把卡片原样写到控制台。
+// printTaskCard 把卡片写到控制台。
 //
-// 用 util.ContentBlock 而不是 util.Log：Log 会按「单行日志」清洗参数（控制字符变空格、连续空白折叠），
-// 多行且靠空白对齐的卡片会被压成一行。ContentBlock 走内容通道——无时间戳（卡片是结果不是事件），
+// 用 util.ContentBlockStyled 而不是 util.Log：Log 会按「单行日志」清洗参数（控制字符变空格、
+// 连续空白折叠），多行且靠空白对齐的卡片会被压成一行。内容通道——无时间戳（卡片是结果不是事件），
 // 并且与日志共用 util.ConsoleLock 与「先给进度行收尾」的约定（internal/util/logger.go 的
 // consoleWrite），所以与日志/进度条不会互相插行。
 func printTaskCard(c taskCard) {
-	util.ContentBlock(renderTaskCard(c))
+	util.ContentBlockStyled(taskCardBlock(c))
 }
 
 // buildTaskCard 用本页的解析结果填卡片数据；没有的字段留空，由 renderTaskCard 省略那一行。

@@ -1257,30 +1257,34 @@ func SortAudioTracks(tracks []entity.Audio, encodingPriority map[string]int, asc
 // PrintAllTracks displays available tracks, in the order upstream Display.PrintAllTracksInfo
 // prints them: 背景音频流与配音（仅当两者都存在时）→ 视频流 → 音频流。
 //
-// 每一段都是「标题行（── 可用流（6）────）+ 表头 + 数据行」，走内容通道（util.Content*，
-// 无时间戳）而不是日志通道：清单是这次解析的**结果**，不是过程中发生的一件事。
+// 每一段都是「段标题（▎可用流（6））+ 表头 + 数据行」，走内容通道（util.Content*，无时间戳）
+// 而不是日志通道：清单是这次解析的**结果**，不是过程中发生的一件事。
+//
+// 颜色角色：段标题的竖条 BRAND、段名正文、计数 MUTED；表头整行 MUTED；数据行正文色
+// （不着色）——一行里唯一需要被看见的是「选了哪条」，那由 PrintSelectedTrack 的 BRAND ›、
+// BOLD 行负责（见 tracklayout.go）。
 func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool) {
 	// 背景音频与配音属于同一块信息（上游 Display.cs:19-35）：两者都存在才打印，
 	// 只打印首条配音名下的配音流。
 	if len(result.BackgroundAudioTracks) > 0 && len(result.RoleAudioList) > 0 {
-		util.ContentColored(util.ContentCyan, "%s", SectionTitle(fmt.Sprintf("可用背景音频流（%d）", len(result.BackgroundAudioTracks))))
-		util.ContentColored(util.ContentDim, "%s", audioTrackHeader)
+		PrintSection("可用背景音频流", fmt.Sprintf("（%d）", len(result.BackgroundAudioTracks)))
+		printTrackHeader(audioTrackHeader)
 		for i, a := range result.BackgroundAudioTracks {
-			util.ContentColored(util.ContentCyan, "%s", formatAudioTrackLine(i, a, pageDur))
+			util.ContentLine(formatAudioTrackLineStyled(i, a, pageDur))
 		}
 		if firstRole := result.RoleAudioList[0].Audio; len(firstRole) > 0 {
-			util.ContentColored(util.ContentCyan, "%s", SectionTitle(fmt.Sprintf("可用配音（%d · 每条 %d 条流）", len(result.RoleAudioList), len(firstRole))))
-			util.ContentColored(util.ContentDim, "%s", audioTrackHeader)
+			PrintSection("可用配音", fmt.Sprintf("（%d · 每条 %d 条流）", len(result.RoleAudioList), len(firstRole)))
+			printTrackHeader(audioTrackHeader)
 			for i, a := range firstRole {
-				util.ContentColored(util.ContentCyan, "%s", formatAudioTrackLine(i, a, pageDur))
+				util.ContentLine(formatAudioTrackLineStyled(i, a, pageDur))
 			}
 		}
 	}
 	if len(result.VideoTracks) > 0 {
-		util.ContentColored(util.ContentCyan, "%s", SectionTitle(fmt.Sprintf("可用流（%d）", len(result.VideoTracks))))
-		util.ContentColored(util.ContentDim, "%s", videoTrackHeader)
+		PrintSection("可用流", fmt.Sprintf("（%d）", len(result.VideoTracks)))
+		printTrackHeader(videoTrackHeader)
 		for i, v := range result.VideoTracks {
-			util.ContentColored(util.ContentCyan, "%s", formatVideoTrackLine(i, v, pageDur))
+			util.ContentLine(formatVideoTrackLineStyled(i, v, pageDur))
 			// --only-show-info：每条流后面直接给出可下载地址（上游 Console.WriteLine(v.baseUrl)），
 			// 少了这一行，-I 拿到的就只是体积/码率清单，脚本无法据此取流。
 			if onlyShowInfo {
@@ -1289,15 +1293,20 @@ func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool)
 		}
 	}
 	if len(result.AudioTracks) > 0 {
-		util.ContentColored(util.ContentCyan, "%s", SectionTitle(fmt.Sprintf("可用音频流（%d）", len(result.AudioTracks))))
-		util.ContentColored(util.ContentDim, "%s", audioTrackHeader)
+		PrintSection("可用音频流", fmt.Sprintf("（%d）", len(result.AudioTracks)))
+		printTrackHeader(audioTrackHeader)
 		for i, a := range result.AudioTracks {
-			util.ContentColored(util.ContentCyan, "%s", formatAudioTrackLine(i, a, pageDur))
+			util.ContentLine(formatAudioTrackLineStyled(i, a, pageDur))
 			if onlyShowInfo {
 				printStreamURL(a.BaseURL)
 			}
 		}
 	}
+}
+
+// printTrackHeader 打一行表头：整行 MUTED（次要信息——它标注的是列，不是内容本身）。
+func printTrackHeader(header string) {
+	util.ContentStyled(util.TagMuted, "%s", header)
 }
 
 // printStreamURL 打出一条流的直链（--only-show-info）。
@@ -1314,23 +1323,24 @@ func printStreamURL(raw string) {
 		fmt.Println(raw)
 		return
 	}
-	util.ContentColored(util.ContentDim, "   ↳ %s", ElideURL(raw, contentLinkWidth))
+	util.ContentStyled(util.TagMuted, "   ↳ %s", ElideURL(raw, contentLinkWidth))
 }
 
 // PrintSelectedTrack shows the chosen tracks.
 //
-// 与流清单共用 tracklayout.go 的列宽：行首是选中标记 "*"（宽度与序号列一致），
+// 与流清单共用 tracklayout.go 的列宽：行首是选中标记 "›"（宽度与序号列一致，走 BRAND），
+// 整行 BOLD——清单里一行行同权重，唯一需要一眼找到的就是「这次真正要下的那条」。
 // 名称列、码率列、体积列都落在与清单行相同的显示列上，上下对照着看。
 // 段标题里写明是视频还是音频——改前是行首的 [视频]/[音频] 标签，那个标签宽 6 列，
 // 塞不进 1 列的序号列，硬塞会把整行的列位置推歪。
 func PrintSelectedTrack(video *entity.Video, audio *entity.Audio, pageDur int) {
 	if video != nil {
-		util.ContentColored(util.ContentCyan, "%s", SectionTitle("已选择的视频流"))
-		util.ContentColored(util.ContentCyan, "%s", formatVideoTrackRow("*", *video, pageDur))
+		PrintSection("已选择的视频流", "")
+		util.ContentLine(formatVideoTrackRowLine(selectedMarker, true, *video, pageDur))
 	}
 	if audio != nil {
-		util.ContentColored(util.ContentCyan, "%s", SectionTitle("已选择的音频流"))
-		util.ContentColored(util.ContentCyan, "%s", formatAudioTrackRow("*", *audio, pageDur))
+		PrintSection("已选择的音频流", "")
+		util.ContentLine(formatAudioTrackRowLine(selectedMarker, true, *audio, pageDur))
 	}
 }
 

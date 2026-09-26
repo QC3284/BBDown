@@ -200,7 +200,7 @@ func TestInfoJSONKeepsStdoutPureAndRestoresLogs(t *testing.T) {
 		t.Errorf("--info-json 的 stdout 只该有数据，实际混进了 %q", stdout)
 	}
 	// ② 两处日志都必须让位到 stderr。
-	for _, want := range []string{"提示: APP 接口", "下载完成：成功 0 个，失败 1 个"} {
+	for _, want := range []string{"提示: APP 接口", "⚠ 下载完成   成功 0 · 失败 1 · "} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("让位后的日志缺少 %q，stderr=%q", want, stderr)
 		}

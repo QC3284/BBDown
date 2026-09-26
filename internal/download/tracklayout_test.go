@@ -134,35 +134,40 @@ func TestPadDisplay(t *testing.T) {
 		{"中文", 6, "  中文"},
 	}
 	for _, c := range left {
-		if got := padDisplayLeft(c.in, c.width); got != c.want {
-			t.Errorf("padDisplayLeft(%q, %d) = %q，期望 %q", c.in, c.width, got, c.want)
+		if got := PadDisplayLeft(c.in, c.width); got != c.want {
+			t.Errorf("PadDisplayLeft(%q, %d) = %q，期望 %q", c.in, c.width, got, c.want)
 		}
 	}
 }
 
-// TestSectionTitleAlignsByDisplayWidth 是标题行的核心判据：中文标题与 ASCII 标题补出来的
-// 标题行显示宽度必须一样（用 len()/rune 数补白时，中文标题那行会短一截）。
+// TestSectionHeadingIsABarNotARule 钉住段标题的新形态：1 字符竖条 ▎ + 段名 + 计数。
 //
-// 变异验证：SectionTitle 里的 DisplayWidth 改成 len(head) → 本用例红。
-func TestSectionTitleAlignsByDisplayWidth(t *testing.T) {
-	cjk := SectionTitle("字幕君交流场所")
-	ascii := SectionTitle("abc")
-	t.Logf("中文：%q（%d 列）", cjk, DisplayWidth(cjk))
-	t.Logf("ASCII：%q（%d 列）", ascii, DisplayWidth(ascii))
+// 改前是「── 标题 ────────」补到 45 列的横线：一条线占掉半屏，段名只是线的一部分。
+// 现在版式是「▎段名（计数）」——没有横线、不补白、计数紧贴段名。
+//
+// 变异验证：把 sectionBar 改回 "── "（横线）或给标题行补白 → 前缀/长度断言红。
+func TestSectionHeadingIsABarNotARule(t *testing.T) {
+	with := Section{Name: "字幕君交流场所", Count: "（6）"}
+	without := Section{Name: "abc"}
 
-	if w := DisplayWidth(cjk); w != SectionWidth {
-		t.Errorf("中文标题行应补到 %d 列，实际 %d 列：%q", SectionWidth, w, cjk)
+	if got, want := with.Plain(), "▎字幕君交流场所（6）"; got != want {
+		t.Errorf("段标题版式不符：\n得到 %q\n期望 %q", got, want)
 	}
-	if w := DisplayWidth(ascii); w != SectionWidth {
-		t.Errorf("ASCII 标题行应补到 %d 列，实际 %d 列：%q", SectionWidth, w, ascii)
+	if got, want := without.Plain(), "▎abc"; got != want {
+		t.Errorf("无计数的段标题版式不符：\n得到 %q\n期望 %q", got, want)
 	}
-	if !strings.HasPrefix(cjk, "── 字幕君交流场所 ") || !strings.HasSuffix(cjk, "─") {
-		t.Errorf("标题行形态不符（应为 ── 标题 + 补齐的横线）：%q", cjk)
+	for _, s := range []string{with.Plain(), without.Plain()} {
+		if strings.Contains(s, "─") || strings.Contains(s, "——") {
+			t.Errorf("段标题不该再用长横线：%q", s)
+		}
+		if !strings.HasPrefix(s, sectionBar) {
+			t.Errorf("段标题应以竖条 %q 开头：%q", sectionBar, s)
+		}
 	}
 	// 超宽标题不截断（宁可这一行长一点，也不吃掉标题里的字）。
-	long := SectionTitle(strings.Repeat("宽", SectionWidth))
-	if !strings.HasSuffix(long, "宽") || DisplayWidth(long) < SectionWidth {
-		t.Errorf("超宽标题不该被截断或补白：%q", long)
+	long := Section{Name: strings.Repeat("宽", 60)}.Plain()
+	if !strings.HasSuffix(long, "宽") {
+		t.Errorf("超宽段标题不该被截断：%q", long)
 	}
 }
 
@@ -310,13 +315,13 @@ func TestSelectedLinesShareTheListLayout(t *testing.T) {
 		}
 	}
 	for _, i := range []int{2, 3} {
-		if !strings.HasPrefix(lines[i].line, "*") {
-			t.Errorf("%s 行应以选中标记 * 开头：%q", lines[i].name, lines[i].line)
+		if !strings.HasPrefix(lines[i].line, selectedMarker) {
+			t.Errorf("%s 行应以选中标记 %q 开头：%q", lines[i].name, selectedMarker, lines[i].line)
 		}
 	}
 
 	// 段标题里写明是视频还是音频（行首那个 6 列的 [视频] 标签塞不进 1 列的序号列）。
-	for _, want := range []string{"── 已选择的视频流", "── 已选择的音频流"} {
+	for _, want := range []string{"▎已选择的视频流", "▎已选择的音频流"} {
 		if !strings.Contains(selOut, want) {
 			t.Errorf("选中段缺少标题 %q：%q", want, selOut)
 		}

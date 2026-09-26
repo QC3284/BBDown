@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -91,9 +92,10 @@ func TestReportErrorThreeOrderedSegments(t *testing.T) {
 			if !strings.Contains(lines[0], c.wantReason) {
 				t.Errorf("标题行必须保留原因 %q，实际 %q", c.wantReason, lines[0])
 			}
-			// 上游把异常行设成白字红底（亮色档 101/97）；行尾必须复位颜色，否则污染后续输出。
-			if !strings.HasPrefix(lines[0], util.AnsiBgRed+util.AnsiWhite) || !strings.HasSuffix(lines[0], util.AnsiReset) {
-				t.Errorf("标题行要保持白字红底并复位颜色：%q", lines[0])
+			// 颜色角色由 TestReportErrorRolesAreGolden 钉住（这条用例跑在无色环境下，
+			// 断言的是文案与分类）；这里只管原因必须原样出现在第一行。
+			if !strings.HasPrefix(lines[0], errorMarker) {
+				t.Errorf("原因行应以 %q 开头（状态标记属于版式，无色时也在）：%q", errorMarker, lines[0])
 			}
 			// 建议与命令从同一列开始（两个字 + 全角冒号），扫起来才有秩序。
 			if !strings.HasPrefix(lines[1], "提示：") {
@@ -114,6 +116,46 @@ func TestReportErrorThreeOrderedSegments(t *testing.T) {
 			}
 			advices[advice] = c.name
 		})
+	}
+}
+
+// TestReportErrorRolesAreGolden 钉住失败块的颜色角色：原因行是「✗ + 错误色 + BOLD」，
+// 建议/命令行的标签 MUTED、值是正文（命令本身 BOLD，方便照着敲），且**不含任何背景色**。
+//
+// 变异验证：
+//   - 把原因行的 TagErrorBold 换成 TagText → 错误色断言红；
+//   - 把标签换成 TagText（标签不再是 MUTED）→ MUTED 断言红；
+//   - 给原因行加背景色（改回红底白字）→ 白名单断言红。
+func TestReportErrorRolesAreGolden(t *testing.T) {
+	t.Cleanup(util.ForceColorsForTest())
+
+	var buf bytes.Buffer
+	reportError(errors.New("解析链接失败: 输入有误：无法识别的视频 URL 或 ID"), &buf)
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("失败块应是三段，实际 %d 行：%q", len(lines), lines)
+	}
+	if want := "\x1b[1;38;5;203m✗ 解析链接失败: 输入有误：无法识别的视频 URL 或 ID\x1b[0m"; lines[0] != want {
+		t.Errorf("原因行不符：\n得到 %q\n期望 %q", lines[0], want)
+	}
+	if !strings.HasPrefix(lines[1], "\x1b[38;5;245m提示：\x1b[0m") {
+		t.Errorf("建议行的标签应是 MUTED：%q", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "\x1b[38;5;245m命令：\x1b[0m\x1b[1m") {
+		t.Errorf("命令行的标签应是 MUTED、命令本身 BOLD：%q", lines[2])
+	}
+	allowed := map[string]bool{
+		"\x1b[0m": true, "\x1b[1m": true,
+		"\x1b[1;38;5;203m": true, "\x1b[38;5;245m": true,
+	}
+	seqs := regexp.MustCompile("\x1b\\[[0-9;]*m").FindAllString(buf.String(), -1)
+	if len(seqs) == 0 {
+		t.Fatalf("能力允许时应给失败块着色：%q", buf.String())
+	}
+	for _, seq := range seqs {
+		if !allowed[seq] {
+			t.Errorf("失败块出现了白名单之外的 SGR 序列 %q（背景色是禁止的）：%q", seq, buf.String())
+		}
 	}
 }
 

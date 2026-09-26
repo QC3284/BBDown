@@ -181,7 +181,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 	// 分P 一览：标题行带总数与选择（已选择：ALL），行是 `P1  标题 · 00:34:15 · cid 62131`。
 	// 只有多P 稿件才需要这一段：单P 稿件的 "P1/1 · 时长" 已经写在信息行里（见 printVideoHeader）。
 	if total := len(vInfo.PagesInfo); total > 1 {
-		util.ContentColored(util.ContentCyan, "%s", download.SectionTitle(fmt.Sprintf("分P（共 %d 个 · 已选择：%s）", total, selLabel)))
+		download.PrintSection("分P", fmt.Sprintf("（共 %d 个 · 已选择：%s）", total, selLabel))
 		printPageList(vInfo.PagesInfo, w.Cfg.ShowAll)
 	}
 
@@ -491,11 +491,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 
 		if w.Cfg.Interactive && !selectionAsked {
 			if len(result.VideoTracks) > 0 {
-				fmt.Print("请选择一条视频流(输入序号): ")
-				fmt.Print(util.AnsiCyan)
+				printPrompt("请选择一条视频流(输入序号): ")
 				var ok bool
 				vIndex, ok = readIntSafe(ctx)
-				fmt.Print("\033[0m")
 				if !ok {
 					// Ctrl+C 中断：直接取消，不把取消当作"选择 0"继续下载。
 					return false
@@ -505,11 +503,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				}
 			}
 			if len(result.AudioTracks) > 0 {
-				fmt.Print("请选择一条音频流(输入序号): ")
-				fmt.Print(util.AnsiCyan)
+				printPrompt("请选择一条音频流(输入序号): ")
 				var ok bool
 				aIndex, ok = readIntSafe(ctx)
-				fmt.Print("\033[0m")
 				if !ok {
 					return false
 				}
@@ -767,14 +763,14 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				return false
 			}
 			if w.Cfg.Interactive && !flvDfnPicked {
-				util.ContentColored(util.ContentCyan, "%s", download.SectionTitle("可选清晰度"))
+				download.PrintSection("可选清晰度", "")
 				for i, q := range result.Dfns {
-					util.Content(" %d  %s", i, config.QualityMap[q])
+					util.ContentLine(util.NewLine().
+						Addf(util.TagMuted, " %d", i).
+						Add(util.TagText, "  "+config.QualityMap[q]))
 				}
-				fmt.Print("请选择最想要的清晰度(输入序号): ")
-				fmt.Print(util.AnsiCyan)
+				printPrompt("请选择最想要的清晰度(输入序号): ")
 				qi, ok := readIntSafe(ctx)
-				fmt.Print(util.AnsiReset)
 				if !ok {
 					return false
 				}
@@ -1631,31 +1627,64 @@ func (w *Workflow) validateNumericOptions() error {
 // 视频URL 由 BV 号压缩（BV 号本身就能拼回 URL），UP主页 由 UP 名代替（比 mid 好认）；
 // 发布日期只在有值时追加，精确到分钟的时间在 NFO 侧车里。
 func printVideoHeader(vInfo *entity.VInfo, useIntlAPI bool) {
-	util.ContentColored(util.ContentCyan, "%s", download.SectionTitle(vInfo.Title))
+	util.ContentLine(download.Section{Name: vInfo.Title}.Line())
+	if line := videoInfoLine(vInfo, useIntlAPI); len(line) > 0 {
+		util.ContentLine(line)
+	}
+}
 
-	var parts []string
+// printPrompt 打一条交互提示：行首 ❯ 走 BRAND（导航类），问题文本是正文。
+//
+// 改前是 fmt.Print(util.AnsiCyan)：它**不看终端能力**，在管道里跑 -i 会把 ESC 留在输出里，
+// 还顺手把用户输入的回显也染成青色（续在 ANSI 序列后面的字符都算着色范围内）。现在提示符
+// 自己带色、正文不动，无色能力下只剩 ❯ 与问题本身。
+func printPrompt(question string) {
+	fmt.Print(util.TagBrand.Apply(promptMark) + question)
+}
+
+// promptMark 是交互提示的行首标记（与横幅的 ❯ 同一个符号：都表示「这里等你一句」）。
+const promptMark = "❯ "
+
+// videoInfoLine 组装稿件信息行：`  UP 碧诗 · P1/1 · 34:15 · BV17x411w7KC · 2018-11-06`。
+//
+// 角色：标签（UP）MUTED，值是正文，**时长与 BV 号 BOLD**（这一行里被反复用到的两个关键值——
+// 时长决定要不要下，BV 号是回到页面的入口）；发布日期是次要信息，MUTED。
+// 空字段整段省略：没有 UP 名就没有 UP 段，没有发布日期就不留尾部分隔符。
+func videoInfoLine(vInfo *entity.VInfo, useIntlAPI bool) util.Line {
+	var line util.Line
+	sep := func() {
+		if len(line) > 0 {
+			line = line.Add(util.TagMuted, " · ")
+		}
+	}
+	add := func(tag util.Tag, text string) {
+		if text == "" {
+			return
+		}
+		sep()
+		line = line.Add(tag, text)
+	}
 	if len(vInfo.PagesInfo) > 0 {
 		page := vInfo.PagesInfo[0]
-		switch {
-		case page.OwnerName != "":
-			parts = append(parts, "UP "+page.OwnerName)
-		case page.OwnerMid != "":
-			parts = append(parts, "UP "+page.OwnerMid)
+		if owner := page.OwnerName; owner != "" {
+			add(util.TagMuted, "  UP ")
+			line = line.Add(util.TagText, owner)
+		} else if page.OwnerMid != "" {
+			add(util.TagMuted, "  UP ")
+			line = line.Add(util.TagText, page.OwnerMid)
 		}
-		parts = append(parts, fmt.Sprintf("P%d/%d", page.Index, len(vInfo.PagesInfo)))
+		add(util.TagText, fmt.Sprintf("P%d/%d", page.Index, len(vInfo.PagesInfo)))
 		if page.Dur > 0 {
-			parts = append(parts, download.FormatDurationShort(page.Dur))
+			add(util.TagTextBold, download.FormatDurationShort(page.Dur))
 		}
 		if bvid := page.Bvid(); bvid != "" && !useIntlAPI {
-			parts = append(parts, bvid)
+			add(util.TagTextBold, bvid)
 		}
 	}
 	if vInfo.PubTime > 0 {
-		parts = append(parts, time.Unix(vInfo.PubTime, 0).Format("2006-01-02"))
+		add(util.TagMuted, time.Unix(vInfo.PubTime, 0).Format("2006-01-02"))
 	}
-	if len(parts) > 0 {
-		util.Content(" %s", strings.Join(parts, " · "))
-	}
+	return line
 }
 
 // printPageList 打印分P 一览（多P 稿件才调用）。--show-all 之外、分P 超过 6 个时只列前 5 与最后 1 个
@@ -1663,35 +1692,46 @@ func printVideoHeader(vInfo *entity.VInfo, useIntlAPI bool) {
 func printPageList(pages []entity.Page, showAll bool) {
 	if !showAll && len(pages) > 6 {
 		for _, p := range pages[:5] {
-			util.Content("%s", formatPageRow(p))
+			util.ContentLine(pageRowLine(p))
 		}
-		util.ContentColored(util.ContentDim, " …  其余 %d 个分P已省略（用 --show-all 展开）", len(pages)-6)
-		util.Content("%s", formatPageRow(pages[len(pages)-1]))
+		util.ContentStyled(util.TagMuted, " …  其余 %d 个分P已省略（用 --show-all 展开）", len(pages)-6)
+		util.ContentLine(pageRowLine(pages[len(pages)-1]))
 		return
 	}
 	for _, p := range pages {
-		util.Content("%s", formatPageRow(p))
+		util.ContentLine(pageRowLine(p))
 	}
 }
 
-// formatPageRow 把一条分P压成一行：`P1  标题 · 00:34:15 · cid 62131`；空字段整段省略——
+// formatPageRow 把一条分P压成一行（纯文本）：`P1  标题 · 00:34:15 · cid 62131`；空字段整段省略——
 // 改前是 `P1: [62131] [] [00:34:15]`，空标题会留下一对空方括号。
-func formatPageRow(p entity.Page) string {
-	parts := make([]string, 0, 3)
+func formatPageRow(p entity.Page) string { return pageRowLine(p).Plain() }
+
+// pageRowLine 是分P 行的分段形态：序号是标签（MUTED），标题是正文，**时长 BOLD**（挑分P 时
+// 真正要比的就是它），cid 是实现细节（MUTED）。
+//
+// 分隔符与改前逐字节一致：序号后固定两个空格（不在场的标题不占位），其余字段之间是 " · "。
+func pageRowLine(p entity.Page) util.Line {
+	line := util.NewLine().Addf(util.TagMuted, " P%d", p.Index)
+	first := true
+	add := func(tag util.Tag, text string) {
+		if first {
+			line = line.Add(tag, "  "+text)
+			first = false
+			return
+		}
+		line = line.Add(util.TagMuted, " · ").Add(tag, text)
+	}
 	if p.Title != "" {
-		parts = append(parts, p.Title)
+		add(util.TagText, p.Title)
 	}
 	if p.Dur > 0 {
-		parts = append(parts, util.FormatTime(p.Dur, true))
+		add(util.TagTextBold, util.FormatTime(p.Dur, true))
 	}
 	if p.Cid != "" {
-		parts = append(parts, "cid "+p.Cid)
+		add(util.TagMuted, "cid "+p.Cid)
 	}
-	row := fmt.Sprintf(" P%d", p.Index)
-	if len(parts) > 0 {
-		row += "  " + strings.Join(parts, " · ")
-	}
-	return row
+	return line
 }
 
 // applySteinGateFallback 处理「互动视频不支持 TV 端下载」（上游 Workflow.cs:156-160）：
