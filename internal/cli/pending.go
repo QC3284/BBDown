@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,9 +46,9 @@ var resumeCmd = &cobra.Command{
 		}
 
 		client := buildHTTPClient(cfg)
-		// Ctrl+C 的收尾（第一次优雅取消 / 第二次强制退出）由 downloadTargets 统一安装：
-		// 与 runDownload 共用同一条取消语义。
-		return downloadTargets(context.Background(), cmd, cfg, client, targets)
+		// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：与 runDownload 共用同一条
+		// 取消语义（downloadTargets 里那次 installInterrupts 会复用它，不重复注册信号）。
+		return downloadTargets(commandContext(cmd), cmd, cfg, client, targets)
 	},
 }
 

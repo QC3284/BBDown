@@ -44,13 +44,25 @@ type DownloadConfig struct {
 }
 
 // httpStatusError 携带 HTTP 状态码：回退原地址只针对 404，字符串匹配既脆又会被脱敏后的
-// URL 干扰。Error() 文本与改前逐字相同，日志与既有用例不受影响。
+// URL 干扰。Error() 文本由 newHTTPStatusError 生成：非 412 与改前逐字相同（既有日志与用例
+// 不受影响），412 追加风控提示。
 type httpStatusError struct {
 	code int
 	msg  string
 }
 
 func (e *httpStatusError) Error() string { return e.msg }
+
+// newHTTPStatusError 构造带状态码的下载错误。412（B 站风控）除了裸状态码还要告诉用户
+// 「等一会儿 / 换网络出口」——提示语单一来源：util.StatusHint，与 API 层同一份文案
+// （此前下载层只报「download failed: HTTP 412」，用户不知道该等还是该换出口）。
+// 其余状态码 util.StatusHint 返回空串，消息与改前逐字相同；404 的换候选只看 code，不受影响。
+func newHTTPStatusError(code int, prefix string) *httpStatusError {
+	return &httpStatusError{
+		code: code,
+		msg:  fmt.Sprintf("%s: HTTP %d%s", prefix, code, util.StatusHint(code)),
+	}
+}
 
 // maxTrackAttempts 是单个文件的尝试次数硬上限：候选链再长也不能把失败路径变成请求风暴
 // （畸形响应可以塞进任意多个候选地址）。
@@ -540,7 +552,7 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 					return err
 				}
 			default:
-				return &httpStatusError{code: resp.StatusCode, msg: fmt.Sprintf("download failed: HTTP %d", resp.StatusCode)}
+				return newHTTPStatusError(resp.StatusCode, "download failed")
 			}
 
 			out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY, 0o644)
@@ -877,7 +889,7 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, ex
 				// Server sent the full body: it does not support ranges.
 				return 0, ErrRangeNotSupported
 			default:
-				return 0, &httpStatusError{code: resp.StatusCode, msg: fmt.Sprintf("range request failed: HTTP %d", resp.StatusCode)}
+				return 0, newHTTPStatusError(resp.StatusCode, "range request failed")
 			}
 
 			out, err := os.Create(tmpPath)

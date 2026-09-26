@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/util"
@@ -138,7 +139,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.10.0",
+	Version: "2.10.1",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -157,6 +158,13 @@ func init() {
 
 // Execute adds all child commands and runs root.
 func Execute() {
+	// 任务 G-1：Ctrl+C 的收尾（首次优雅取消 + 提示 / 二次强制退出 130 / 退出前恢复终端）
+	// 在这里统一安装，所有子命令共用同一份计数——此前只有下载路径（downloadTargets）装了，
+	// 其余子命令用 signal.NotifyContext，第二次 Ctrl+C 被信号层吞掉。安装是幂等的（见
+	// installInterrupts）：子命令里再取只会复用，不会把计数打乱成「按一次就强退」。
+	stopInterrupts := installRootInterrupts()
+	defer stopInterrupts()
+
 	// --log-file 要在任何命令真正干活之前生效：放在根命令的 PersistentPreRun（cobra 在所有命令前调用它）。
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		if optLogFile != "" {
@@ -496,20 +504,54 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.10.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.10.1")
 
-	// Ctrl+C 的收尾（第一次优雅取消 / 第二次强制退出）由 downloadTargets 统一安装，
-	// runDownload 与 resume 走的是同一条路径，不会出现两套取消语义。
-	return downloadTargets(context.Background(), cmd, cfg, client, targets)
+	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
+	// downloadTargets，不会出现两套取消语义。
+	return downloadTargets(commandContext(cmd), cmd, cfg, client, targets)
+}
+
+// productsUnknown 表示拿不到本轮的产出文件数（见 batchSummary.products 的说明）。
+const productsUnknown = -1
+
+// batchSummary 是一次批量下载的收尾统计。格式化成纯函数（formatBatchSummary），
+// 可以直接断言字符串，不用把统计逻辑纠缠进下载流程。
+type batchSummary struct {
+	succeeded int
+	failed    int
+	elapsed   time.Duration
+
+	// products 是本轮落盘的产物文件数；<0 表示拿不到产出列表，此时汇总里不报这一项。
+	//
+	// 下载路径目前恒为 productsUnknown：workflow.Run 只返回 error，要拿到完整产物列表
+	// 就得给它加返回值（不为统计去改 workflow 接口）；既有的 OnSaved 钩子只覆盖部分路径
+	// ——弹幕-only、字幕-only、评论导出都不上报（workflow.go 的 DanmakuOnly / SubOnly /
+	// FetchComments 分支），拿它充数会打出比实际小的文件数，宁可少报一项。
+	products int
+}
+
+// formatBatchSummary 把收尾统计拼成一行。耗时按 100ms 取整：一次批量下载报「1m2.3s」
+// 足够，没必要把亚毫秒抖动写进去。
+func formatBatchSummary(stats batchSummary) string {
+	line := fmt.Sprintf("下载完成：成功 %d 个，失败 %d 个，耗时 %s",
+		stats.succeeded, stats.failed, stats.elapsed.Round(100*time.Millisecond))
+	if stats.products >= 0 {
+		line += fmt.Sprintf("，产出 %d 个文件", stats.products)
+	}
+	return line
 }
 
 // downloadTargets 执行一批目标，并维护**未完成任务清单**（bbdown resume 的底座）：
 // 成功的从清单移除，失败/被取消的登记（含最后错误）。抽成函数让 runDownload 与 resume 共用同一条路径。
 //
-// 取消语义也在这里统一安装（newInterruptContext，见 interrupt.go）：调用方不需要自己建信号 ctx。
+// 取消语义由 Execute 统一安装（installRootInterrupts，见 interrupt.go）；这里的
+// installInterrupts 是幂等的：已有安装就复用那一份（不重复注册信号），直接调用（用例、
+// 或将来别的入口）时这里自己装、返回时注销。调用方不需要自己建信号 ctx。
 func downloadTargets(ctx context.Context, cmd *cobra.Command, cfg config.MyOption, client *util.HTTPClient, targets []string) error {
-	ctx, cancel := newInterruptContext(ctx)
-	defer cancel()
+	ctx, stopInterrupts := installInterrupts(ctx)
+	defer stopInterrupts()
+
+	started := time.Now()
 
 	var firstErr error
 	failures := runTargets(ctx, targets, func(ctx context.Context, target string) error {
@@ -539,6 +581,14 @@ func downloadTargets(ctx context.Context, cmd *cobra.Command, cfg config.MyOptio
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	// 任务 G-2：整批跑完时打一行收尾汇总（含部分失败——那正是要看到失败数的时候）。
+	// 被 Ctrl+C 打断时不打：「成功/失败数」没有意义，取消提示已由中断处理给出。
+	util.Log("%s", formatBatchSummary(batchSummary{
+		succeeded: len(targets) - failures,
+		failed:    failures,
+		elapsed:   time.Since(started),
+		products:  productsUnknown,
+	}))
 	if failures > 0 {
 		if failures == 1 && firstErr != nil {
 			return firstErr

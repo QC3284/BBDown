@@ -248,6 +248,11 @@ func statusSuffix(code int) string {
 	return ""
 }
 
+// StatusHint 把风控态提示（statusSuffix）导出给下载层复用：412 的中文文案只有这一份，
+// 两层共享同一条「哪些状态码该提示」的规则——下载层的最终错误此前只有裸状态码，
+// 用户不知道该等还是该换网络。其余状态码返回空串，调用方可无条件拼接。
+func StatusHint(code int) string { return statusSuffix(code) }
+
 func (c *HTTPClient) GetWebSource(ctx context.Context, url string) (string, error) {
 	body, _, err := c.GetWebSourceWithSetCookies(ctx, url)
 	return body, err

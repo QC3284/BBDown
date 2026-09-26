@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"runtime"
 	"strings"
 	"time"
@@ -33,8 +32,9 @@ var doctorCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := buildMyOption()
 		client := buildHTTPClient(cfg)
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
+		// 中断语义由 Execute 统一安装（见 interrupt.go）：这里只取那份 ctx，不再自己注册信号，
+		// 否则第二次 Ctrl+C 会被 signal 层吞掉。
+		ctx := commandContext(cmd)
 		// JSON 是机读契约：写 cmd 的输出流（纯 stdout、无时间戳/无色码），供脚本与监控解析。
 		if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
 			if code := runDoctorJSON(ctx, cfg, client, cmd.OutOrStdout()); code != 0 {

@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -164,5 +165,84 @@ func TestM3UFileName(t *testing.T) {
 		if got := m3uFileName(c.title); got != c.want {
 			t.Errorf("m3uFileName(%q) = %q, want %q", c.title, got, c.want)
 		}
+	}
+}
+
+// TestParseM3U 回读纯函数：第一条非空行必须是 #EXTM3U（完整性判据，缺了算损坏）；
+// #EXTINF 的标题与时长要跟着路径读回来；空行与其它 # 指令/注释行都不是条目；
+// 路径行不做切分（路径里的逗号原样保留）。
+//
+// 变异验证：
+//   - 去掉头部校验 → 「空文件」「缺少 #EXTM3U 头」两例的 ok 断言红；
+//   - 去掉 #EXTINF 解析 → 「EXTINF 的标题与时长跟着路径读回」例红（标题与时长丢了）。
+func TestParseM3U(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []M3UEntry
+		ok   bool
+	}{
+		{name: "只有头部：合法但没有条目", body: "#EXTM3U\n", ok: true},
+		{
+			name: "EXTINF 的标题与时长跟着路径读回",
+			body: "#EXTM3U\n#EXTINF:300,标题,带逗号\n[P01]a.mp4\n#EXTINF:-1,\nb.mp4\n",
+			want: []M3UEntry{
+				{Title: "标题,带逗号", Path: "[P01]a.mp4", Duration: 300},
+				{Path: "b.mp4", Duration: -1},
+			},
+			ok: true,
+		},
+		{
+			name: "CRLF、空行与其它指令行都不是条目，路径里的逗号原样保留",
+			body: "#EXTM3U\r\n\r\n#EXTGRP:组\r\n#EXTINF:100,x\r\na,b.mp4\r\n#EXTVLCOPT:network-caching=1000\r\nc.mp4\r\n",
+			want: []M3UEntry{
+				{Title: "x", Path: "a,b.mp4", Duration: 100},
+				{Path: "c.mp4"},
+			},
+			ok: true,
+		},
+		{
+			name: "UTF-8 BOM 不当作损坏",
+			body: "\ufeff#EXTM3U\na.mp4\n",
+			want: []M3UEntry{{Path: "a.mp4"}},
+			ok:   true,
+		},
+		{
+			name: "非法时长按未知（0）处理",
+			body: "#EXTM3U\n#EXTINF:abc,x\na.mp4\n",
+			want: []M3UEntry{{Title: "x", Path: "a.mp4"}},
+			ok:   true,
+		},
+		{name: "空文件视为损坏", body: "", ok: false},
+		{name: "缺少 #EXTM3U 头视为损坏", body: "a.mp4\nb.mp4\n", ok: false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := parseM3U(c.body)
+			if ok != c.ok {
+				t.Fatalf("parseM3U(%q) ok = %v, want %v", c.body, ok, c.ok)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("parseM3U(%q) = %+v, want %+v", c.body, got, c.want)
+			}
+		})
+	}
+}
+
+// TestM3UReadBackRoundTrip 回读必须是渲染的逆：渲染 → 回读 → 再渲染逐字相同。
+// 否则每次重跑合并都会悄悄改写旧条目——丢标题、把已经能显示的时长打回 -1。
+func TestM3UReadBackRoundTrip(t *testing.T) {
+	entries := []M3UEntry{
+		{Title: "第一话", Path: "[P01]第一话.mp4", Duration: 300},
+		{Title: "标题,带逗号", Path: "b.mp4"},
+		{Title: "", Path: "c.mp4", Duration: -1},
+	}
+	first := RenderM3U(entries)
+	back, ok := parseM3U(first)
+	if !ok {
+		t.Fatalf("自己渲染出来的列表必须能被读回：%q", first)
+	}
+	if second := RenderM3U(back); second != first {
+		t.Errorf("回读再渲染应逐字相同：\n got %q\nwant %q", second, first)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QC3284/BBDown/internal/util"
+	"github.com/spf13/cobra"
 )
 
 // 下载路径的 Ctrl+C 收尾（对齐上游 v1.6.20 Program.Console_CancelKeyPress）：
@@ -17,6 +18,11 @@ import (
 //
 // 为什么不继续用 signal.NotifyContext：它只在第一次信号时取消 ctx，之后信号仍由它自己接管，
 // 第二次 Ctrl+C 会被**吞掉**——用户按了没反应，只能 kill -9。所以这里自己数信号次数。
+//
+// 安装位置统一在 Execute()（installRootInterrupts）：此前只有 runDownload/resume 走的
+// downloadTargets 装了处理，watchlater / sub check / live / article / login / serve / doctor
+// 仍用 signal.NotifyContext——第一次取消后它自己不注销，第二次 Ctrl+C 照样被吞，提示里的
+// 「再按一次 Ctrl+C 强制退出」对这些子命令是空话。
 
 const (
 	// interruptExitCode 是强制退出的退出码：128+SIGINT（上游 Environment.Exit(130)）。
@@ -92,8 +98,10 @@ func handleInterrupt(gate *cancelGate, cancel context.CancelFunc) cancelOutcome 
 	return action
 }
 
-// newInterruptContext 是下载入口（runDownload 与 resume，两者共用 downloadTargets）统一的取消入口：
-// 返回的 CancelFunc 会注销信号处理并取消 ctx，可安全重复调用。
+// newInterruptContext 装一份信号处理：返回的 CancelFunc 会注销信号处理并取消 ctx，可安全重复调用。
+//
+// 它是底层的「装一份」，进程内只应该有一个在生效——调用方一律走 installInterrupts
+// （幂等），别直接调它，否则同一个信号被投递两次、计数直接跳到第二次。
 func newInterruptContext(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
 	sig := make(chan os.Signal, 1)
@@ -109,6 +117,59 @@ func newInterruptContext(parent context.Context) (context.Context, context.Cance
 	}
 	go serveInterrupts(sig, done, cancel)
 	return ctx, stop
+}
+
+// rootInterrupts 是进程级唯一的一份安装（Execute 装一次，所有子命令复用）。
+//
+// 为什么必须复用而不是各装一份：signal.Notify 会把同一个信号投递给**每一个注册**（同一个
+// channel 重复注册还会重复投递），重复安装会让计数器从 1 直接跳到 2——用户按一次 Ctrl+C
+// 就强退，清理路径（删半成品、登记未完成任务）全被跳过。下面的复用分支就是这条不变量的守卫。
+var rootInterrupts struct {
+	mu   sync.Mutex
+	ctx  context.Context
+	stop context.CancelFunc
+}
+
+// installInterrupts 安装进程级 Ctrl+C 处理，返回所有子命令共享的取消上下文。
+//
+// 重复调用复用第一次的安装（不再注册信号）；返回的 stop 只有**安装者**需要调用（Execute
+// 结束，或 downloadTargets 这类自己装的入口返回时），复用时是空操作——子命令不能把根安装
+// 提前拆掉，否则之后的 Ctrl+C 又变成没人处理。
+func installInterrupts(parent context.Context) (context.Context, context.CancelFunc) {
+	rootInterrupts.mu.Lock()
+	defer rootInterrupts.mu.Unlock()
+	if rootInterrupts.stop != nil {
+		return rootInterrupts.ctx, func() {}
+	}
+	ctx, stop := newInterruptContext(parent)
+	rootInterrupts.ctx = ctx
+	rootInterrupts.stop = func() {
+		rootInterrupts.mu.Lock()
+		rootInterrupts.ctx, rootInterrupts.stop = nil, nil
+		rootInterrupts.mu.Unlock()
+		stop()
+	}
+	return ctx, rootInterrupts.stop
+}
+
+// installRootInterrupts 由 Execute 调用：安装进程级中断处理并把 ctx 交给根命令。
+// cobra 会把根 ctx 传给被执行的子命令（cmd.Context()），子命令用 commandContext 取——
+// 于是「首次优雅取消 + 提示 / 二次强制退出 130 / 退出前恢复终端」对每个子命令都成立。
+func installRootInterrupts() context.CancelFunc {
+	ctx, stop := installInterrupts(context.Background())
+	rootCmd.SetContext(ctx)
+	return stop
+}
+
+// commandContext 返回子命令该用的中断上下文：Execute 统一安装后 cmd.Context() 就是那一份；
+// 直接调用（用例直接跑 RunE）时回落 Background——此时没有中断语义，但也不会多装一份信号。
+func commandContext(cmd *cobra.Command) context.Context {
+	if cmd != nil {
+		if ctx := cmd.Context(); ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
 }
 
 // serveInterrupts 逐个消费中断信号并交给 handleInterrupt，直到停表（done）或强制退出。

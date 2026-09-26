@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"strings"
 	"time"
 
@@ -50,8 +49,9 @@ var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "通过APP扫描二维码以登录您的WEB账号",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
+		// 中断语义由 Execute 统一安装（见 interrupt.go）：这里只取那份 ctx，不再自己注册信号，
+		// 否则第二次 Ctrl+C 会被 signal 层吞掉。
+		ctx := commandContext(cmd)
 		client := buildHTTPClient(config.MyOption{})
 		if err := login.LoginWeb(ctx, client); err != nil {
 			return err
@@ -65,8 +65,9 @@ var loginTVCmd = &cobra.Command{
 	Use:   "logintv",
 	Short: "通过APP扫描二维码以登录您的TV账号",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
+		// 中断语义由 Execute 统一安装（见 interrupt.go）：这里只取那份 ctx，不再自己注册信号，
+		// 否则第二次 Ctrl+C 会被 signal 层吞掉。
+		ctx := commandContext(cmd)
 		client := buildHTTPClient(config.MyOption{})
 		if err := login.LoginTV(ctx, client); err != nil {
 			return err
@@ -93,11 +94,12 @@ var serveCmd = &cobra.Command{
 		srv := server.NewAPIServer(listen, optServeMaxConcurrent, serveToken, optNotifyWebhook)
 		srv.SetTrustedProxy(optTrustedProxy)
 
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
+		// 中断语义由 Execute 统一安装（见 interrupt.go）：这里只取那份 ctx，不再自己注册信号，
+		// 否则第二次 Ctrl+C 会被 signal 层吞掉。
+		ctx := commandContext(cmd)
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.10.0")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.10.1")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -158,8 +160,9 @@ var liveCmd = &cobra.Command{
 			}
 		}
 
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
+		// 中断语义由 Execute 统一安装（见 interrupt.go）：这里只取那份 ctx，不再自己注册信号，
+		// 否则第二次 Ctrl+C 会被 signal 层吞掉。
+		ctx := commandContext(cmd)
 
 		client := buildHTTPClient(config.MyOption{})
 		// Load credentials BEFORE resolving the stream: getRoomPlayInfo answers an
@@ -218,8 +221,9 @@ var articleCmd = &cobra.Command{
 		if len(args) < 1 {
 			return fmt.Errorf("请提供文章cv号")
 		}
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
+		// 中断语义由 Execute 统一安装（见 interrupt.go）：这里只取那份 ctx，不再自己注册信号，
+		// 否则第二次 Ctrl+C 会被 signal 层吞掉。
+		ctx := commandContext(cmd)
 
 		cvID, err := article.ExtractCvId(args[0])
 		if err != nil {
@@ -318,8 +322,9 @@ var subCheckCmd = &cobra.Command{
 
 // runWatchLater downloads the watch-later list (upstream WatchLaterCommand).
 func runWatchLater(cmd *cobra.Command, args []string) error {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
+	// 中断语义由 Execute 统一安装（见 interrupt.go）：这里只取那份 ctx，不再自己注册信号，
+	// 否则第二次 Ctrl+C 会被 signal 层吞掉。
+	ctx := commandContext(cmd)
 
 	cfg := config.DefaultMyOption()
 	cfg.Cookie = optCookie
@@ -429,8 +434,9 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
+	// 中断语义由 Execute 统一安装（见 interrupt.go）：这里只取那份 ctx，不再自己注册信号，
+	// 否则第二次 Ctrl+C 会被 signal 层吞掉。
+	ctx := commandContext(cmd)
 
 	cfg := config.DefaultMyOption()
 	cfg.Cookie = optCookie
