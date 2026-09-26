@@ -89,7 +89,9 @@ type MyOption struct {
 	// Overwrite 强制重新下载：默认（false）沿用上游语义——产物已存在且非空就跳过（本仓新增开关）。
 	Overwrite bool `json:"overwrite" mapstructure:"overwrite"`
 	// PrintURLs 只打印所选流的直链然后退出（不下载）：把本工具当作「解析器」接进 aria2c/脚本流程。
-	PrintURLs              bool   `json:"print_urls" mapstructure:"print_urls"`
+	PrintURLs bool `json:"print_urls" mapstructure:"print_urls"`
+	// WriteNFO 产物落地后写同名 .nfo 侧车元数据（Kodi/Emby/Jellyfin 可直接扫库）。
+	WriteNFO               bool   `json:"write_nfo" mapstructure:"write_nfo"`
 	ForceHTTP              bool   `json:"force_http" mapstructure:"force_http"`
 	DownloadDanmaku        bool   `json:"download_danmaku" mapstructure:"download_danmaku"`
 	DownloadDanmakuFormats string `json:"download_danmaku_formats" mapstructure:"download_danmaku_formats"`

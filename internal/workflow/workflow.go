@@ -990,6 +990,8 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 
 		util.Log("下载P%d完毕", page.Index)
 
+		w.writeNFOSidecar(savePath, title, page)
+
 		if w.OnSaved != nil && savePath != "" {
 			w.OnSaved(savePath)
 		}
@@ -1512,6 +1514,27 @@ func shouldSkipProduct(overwrite bool, savePath string) bool {
 func skipExistingProduct(savePath string) bool {
 	info, err := os.Stat(savePath)
 	return err == nil && info.Size() > 0
+}
+
+// writeNFOSidecar 在产物旁写同名 .nfo（Kodi/Emby/Jellyfin 扫库用）：--nfo 未开、产物不存在、或写入失败
+// 都只是「不写/告警」，绝不影响下载结果本身。
+func (w *Workflow) writeNFOSidecar(savePath, title string, page entity.Page) {
+	if !w.Cfg.WriteNFO || savePath == "" {
+		return
+	}
+	if _, err := os.Stat(savePath); err != nil {
+		return // 没有产物就没有可描述的元数据（如 --skip-mux / 只下字幕）
+	}
+	body, err := download.RenderNFO(title, page.Title, page.OwnerName, page.Bvid(), page.Index, page.PubTime)
+	if err != nil {
+		util.LogWarn("生成 NFO 失败: %v", err)
+		return
+	}
+	if err := os.WriteFile(savePath+".nfo", []byte(body), 0o644); err != nil {
+		util.LogWarn("写入 NFO 失败: %v", err)
+		return
+	}
+	util.LogDebug("已写入侧车元数据: %s.nfo", savePath)
 }
 
 // validateNumericOptions rejects out-of-range numeric options (upstream

@@ -608,6 +608,7 @@ func buildMyOption() config.MyOption {
 		SkipCover:              optSkipCover,
 		Overwrite:              optOverwrite,
 		PrintURLs:              optPrintURLs,
+		WriteNFO:               optNFO,
 		ForceHTTP:              optForceHTTP,
 		DownloadDanmaku:        optDownloadDanmaku,
 		DownloadDanmakuFormats: optDanmakuFormats,
