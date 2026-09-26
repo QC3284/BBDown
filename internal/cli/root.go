@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,7 +142,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.11.2",
+	Version: "2.12.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -159,7 +160,10 @@ func init() {
 }
 
 // Execute adds all child commands and runs root.
-func Execute() {
+//
+// banner 是人看模式的开场横幅（版本号的事实来源仍在 cmd/bbdown/main.go，由 main 传进来）；
+// 机读模式（--info-json / doctor --json）不打印它——stdout 只留数据。
+func Execute(banner string) {
 	// 任务 G-1：Ctrl+C 的收尾（首次优雅取消 + 提示 / 二次强制退出 130 / 退出前恢复终端）
 	// 在这里统一安装，所有子命令共用同一份计数——此前只有下载路径（downloadTargets）装了，
 	// 其余子命令用 signal.NotifyContext，第二次 Ctrl+C 被信号层吞掉。安装是幂等的（见
@@ -180,9 +184,24 @@ func Execute() {
 	// merge BBDown.config (line-based args) as option defaults.
 	aliasMap, boolFlags := buildFlagMaps()
 	args := foldBoolFlagValues(normalizeCliArgs(os.Args[1:]), aliasMap, boolFlags)
-	if merged, err := mergeConfigArgs(args); err == nil {
+	merged, configLoaded, mergeErr := mergeConfigArgs(args)
+	effective := args
+	if mergeErr == nil {
 		// 配置文件里的 "--flag false" 同样是上游写法，折行后一并交给 cobra。
-		rootCmd.SetArgs(foldBoolFlagValues(merged, aliasMap, boolFlags))
+		effective = foldBoolFlagValues(merged, aliasMap, boolFlags)
+	}
+
+	// 机读模式（--info-json / doctor --json）的判定必须在**任何输出之前**完成，所以看的是
+	// 「本次真正会跑的」参数（含 BBDown.config 带进来的开关），而不是等 cobra 解析完。
+	// 横幅仍要排在配置加载那行日志之前（与改前同序），所以先定模式、再输出。
+	restoreOutput := prepareConsoleOutput(machineReadableArgs(effective), banner)
+	defer restoreOutput()
+
+	if mergeErr == nil {
+		rootCmd.SetArgs(effective)
+		if configLoaded {
+			util.Log("加载配置文件完成（配置为默认值，命令行参数优先）")
+		}
 	}
 
 	if err := rootCmd.Execute(); err != nil {
@@ -341,18 +360,91 @@ func normalizeCliArgs(args []string) []string {
 	return out
 }
 
+// prepareConsoleOutput 按「是不是机读模式」准备本次运行的控制台输出，返回还原函数：
+//   - 人看的模式：照旧先打横幅，日志仍写 os.Stdout（输出一字不改）；
+//   - 机读模式：不打横幅，日志让位到 stderr（含随后的「加载配置文件完成」这类解析前输出），
+//     stdout 只留数据。
+//
+// 调用方必须 defer 还原函数。抽成函数是为了让「横幅打不打、日志去哪」能被用例钉住——
+// Execute 本身会 os.Exit，测不到整条路径。
+func prepareConsoleOutput(machine bool, banner string) (restore func()) {
+	if machine {
+		return util.RedirectConsoleLogs(stderrWriter{})
+	}
+	fmt.Print(banner)
+	return func() {}
+}
+
+// machineReadableArgs 判断一组（已归一化、已折行的）参数是否落在**机读输出模式**：
+// `--info-json`（根命令的解析结果 JSON）或 `doctor --json`（自检 JSON）。
+//
+// 判定只看参数本身、不看 cobra 的解析状态：横幅要在 cobra 之前决定打不打，日志让位要在 RunE 里
+// 生效，两处共用这一份判定，避免「横幅省了、日志没省」这类漂移。
+func machineReadableArgs(args []string) bool {
+	if on, seen := lastBoolFlag(args, "--info-json"); seen && on {
+		return true
+	}
+	// --json 只注册在 doctorCmd 上；再要求出现 doctor 子命令名，让判定读起来就是
+	// 「bbdown doctor --json」，也不会被别处的同名取值误命中。
+	if !containsArg(args, "doctor") {
+		return false
+	}
+	on, seen := lastBoolFlag(args, "--json")
+	return seen && on
+}
+
+// lastBoolFlag 返回 --name / --name=<bool> 的最后一次取值（后写覆盖先写，与 pflag 一致）；
+// 参数里没出现过这个开关时 seen=false。取值非法时按「开」处理——cobra 随后会把它报成用法错误。
+func lastBoolFlag(args []string, name string) (on, seen bool) {
+	for _, a := range args {
+		switch {
+		case a == name:
+			on, seen = true, true
+		case strings.HasPrefix(a, name+"="):
+			v, err := strconv.ParseBool(strings.TrimPrefix(a, name+"="))
+			on, seen = err != nil || v, true
+		}
+	}
+	return on, seen
+}
+
+// containsArg 判断参数里有没有这一项（子命令名这类按字面出现的参数）。
+func containsArg(args []string, name string) bool {
+	for _, a := range args {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}
+
+// yieldLogsToStderr 让日志在本次作用域内让位到 stderr（stdout 只留给数据），返回还原函数，
+// 调用方必须 defer 它。enabled=false（人看的模式）时是空操作，输出路径一字不改。
+func yieldLogsToStderr(enabled bool) (restore func()) {
+	if !enabled {
+		return func() {}
+	}
+	return util.RedirectConsoleLogs(stderrWriter{})
+}
+
+// stderrWriter 每次写入时重新解析 os.Stderr——与日志默认落点重新解析 os.Stdout 同理：
+// 「替换 os.Stderr 捕获输出」的手法对让位后的日志才同样有效。
+type stderrWriter struct{}
+
+func (stderrWriter) Write(p []byte) (int, error) { return os.Stderr.Write(p) }
+
 // mergeConfigArgs builds the option alias map from the registered cobra flags
 // and merges the config file (config defaults < CLI args).
-func mergeConfigArgs(cliArgs []string) ([]string, error) {
+//
+// 第二个返回值表示配置文件确实带进了参数（长度变化），它决定要不要打那行「加载配置文件完成」。
+// 打印留给调用方：机读模式下这行是解析前输出，必须先让位到 stderr 才能打。
+func mergeConfigArgs(cliArgs []string) (merged []string, loaded bool, err error) {
 	aliasMap, boolFlags := buildFlagMaps()
-	merged, err := config.MergeWithConfig(cliArgs, aliasMap, boolFlags)
+	out, err := config.MergeWithConfig(cliArgs, aliasMap, boolFlags)
 	if err != nil {
-		return cliArgs, nil
+		return cliArgs, false, err
 	}
-	if len(merged) != len(cliArgs) {
-		util.Log("加载配置文件完成（配置为默认值，命令行参数优先）")
-	}
-	return merged, nil
+	return out, len(out) != len(cliArgs), nil
 }
 
 // buildFlagMaps collects every registered flag's alias (long and shorthand) and
@@ -549,6 +641,10 @@ func init() {
 }
 
 func runDownload(cmd *cobra.Command, args []string) error {
+	// 机读模式（--info-json）：日志让位到 stderr，stdout 只留 JSON 数据；RunE 返回时还原。
+	restoreLogs := yieldLogsToStderr(optInfoJSON)
+	defer restoreLogs()
+
 	// F2 批量输入（本仓新功能）：位置参数可给多个（此前只取 args[0]，其余被静默忽略），
 	// 也可用 --urls-file 从文件/stdin 读列表。
 	targets, err := collectTargets(args, optURLsFile, os.Stdin)
@@ -573,12 +669,18 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.11.2")
+	updateCheck(context.Background(), client, "v2.12.0")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。
 	return downloadTargets(commandContext(cmd), cmd, cfg, client, targets)
 }
+
+// updateCheck 是「检查新版本」的接线点（默认 util.CheckUpdateAsync，上游 fire-and-forget 语义不变）。
+//
+// 抽成变量是为了让用例能走**真实 RunE** 又不出网：runDownload 里唯一的后台网络调用就是它，
+// 机读模式的守卫用例（machineoutput_test.go）需要离线跑完整条 RunE。手法同 doctorChecks。
+var updateCheck = util.CheckUpdateAsync
 
 // productsUnknown 表示拿不到本轮的产出文件数（见 batchSummary.products 的说明）。
 const productsUnknown = -1

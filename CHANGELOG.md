@@ -10,6 +10,31 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.12.0] - 2026-09-26
+
+功能批次：**`serve` 的极简 Web UI + SSE 进度流**、**机读模式 stdout 只留数据**。
+
+### 新增
+
+- **`serve` Web UI + SSE**（两条 C# 线都没有，本仓差异化能力）：`GET /` 返回内嵌单页（`//go:embed`，无框架无 CDN，离线可用，
+  二进制仅 **+8 KB**）；`GET /events` 用 `text/event-stream` 推送任务事件（`task_start` / `task_progress` / `task_done` / `task_failed`，
+  另有握手帧 `hello` 与 25s 心跳）。一屏内看到：连接状态、当前任务（标题/状态/进度条/百分比/已下载/总量/速率/剩余）、最近 12 条事件。
+  - 事件字段语义与 `--progress-json` 对齐（`percent` 0~100、`downloaded`/`total`/`speed`/`state`），任务字段与任务 API、`--info-json` 对齐；
+  - 回放最近 64 条 + 客户端按 `seq` 去重；总线 64 连接上限、单连接 64 帧队列（**队列满丢帧，绝不阻塞发布者**）；
+  - 门禁：页面与 `/health` 同级（不含用户数据、无需 token）；`/events` 带任务数据，配了 `--serve-token` 时必须带 token
+    （请求头或 `?token=`，EventSource 不能自定义请求头）。
+
+### 修复
+
+- **机读模式 stdout 只留数据**（`--info-json` / `doctor --json`）：真机 `BBDown --info-json <URL> 2>/dev/null | json.load` 与
+  `BBDown doctor --json | json.load` 由 **rc=1 变 rc=0**；机读 stdout 首字节由横幅的 ESC 变 `{`，日志**让位到 stderr**（17 行仍在，不丢弃）。
+  人看模式（横幅/颜色/时间戳/输出顺序）与改前逐字一致（含 `--version`/`--help`/`-I`/失败路径的 diff 对比）。
+
+### 说明
+
+- 版本位：本批含新功能（Web UI/SSE）→ **minor**（`2.11.2` → `2.12.0`）。
+- SSE 进度目前发布在**服务端可观测边界**（入队/开始/元数据/每件产物落盘/终止），`downloaded` 为产物字节累计；
+  逐字节进度需要 `internal/download` 暴露进度回调（列为下一轮任务）——`total` 无来源时显示「总量未知」而**不估算**。
 ## [2.11.2] - 2026-09-26
 
 **判据修正与口径统一**：宽度表收敛到单一来源、进度条三处口径合一。

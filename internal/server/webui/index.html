@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>BBDown serve</title>
+<link rel="icon" href="data:,">
+<style>
+:root{
+  color-scheme:light dark;
+  --fg:#1f2328;--muted:#6b7280;--bg:#fff;--card:#fff;--line:#e5e7eb;
+  --accent:#2563eb;--ok:#16a34a;--bad:#dc2626;--track:#eef1f4;
+}
+@media (prefers-color-scheme:dark){
+  :root{--fg:#e6e6e6;--muted:#9aa0a6;--bg:#0f1115;--card:#151922;--line:#2a2f3a;
+        --accent:#60a5fa;--ok:#4ade80;--bad:#f87171;--track:#232833}
+}
+*{box-sizing:border-box}
+body{margin:0;padding:24px 16px;background:var(--bg);color:var(--fg);
+     font:14px/1.55 system-ui,-apple-system,"Segoe UI","Noto Sans CJK SC",sans-serif}
+main{max-width:720px;margin:0 auto}
+header{display:flex;align-items:baseline;justify-content:space-between;margin:0 0 16px}
+h1{margin:0;font-size:15px;font-weight:600}
+#conn{font-size:12px;color:var(--muted)}
+#conn.live{color:var(--ok)}
+#conn.down{color:var(--bad)}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+#empty{color:var(--muted)}
+#task-title{font-weight:600;word-break:break-all}
+#task-meta{margin-top:4px;font-size:12px;color:var(--muted);word-break:break-all}
+#track{height:8px;margin:14px 0 10px;background:var(--track);border-radius:5px;overflow:hidden}
+#progress{display:block;height:100%;width:0;background:var(--accent)}
+#track.unknown #progress{width:100%;opacity:.25}
+#stats{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:12px;color:var(--muted);
+       font-variant-numeric:tabular-nums}
+#stats b{color:var(--fg);font-weight:600}
+ul#events{list-style:none;margin:0;padding:0;max-height:300px;overflow-y:auto;font-size:12px}
+ul#events li{display:flex;gap:10px;padding:5px 0;border-top:1px solid var(--line)}
+ul#events li:first-child{border-top:0}
+ul#events time{color:var(--muted);font-variant-numeric:tabular-nums}
+ul#events .what{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ul#events .num{color:var(--muted);font-variant-numeric:tabular-nums}
+.done{color:var(--ok)}
+.failed{color:var(--bad)}
+#events-empty{font-size:12px;color:var(--muted)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>BBDown serve</h1>
+    <span id="conn">连接中…</span>
+  </header>
+
+  <section>
+    <div id="empty">当前没有任务。用 <code>POST /add-task</code> 添加一个下载任务。</div>
+    <div id="task" hidden>
+      <div id="task-title">—</div>
+      <div id="task-meta">—</div>
+      <div id="track"><i id="progress"></i></div>
+      <div id="stats">
+        <span>进度 <b id="percent">—</b></span>
+        <span>已下载 <b id="downloaded">—</b></span>
+        <span>总量 <b id="total">—</b></span>
+        <span>速率 <b id="speed">—</b></span>
+        <span>剩余 <b id="eta">—</b></span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <ul id="events"></ul>
+    <div id="events-empty">暂无事件</div>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  // 同一页面上的 EventSource 指向 /events；EventSource 不能自定义请求头，
+  // 所以配了 --serve-token 的部署从本页 URL 透传 ?token=。
+  var token = new URLSearchParams(location.search).get("token");
+  var url = "/events" + (token ? "?token=" + encodeURIComponent(token) : "");
+  var es = new EventSource(url);
+
+  var conn = document.getElementById("conn");
+  var emptyBox = document.getElementById("empty");
+  var taskBox = document.getElementById("task");
+  var title = document.getElementById("task-title");
+  var meta = document.getElementById("task-meta");
+  var track = document.getElementById("track");
+  var bar = document.getElementById("progress");
+  var percent = document.getElementById("percent");
+  var downloaded = document.getElementById("downloaded");
+  var total = document.getElementById("total");
+  var speed = document.getElementById("speed");
+  var eta = document.getElementById("eta");
+  var list = document.getElementById("events");
+  var listEmpty = document.getElementById("events-empty");
+
+  var tasks = new Map();  // job_id -> 最近一条事件
+  var lastSeq = 0;        // 重连时服务端会回放历史，按 seq 去重
+  var MAX_ROWS = 12;
+  var LABEL = { task_start: "开始", task_progress: "进度", task_done: "完成", task_failed: "失败" };
+
+  function fmtBytes(n) {
+    if (!n || n < 0) { return "—"; }
+    var units = ["B", "KB", "MB", "GB", "TB"], i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n : n.toFixed(1)) + " " + units[i];
+  }
+  function fmtSpeed(bps) { return bps > 0 ? fmtBytes(bps) + "/s" : "—"; }
+  function fmtETA(sec) {
+    if (!isFinite(sec) || sec <= 0) { return "—"; }
+    sec = Math.round(sec);
+    if (sec < 60) { return sec + "s"; }
+    if (sec < 3600) { return Math.floor(sec / 60) + "m" + ("0" + (sec % 60)).slice(-2) + "s"; }
+    return Math.floor(sec / 3600) + "h" + ("0" + Math.floor(sec % 3600 / 60)).slice(-2) + "m";
+  }
+  function clock(ms) {
+    var d = new Date(ms || Date.now());
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) +
+           ":" + ("0" + d.getSeconds()).slice(-2);
+  }
+  function label(ev) { return ev.title || ev.url || ev.job_id || "—"; }
+
+  function renderCurrent() {
+    var cur = null;
+    tasks.forEach(function (ev) {
+      if (ev.status !== "Queued" && ev.status !== "Running") { return; }
+      if (!cur || ev.seq > cur.seq) { cur = ev; }
+    });
+    if (!cur) { emptyBox.hidden = false; taskBox.hidden = true; return; }
+    emptyBox.hidden = true;
+    taskBox.hidden = false;
+    title.textContent = label(cur);
+    meta.textContent = (cur.status === "Queued" ? "排队中" : "下载中") + " · " + (cur.job_id || "");
+    var known = cur.total > 0;
+    track.className = known ? "" : "unknown";
+    bar.style.width = known ? Math.max(0, Math.min(100, cur.percent)) + "%" : "100%";
+    percent.textContent = known ? cur.percent.toFixed(1) + "%" : "未知";
+    downloaded.textContent = fmtBytes(cur.downloaded);
+    total.textContent = known ? fmtBytes(cur.total) : "未知";
+    speed.textContent = fmtSpeed(cur.speed);
+    eta.textContent = known && cur.speed > 0 ? fmtETA((cur.total - cur.downloaded) / cur.speed) : "—";
+  }
+
+  function addRow(ev) {
+    var row = document.createElement("li");
+    var cls = ev.type === "task_done" ? "done" : (ev.type === "task_failed" ? "failed" : "");
+    var when = document.createElement("time");
+    when.textContent = clock(ev.time);
+    var what = document.createElement("span");
+    what.className = "what " + cls;
+    what.textContent = (LABEL[ev.type] || ev.type) + " " + label(ev) + (ev.error ? " · " + ev.error : "");
+    var num = document.createElement("span");
+    num.className = "num";
+    num.textContent = ev.percent > 0 ? ev.percent.toFixed(1) + "%" : "";
+    row.appendChild(when);
+    row.appendChild(what);
+    row.appendChild(num);
+    list.insertBefore(row, list.firstChild);
+    while (list.childNodes.length > MAX_ROWS) { list.removeChild(list.lastChild); }
+    listEmpty.hidden = true;
+  }
+
+  // EventSource 默认就会自动重连（服务端用 retry 帧之外无需额外协议）。
+  es.onopen = function () { conn.textContent = "已连接"; conn.className = "live"; };
+  es.onerror = function () { conn.textContent = "已断开 · 自动重连中"; conn.className = "down"; };
+  es.onmessage = function (msg) {
+    var ev;
+    try { ev = JSON.parse(msg.data); } catch (e) { return; }
+    if (ev.seq && ev.seq <= lastSeq) { return; }
+    if (ev.seq) { lastSeq = ev.seq; }
+    if (ev.type === "hello") { conn.textContent = "已连接"; conn.className = "live"; return; }
+    if (ev.job_id) { tasks.set(ev.job_id, ev); }
+    addRow(ev);
+    renderCurrent();
+  };
+})();
+</script>
+</body>
+</html>

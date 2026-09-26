@@ -62,6 +62,11 @@ type DownloadTask struct {
 
 	cancelFn context.CancelFunc
 	mu       *sync.Mutex
+
+	// SSE 速率采样（未导出 → 不进 JSON 契约）：与 --progress-json 同一口径，满 1 秒结算一次。
+	lastSampleTime  time.Time
+	lastSampleBytes int64
+	speedBps        float64
 }
 
 // Snapshot returns a thread-safe copy of the task.
@@ -74,21 +79,46 @@ func (t *DownloadTask) Snapshot() DownloadTask {
 	return cp
 }
 
-// AddSavePath adds a file path to the task save list.
-func (t *DownloadTask) AddSavePath(path string) {
+// AddSavePath adds a file path to the task save list and reports whether it was
+// new. The caller (serve's SSE layer) uses the result to count artefact bytes:
+// a resumed page or a retry reports the same artefact twice and double counting
+// would inflate TotalDownloadedBytes. The list is a set for the same reason
+// (upstream dedupes).
+func (t *DownloadTask) AddSavePath(path string) bool {
 	if path == "" {
-		return
+		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// The list is a set: a resumed page or a retry can report the same artefact
-	// twice, and clients should not see duplicate SavePaths (upstream dedupes).
 	for _, p := range t.SavePaths {
 		if p == path {
-			return
+			return false
 		}
 	}
 	t.SavePaths = append(t.SavePaths, path)
+	return true
+}
+
+// sampleSpeed 按 --progress-json 的口径（满 1 秒结算一次，分片回退时 delta 按 0 处理）
+// 计算任务的平均速率，供 SSE 事件使用。调用方：publishTaskEvent。
+func (t *DownloadTask) sampleSpeed(now time.Time) float64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.lastSampleTime.IsZero() {
+		t.lastSampleTime = now
+		t.lastSampleBytes = t.TotalDownloadedBytes
+		return 0
+	}
+	if elapsed := now.Sub(t.lastSampleTime).Seconds(); elapsed >= 1.0 {
+		delta := t.TotalDownloadedBytes - t.lastSampleBytes
+		if delta < 0 {
+			delta = 0
+		}
+		t.speedBps = float64(delta) / elapsed
+		t.lastSampleBytes = t.TotalDownloadedBytes
+		t.lastSampleTime = now
+	}
+	return t.speedBps
 }
 
 // SetStatus updates the task status and derives IsSuccessful (upstream).
@@ -128,6 +158,12 @@ type APIServer struct {
 	trustedProxy  string
 	queryLimiter  chan struct{} // bounds concurrent /get-tasks queries
 
+	// events 是 SSE 进度流（Web UI 的数据源）；eventsAuth 是它**独立**的 token 失败计数器：
+	// EventSource 会自动重连，与 API 共用 authGuard 会让一个没带 token 的页面把浏览器
+	// 锁在 API 外面（见 handleEvents）。
+	events     *eventHub
+	eventsAuth *authGuard
+
 	// persistMu serialises bbdown-tasks.json writes: several tasks finish
 	// concurrently and each calls persistFinishedTasks.
 	persistMu sync.Mutex
@@ -151,6 +187,8 @@ func NewAPIServer(listenURL string, maxConcurrent int, serveToken, notifyWebhook
 		taskFile:      "bbdown-tasks.json",
 		auth:          newAuthGuard(),
 		queryLimiter:  make(chan struct{}, maxConcurrentQueries),
+		events:        newEventHub(maxEventClients),
+		eventsAuth:    newAuthGuard(),
 	}
 }
 
@@ -182,6 +220,11 @@ func (s *APIServer) buildHandler() http.Handler {
 	mux.HandleFunc("/remove-finished", s.handleRemoveFinished)
 	mux.HandleFunc("/remove-finished/", s.handleRemoveFinished)
 	mux.HandleFunc("/health", s.handleHealth)
+	// 任务 N：极简 Web UI + SSE 进度流。两者都不是 API 路径（tokenMiddleware 的 isAPI
+	// 判定与语义未改）：页面不含用户数据，事件流在配了 --serve-token 的部署里自带 token
+	// 校验（见 handleEvents），两者都仍受 guardMiddleware 约束。
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/events", s.handleEvents)
 
 	var handler http.Handler = mux
 	if s.serveToken != "" {
@@ -604,6 +647,9 @@ func (s *APIServer) handleAddTask(w http.ResponseWriter, r *http.Request) {
 	s.runningTasks = append(s.runningTasks, task)
 	s.mu.Unlock()
 
+	// 先发「任务被接受」再启协程：事件的先后顺序与状态推进一致（Status=Queued）。
+	s.publishTaskEvent(EventTaskStart, task, StateProgress)
+
 	s.taskWG.Add(1)
 	go s.processTask(ctx, task, req.URL)
 
@@ -636,6 +682,7 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 	if !s.acquireSlot(ctx) {
 		task.SetStatus(StatusCancelled)
 		s.finishTask(task, "")
+		s.publishTaskEvent(EventTaskDone, task, StateDone)
 		s.sendCallback(task)
 		return
 	}
@@ -653,12 +700,14 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 	if err != nil {
 		task.SetStatus(StatusFailed)
 		s.finishTask(task, err.Error())
+		s.publishTaskEvent(EventTaskFailed, task, StateDone)
 		s.sendCallback(task)
 		return
 	}
 	if resolved == "" {
 		task.SetStatus(StatusFailed)
 		s.finishTask(task, "无法解析目标 URL")
+		s.publishTaskEvent(EventTaskFailed, task, StateDone)
 		s.sendCallback(task)
 		return
 	}
@@ -675,15 +724,23 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 		task.Pic = v.Pic
 		task.VideoPubTime = v.PubTime
 		task.mu.Unlock()
+		s.publishTaskEvent(EventTaskProgress, task, StateProgress)
 	}
-	wf.OnSaved = func(path string) { task.AddSavePath(path) }
+	// 每件产物落盘都推一条进度事件：产物字节数是 serve 侧唯一可得的进度信号。
+	wf.OnSaved = func(path string) { s.onArtifactSaved(task, path) }
 
 	task.SetStatus(StatusRunning)
+	s.publishTaskEvent(EventTaskProgress, task, StateProgress)
 	err = wf.Run(ctx)
 	if err != nil {
 		status, msg := classifyTaskCancellation(ctx, err)
 		task.SetStatus(status)
 		s.finishTask(task, msg)
+		if status == StatusFailed {
+			s.publishTaskEvent(EventTaskFailed, task, StateDone)
+		} else {
+			s.publishTaskEvent(EventTaskDone, task, StateDone)
+		}
 		s.sendCallback(task)
 		return
 	}
@@ -693,6 +750,7 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 	task.TaskFinishTime = time.Now().Unix()
 	task.Progress = 1.0
 	task.mu.Unlock()
+	s.publishTaskEvent(EventTaskDone, task, StateDone)
 	s.finishTask(task, "")
 	s.sendCallback(task)
 }
