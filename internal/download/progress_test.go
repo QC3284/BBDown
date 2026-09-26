@@ -270,6 +270,9 @@ func assertWindowRate(t *testing.T, what string, got, windowBytes, windowSeconds
 // 结构性判据变红；去掉 renderProgressInfo 的 ETA 分支，格式判据变红。
 func TestProgressReaderShowsTotalAndETA(t *testing.T) {
 	withFakeTerminal(t)
+	// 120 列：满字段帧（bar 40 + 速率 + ETA + 总量）放得下，本用例钉住的就是这套格式。
+	// 80 列终端上 ETA 会被宽度自适应裁掉（见 renderProgressFrameAt 与 progress_width_test.go）。
+	withTerminalWidth(t, 120)
 	const (
 		mib         = 1 << 20
 		transferred = 10 * mib
@@ -319,6 +322,7 @@ func TestProgressReaderShowsTotalAndETA(t *testing.T) {
 // 把速率算式改坏（恒 0、或把 base 卷进 delta）→ 结构性判据变红。
 func TestProgressReaderResumeFrameCountsBaseBytes(t *testing.T) {
 	withFakeTerminal(t)
+	withTerminalWidth(t, 120) // 同上传用例：满字段帧需要 120 列
 	const (
 		mib         = 1 << 20
 		base        = 50 * mib // 磁盘上已就位：整份 100 MiB 的一半

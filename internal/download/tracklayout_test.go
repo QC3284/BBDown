@@ -206,7 +206,11 @@ func TestAudioAndSelectedLinesShareVideoLayout(t *testing.T) {
 
 // TestTrackLinesCarryEveryField 信息一条不减：清晰度/分辨率/编码/帧率/码率/体积仍在行里，
 // 只是方括号换成了列间距（清单行不再出现 [ ]）。
+//
+// 200 列：只有宽到放得下全部六列时才谈得上"一条不减"；窄终端按宽度自适应省列
+// （见 tracklayout_width_test.go 的宽度表）。
 func TestTrackLinesCarryEveryField(t *testing.T) {
+	withTerminalWidth(t, 200)
 	video := entity.Video{Dfn: "1080P 高清", Res: "1920x1080", Codecs: "AVC", FPS: "30", Bandwidth: 3000, Dur: 100}
 	line := formatVideoTrackLine(2, video, 100)
 	for _, want := range []string{"2.", "1080P 高清", "1920x1080", "AVC", "30", "3000 kbps", "~36.62 MB"} {
@@ -232,7 +236,10 @@ func TestTrackLinesCarryEveryField(t *testing.T) {
 
 // TestTrackLineDurationFallback 体积的取值规则与改前一致：分P时长优先、缺失时用轨道时长；
 // 接口给了 size 就不再估算。
+//
+// 200 列：体积列是宽度不足时**第一个**被省掉的列，窄终端上它根本不显示。
 func TestTrackLineDurationFallback(t *testing.T) {
+	withTerminalWidth(t, 200)
 	v := entity.Video{Dfn: "360P 流畅", Bandwidth: 100, Dur: 60}
 	if line := formatVideoTrackLine(0, v, 0); !strings.Contains(line, "~750.00 KB") { // 60×100kbps×1024/8 = 768000
 		t.Errorf("分P时长缺失时应按轨道时长估算体积：%q", line)

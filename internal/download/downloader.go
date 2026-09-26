@@ -1259,53 +1259,96 @@ func SortAudioTracks(tracks []entity.Audio, encodingPriority map[string]int, asc
 
 // PrintAllTracks displays available tracks, in the order upstream Display.PrintAllTracksInfo
 // prints them: 背景音频流与配音（仅当两者都存在时）→ 视频流 → 音频流。
+//
+// 每一段都是「段标题（带时间戳的日志行）+ 表头 + 数据行」。表头与数据行共用同一个 plan
+// （见 tracklayout.go）：每一列的宽度只算一次、只有一处，用户看得到每列是什么，终端窄时
+// 按同一份优先级省列，不会各打印一处、各排一套。
 func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool) {
+	plan := newTrackPlan(util.TerminalWidth())
+	// 每行自带缩进（折行的续行是悬挂缩进，与首行不同），所以这里按行写、不再另加缩进。
+	printRows := func(lines []planLine) {
+		for _, line := range lines {
+			util.LogColorNoTimeIndent(line.indent, "%s", line.text)
+		}
+	}
+
 	// 背景音频与配音属于同一块信息（上游 Display.cs:19-35）：两者都存在才打印，
 	// 只打印首条配音名下的配音流。
 	if len(result.BackgroundAudioTracks) > 0 && len(result.RoleAudioList) > 0 {
 		util.Log("共计%d条背景音频流.", len(result.BackgroundAudioTracks))
+		printRows(plan.headerLines(audioTrackHeaders))
 		for i, a := range result.BackgroundAudioTracks {
-			util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+			printRows(plan.audioLines(fmt.Sprintf("%d.", i), a, pageDur))
 		}
 		if firstRole := result.RoleAudioList[0].Audio; len(firstRole) > 0 {
 			util.Log("共计%d条配音, 每条包含%d条配音流.", len(result.RoleAudioList), len(firstRole))
+			printRows(plan.headerLines(audioTrackHeaders))
 			for i, a := range firstRole {
-				util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+				printRows(plan.audioLines(fmt.Sprintf("%d.", i), a, pageDur))
 			}
 		}
 	}
 	if len(result.VideoTracks) > 0 {
 		util.Log("共计%d条视频流.", len(result.VideoTracks))
+		printRows(plan.headerLines(videoTrackHeaders))
 		for i, v := range result.VideoTracks {
-			util.LogColorNoTime("%s", formatVideoTrackLine(i, v, pageDur))
+			printRows(plan.videoLines(fmt.Sprintf("%d.", i), v, pageDur))
 			// --only-show-info：每条流后面直接给出可下载地址（上游 Console.WriteLine(v.baseUrl)），
 			// 少了这一行，-I 拿到的就只是体积/码率清单，脚本无法据此取流。
 			if onlyShowInfo {
-				fmt.Println(v.BaseURL)
+				printStreamURL(plan, v.BaseURL)
 			}
 		}
 	}
 	if len(result.AudioTracks) > 0 {
 		util.Log("共计%d条音频流.", len(result.AudioTracks))
+		printRows(plan.headerLines(audioTrackHeaders))
 		for i, a := range result.AudioTracks {
-			util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+			printRows(plan.audioLines(fmt.Sprintf("%d.", i), a, pageDur))
 			if onlyShowInfo {
-				fmt.Println(a.BaseURL)
+				printStreamURL(plan, a.BaseURL)
 			}
 		}
 	}
 }
 
+// printStreamURL 打出一条流的直链（--only-show-info）。
+//
+// 管道/重定向里**逐字节原样**输出（一行地址加换行：无缩进、无颜色、无截断），600+ 字符的
+// CDN 直链也必须完整——脚本按行取地址是本仓的对外契约（TestOnlyShowInfoKeepsRawURLInPipe）。
+// 终端里则换成省略形式的提示行（↳ host/…/文件名）：这么长的地址在终端里既读不了、也复制不走，
+// 还会把整份清单冲散；要全文用 --print-urls（专为管道设计的出口）。
+func printStreamURL(plan trackPlan, raw string) {
+	if raw == "" {
+		return
+	}
+	if !isTerminalOut() {
+		fmt.Println(raw)
+		return
+	}
+	for _, line := range plan.urlLines(raw) {
+		util.LogColorNoTimeIndent(line.indent, "%s", line.text)
+	}
+}
+
 // PrintSelectedTrack shows the chosen tracks (matching C# format).
 //
-// 与流清单共用 tracklayout.go 的列宽：行首是 [视频]/[音频] 标签而不是序号，
-// 但名称列、码率列、体积列都落在与清单行相同的显示列上。
+// 与流清单共用 tracklayout.go 的同一套列宽与缩进：行首是 [视频]/[音频] 标签而不是序号，
+// 但名称列、码率列、体积列都落在与清单行相同的显示列上，上下对照着看。
+//
+// 这里不另打表头：同一次运行里清单刚打过表头（workflow 先 PrintAllTracks 再走到这里），
+// 而且这两行自带 [视频]/[音频] 标签说明各自是什么；再插一行标签只会把两行数据挤散。
 func PrintSelectedTrack(video *entity.Video, audio *entity.Audio, pageDur int) {
+	plan := newTrackPlan(util.TerminalWidth())
 	if video != nil {
-		util.LogColorNoTime("%s", formatVideoTrackRow("[视频]", *video, pageDur))
+		for _, line := range plan.videoLines("[视频]", *video, pageDur) {
+			util.LogColorNoTimeIndent(line.indent, "%s", line.text)
+		}
 	}
 	if audio != nil {
-		util.LogColorNoTime("%s", formatAudioTrackRow("[音频]", *audio, pageDur))
+		for _, line := range plan.audioLines("[音频]", *audio, pageDur) {
+			util.LogColorNoTimeIndent(line.indent, "%s", line.text)
+		}
 	}
 }
 

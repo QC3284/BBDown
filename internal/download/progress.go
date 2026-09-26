@@ -11,11 +11,19 @@ import (
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/QC3284/BBDown/internal/util"
 )
 
 const (
+	// progressBlocks 是进度条的默认（上限）格数：宽终端上仍是改前的 40 格。
 	progressBlocks = 40
-	progressChars  = "|/-\\"
+	// progressMinBlocks 是进度条的下限。宽度不够时**先**裁统计区（ETA → 总量 → 速率），
+	// 因为进度条是这一行里唯一无法从数字还原的东西；但少于这个格数，它就不再传达进度了。
+	progressMinBlocks = 10
+	// progressOverhead 是进度条两侧的固定开销："[" + "]" + 空格 + 动画字符 = 4 列。
+	progressOverhead = 4
+	progressChars    = "|/-\\"
 )
 
 // progressReader wraps an io.Reader and shows a progress bar.
@@ -256,40 +264,145 @@ func progressPercent(downloaded, total int64) float64 {
 
 // renderProgressFrame 渲染整帧：进度条 + 动画字符 + 信息段。单线程读取与多线程聚合
 // 两条路径共用（单一来源）——同一次下载在多线程下看到的进度行必须与单线程下逐字同格式。
+//
+// 宽度取当前终端（每次渲染取一次，见 util.TerminalWidth）：非 TTY 恒为 80 列，与改前一致；
+// --progress-json 不画帧，完全不受影响。
 func renderProgressFrame(downloaded, total int64, speedBps float64, anim byte) string {
-	blocks := int(progressPercent(downloaded, total) * progressBlocks)
-	bar := strings.Repeat("#", blocks) + strings.Repeat("-", progressBlocks-blocks)
-	return fmt.Sprintf("                            [%s] %c%s", bar, anim, renderProgressInfo(progressFrame{
+	return renderProgressFrameAt(util.TerminalWidth(), progressFrame{
 		speedBps:   speedBps,
 		downloaded: downloaded,
 		total:      total,
-	}))
+	}, anim)
 }
 
-// renderProgressInfo 渲染进度行的信息段：
+// renderProgressFrameAt 在 width 列的终端里渲染一帧：整帧（含行首缩进）不超过 width。
 //
-//	50.00%  1.2 MB/s ETA 00:03:12 25.0/50.0 MB
+// 进度条的格数不是固定的 40，而是「终端宽度 − 缩进 − 固定开销 − 统计区宽度」反算出来的
+// （宽终端上仍以 40 为上限）；反算结果不足 progressMinBlocks 时按优先级裁统计区：
+// 先去掉 ETA（速率还在，用户能自己估剩余时间）→ 再去掉总量 x/y（百分比还在）→
+// 最后才省略速率（连速率都没有了才是真正的退化）。
+//
+// 极端窄终端（连「百分比 + 10 格进度条」都放不下）才会回收行首缩进：那一档里缩进已经
+// 对齐不了任何东西，数字与进度条必须留下。任何宽度下整帧都 ≤ width（最后一条防线是
+// 截断统计区，见下面的 ellipsizeDisplay）。
+func renderProgressFrameAt(width int, f progressFrame, anim byte) string {
+	frame := progressFrameText(width, f, anim)
+	// 最后一条防线：宽度小于 5 列（连 "[#] |" 都放不下）时把整帧截到宽度以内。
+	// 真实终端到不了这一档，但「整帧 ≤ 终端宽度」是对外契约，不能只在合理宽度下成立。
+	if width > 0 && DisplayWidth(frame) > width {
+		frame = truncateDisplay(frame, width)
+	}
+	return frame
+}
+
+// progressFrameText 是 renderProgressFrameAt 的降级主体（不含最后那道截断防线）。
+func progressFrameText(width int, f progressFrame, anim byte) string {
+	variants := progressInfoVariants(f)
+	// 第一轮：保住 28 列缩进（与日志前缀对齐），按优先级裁统计区。
+	for _, info := range variants {
+		if bar := width - util.LogIndentWidth - progressOverhead - DisplayWidth(info); bar >= progressMinBlocks {
+			return formatProgressFrame(util.LogIndentWidth, min(bar, progressBlocks), f, info, anim)
+		}
+	}
+	// 第二轮：缩进是装饰、信息不是——把缩进让出去再走一遍同样的优先级，
+	// 能保住多少统计区就保住多少（40 列终端上就是靠这一轮留住速率）。
+	for _, info := range variants {
+		indent := width - progressOverhead - progressMinBlocks - DisplayWidth(info)
+		if indent < 0 {
+			continue
+		}
+		if indent > util.LogIndentWidth {
+			indent = util.LogIndentWidth
+		}
+		bar := min(width-indent-progressOverhead-DisplayWidth(info), progressBlocks)
+		return formatProgressFrame(indent, bar, f, info, anim)
+	}
+	// 第三轮：连「统计区 + 10 格进度条 + 缩进 0」都放不下（宽度 < 20 的极端终端）：
+	// 条压到下限、统计区截断到放得下为止——「整帧 ≤ 终端宽度」是硬约束。
+	info := variants[len(variants)-1]
+	bar := max(1, min(width-progressOverhead-DisplayWidth(info), progressMinBlocks))
+	if room := width - progressOverhead - bar; room < DisplayWidth(info) {
+		info = ellipsizeDisplay(info, room)
+	}
+	return formatProgressFrame(0, bar, f, info, anim)
+}
+
+// formatProgressFrame 按给定的缩进与进度条格数拼出一帧。
+func formatProgressFrame(indent, bar int, f progressFrame, info string, anim byte) string {
+	filled := int(progressPercent(f.downloaded, f.total) * float64(bar))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > bar {
+		filled = bar
+	}
+	barText := strings.Repeat("#", filled) + strings.Repeat("-", bar-filled)
+	return fmt.Sprintf("%s[%s] %c%s", strings.Repeat(" ", indent), barText, anim, info)
+}
+
+// progressInfoOrder 是信息段里各字段的渲染顺序（也是阅读顺序）。
+var progressInfoOrder = []string{"percent", "speed", "eta", "amounts"}
+
+// progressInfoDropOrder 是宽度不足时统计区的裁剪顺序（见 renderProgressFrameAt）：
+// ETA → 总量 x/y → 速率。百分比永不裁（没有它这一行就不叫进度条了）。
+var progressInfoDropOrder = []string{"eta", "amounts", "speed"}
+
+// progressInfoParts 把一帧的统计区拆成「字段名 → 文本」，只含这一帧真正有的字段。
 //
 // 省略规则（用例钉住）：速率未知（下载头一秒、或整段时间没有数据）就不显示速率与 ETA——
 // 没有速率算不出剩余时间；总量未知（拿不到 Content-Length 的路径）就不显示 x/y。
 // 百分比用 %6.2f 右对齐、速率右对齐到固定宽度，后面的 ETA 与总量才不会随数字位数左右抖动。
-func renderProgressInfo(f progressFrame) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%6.2f%%", progressPercent(f.downloaded, f.total)*100)
+func progressInfoParts(f progressFrame) map[string]string {
+	parts := map[string]string{
+		"percent": fmt.Sprintf("%6.2f%%", progressPercent(f.downloaded, f.total)*100),
+	}
 	if f.speedBps > 0 {
-		fmt.Fprintf(&b, " %9s", formatSpeed(f.speedBps)+"/s")
+		parts["speed"] = fmt.Sprintf(" %9s", formatSpeed(f.speedBps)+"/s")
 		if f.total > 0 {
 			remaining := f.total - f.downloaded
 			if remaining < 0 {
 				remaining = 0 // 末帧可能瞬时越过总长（分片计数先加后校验），夹到 0 而不是负 ETA
 			}
-			fmt.Fprintf(&b, " ETA %s", formatETA(float64(remaining)/f.speedBps))
+			parts["eta"] = fmt.Sprintf(" ETA %s", formatETA(float64(remaining)/f.speedBps))
 		}
 	}
 	if f.total > 0 {
-		fmt.Fprintf(&b, " %s", formatTransferAmounts(f.downloaded, f.total))
+		parts["amounts"] = " " + formatTransferAmounts(f.downloaded, f.total)
+	}
+	return parts
+}
+
+// joinProgressInfo 按固定顺序把字段拼成统计区。
+func joinProgressInfo(parts map[string]string) string {
+	var b strings.Builder
+	for _, k := range progressInfoOrder {
+		b.WriteString(parts[k])
 	}
 	return b.String()
+}
+
+// progressInfoVariants 是统计区的降级序列：全字段 → 去 ETA → 去总量 → 只剩百分比。
+// 只包含真正发生变化的那几档（这一帧没有的字段不会产生重复档）。
+func progressInfoVariants(f progressFrame) []string {
+	parts := progressInfoParts(f)
+	out := []string{joinProgressInfo(parts)}
+	for _, k := range progressInfoDropOrder {
+		if _, ok := parts[k]; !ok {
+			continue
+		}
+		delete(parts, k)
+		out = append(out, joinProgressInfo(parts))
+	}
+	return out
+}
+
+// renderProgressInfo 渲染进度行的信息段（全字段版本）：
+//
+//	50.00%  1.2 MB/s ETA 00:03:12 25.0/50.0 MB
+//
+// 各字段的省略规则与降级顺序见 progressInfoParts / progressInfoVariants。
+func renderProgressInfo(f progressFrame) string {
+	return joinProgressInfo(progressInfoParts(f))
 }
 
 // formatETA 把剩余秒数写成 hh:mm:ss（四舍五入到秒）。

@@ -269,9 +269,23 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 
 // LogColorNoTime prints a colored line in cyan without timestamp, indented to align.
 func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
+	l.LogColorNoTimeIndent(LogIndentWidth, format, args...)
+}
+
+// LogColorNoTimeIndent 与 LogColorNoTime 同一条通道、同一套配色，只有行首缩进量由调用方给出。
+//
+// 为什么需要它：清单与表头在窄终端里必须把 28 列的缩进回收给数据列（40 列终端上 28 列缩进
+// 只剩 12 列可用，整行会退化成只剩一个省略号）。宽终端下调用方仍传 LogIndentWidth，
+// 输出与改前逐字节相同。
+func (l *Logger) LogColorNoTimeIndent(indent int, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	consoleWrite(func(w io.Writer) { fmt.Fprint(w, "                            "+AnsiCyan+msg+AnsiReset+"\n") })
-	l.appendToFile("                             " + msg)
+	if indent < 0 {
+		indent = 0
+	}
+	pad := strings.Repeat(" ", indent)
+	consoleWrite(func(w io.Writer) { fmt.Fprint(w, pad+AnsiCyan+msg+AnsiReset+"\n") })
+	// 文件日志沿用既有的一格额外缩进（与 LogColorNoTime 的写入口径一致）。
+	l.appendToFile(" " + pad + msg)
 }
 
 // LogColor prints a colored line in cyan.
@@ -344,6 +358,11 @@ func LogColor(format string, args ...interface{}) {
 // LogColorNoTime prints colored text without timestamp prefix.
 func LogColorNoTime(format string, args ...interface{}) {
 	defaultLogger.LogColorNoTime(format, args...)
+}
+
+// LogColorNoTimeIndent prints colored text without timestamp prefix, with a caller-chosen indent.
+func LogColorNoTimeIndent(indent int, format string, args ...interface{}) {
+	defaultLogger.LogColorNoTimeIndent(indent, format, args...)
 }
 
 // LogDebug is the package-level convenience function.

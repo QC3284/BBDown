@@ -48,6 +48,16 @@ func withFakeTerminal(t *testing.T) {
 	})
 }
 
+// withTerminalWidth 把 util.TerminalWidth() 固定成 width 列，用完还原。
+//
+// 清单与进度帧都按终端宽度自适应，默认宽度（非 TTY）是 80 列：钉住"全字段格式"或
+// "某一档降级"的用例必须自己写明宽度，否则断言会随终端宽度表一起漂移。
+func withTerminalWidth(t *testing.T, width int) {
+	t.Helper()
+	restore := util.SetTerminalWidthForTest(width)
+	t.Cleanup(restore)
+}
+
 // TestProgressLineClearsItselfAndReleasesTheLine 断言收尾把整行擦干净，
 // 并把这一行还给日志——留着最后一帧，紧接着的日志就会和它挤在同一行。
 func TestProgressLineClearsItselfAndReleasesTheLine(t *testing.T) {
