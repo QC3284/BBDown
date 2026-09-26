@@ -564,25 +564,24 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 				return err
 			}
 
-			// 小于 1MiB 的辅助资源（封面/字幕等）不显示进度条：
-			// 它们在百毫秒内完成，进度条只会留下一行 100% 噪声。
 			guard := newStallGuard(resp.Body, downloadStallTimeout)
 			defer guard.Stop()
-			switch {
-			case progressJSONEnabled.Load() && resp.ContentLength > 0:
-				// --progress-json：不看终端、也不看大小——它正是给 GUI/自动化消费的，
-				// 每个文件都该有事件（含收尾的 done 帧），与终端是不是 TTY 无关。
-				pr2 := newProgressReader(guard, resp.ContentLength+offset)
-				pr2.base = offset
-				defer pr2.Close()
-				_, err = io.Copy(out, pr2)
-			case isTerminalOut() && pr.size >= 1<<20 && resp.ContentLength > 0:
-				pr2 := newProgressReader(guard, resp.ContentLength+offset)
-				defer pr2.Close()
-				_, err = io.Copy(out, pr2)
-			default:
+			// 小于 1MiB 的辅助资源（封面/字幕等）不显示进度条：它们在百毫秒内完成，
+			// 进度条只会留下一行 100% 噪声。--progress-json 不看终端、也不看大小——
+			// 它正是给 GUI/自动化消费的，每个文件都该有事件（含收尾的 done 帧）。
+			withProgress := resp.ContentLength > 0 &&
+				(progressJSONEnabled.Load() || (isTerminalOut() && pr.size >= 1<<20))
+			if !withProgress {
 				_, err = io.Copy(out, guard)
+				return err
 			}
+			// 终端进度条与 JSON 事件共用一个读取器与一套口径：total 是本次响应声明的
+			// **剩余**长度，base=offset 是磁盘上已就位的字节数。曾经终端那条忘了设 base，
+			// 于是同一次续传里百分比按 current/total、x/y 却按 (base+current)/total。
+			pr2 := newProgressReader(guard, resp.ContentLength)
+			pr2.base = offset
+			defer pr2.Close()
+			_, err = io.Copy(out, pr2)
 			return err
 		}()
 		// Verify the final length before adopting the file.
@@ -945,7 +944,11 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, ex
 // 「进度行收尾之后才允许打日志」的时序。
 var renderProgressBar = renderAggregateProgress
 
-// renderAggregateProgress draws a 40-block progress bar for multi-thread downloads.
+// renderAggregateProgress 画多线程下载的聚合进度行。
+//
+// 帧内容与单线程路径**同一个渲染函数**（renderProgressFrame）：进度条 + 信息段
+// （百分比 · 速率 · ETA · 总量）。此前这里是一份私有格式，只有百分比与速率、速率还
+// 不对齐——同一次下载在 --multi-thread true/false 下看到两种进度行。
 //
 // 返回前关闭 stopped：调用方据此保证「进度行已擦干净」先于后续日志（上游用 using
 // 作用域表达同一件事——ProgressBar 的 Dispose 必须在合并日志之前完成）。
@@ -963,29 +966,23 @@ func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressP
 	if !line.enabled {
 		return
 	}
-	chars := "|/-\\"
 	animIdx := 0
 	lastBytes := int64(0)
 	lastTime := time.Now()
-	speed := ""
+	var speedBps float64
 	render := func() {
 		cur := counter.Load()
 		now := time.Now()
+		// 速率窗口与单线程路径同口径（增量 / 实际间隔、满 1 秒结算一次）：ETA 由它推算。
 		if elapsed := now.Sub(lastTime).Seconds(); elapsed >= 1.0 {
 			delta := cur - lastBytes
 			if delta > 0 {
-				speed = " " + formatSpeed(float64(delta)) + "/s"
+				speedBps = float64(delta) / elapsed
 			}
 			lastBytes = cur
 			lastTime = now
 		}
-		pct := float64(cur) / float64(total)
-		if pct > 1 {
-			pct = 1
-		}
-		blocks := int(pct * progressBlocks)
-		bar := strings.Repeat("#", blocks) + strings.Repeat("-", progressBlocks-blocks)
-		line.draw(fmt.Sprintf("                            [%s] %6.2f%% %c%s", bar, pct*100, chars[animIdx%len(chars)], speed))
+		line.draw(renderProgressFrame(cur, total, speedBps, progressChars[animIdx%len(progressChars)]))
 		animIdx++
 	}
 

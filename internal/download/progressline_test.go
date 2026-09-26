@@ -32,13 +32,18 @@ func captureStdout(t *testing.T, fn func()) string {
 }
 
 // withFakeTerminal 让进度条以为 stdout 是终端：CI 里 stdout 是管道，
-// 真终端判定会让渲染器直接短路。
+// 真终端判定会让渲染器直接短路。两条判定都要换：
+// isTerminalOut 决定「画不画进度条/选哪条进度路径」，isTerminalStdout 决定
+// progressReader 起不起渲染协程（单线程路径的帧就是靠它印出来的）。
 func withFakeTerminal(t *testing.T) {
 	t.Helper()
-	orig := isTerminalOut
+	origOut := isTerminalOut
+	origStdout := isTerminalStdout
 	isTerminalOut = func() bool { return true }
+	isTerminalStdout = func() bool { return true }
 	t.Cleanup(func() {
-		isTerminalOut = orig
+		isTerminalOut = origOut
+		isTerminalStdout = origStdout
 		util.SetProgressLineActive(false)
 	})
 }

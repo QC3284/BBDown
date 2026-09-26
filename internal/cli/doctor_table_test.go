@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QC3284/BBDown/internal/config"
+	"github.com/QC3284/BBDown/internal/download"
 	"github.com/QC3284/BBDown/internal/util"
 )
 
@@ -41,7 +42,7 @@ func doctorColumnAt(t *testing.T, line, needle, what string, want, row int) int 
 	if at < 0 {
 		t.Fatalf("第 %d 行缺少%s内容 %q：%q", row, what, needle, line)
 	}
-	got := displayWidth(line[:at])
+	got := download.DisplayWidth(line[:at])
 	if want >= 0 && got != want {
 		t.Errorf("%s起点应一致：第 %d 行 %d 列，期望 %d 列：%q", what, row, got, want, line)
 	}
@@ -51,7 +52,8 @@ func doctorColumnAt(t *testing.T, line, needle, what string, want, row int) int 
 // TestDoctorTableColumnsAlign：三个等级、三种名称宽度，名称列与详情列的起始列必须一致。
 //
 // 变异验证：doctorMark 改回 [ok]/[warn]/[fail]（三档宽度不同）→ 符号断言变红；把 renderDoctorRows
-// 的名称补位去掉（不按最长名称对齐）→ 详情列一致性断言变红。
+// 的名称补位去掉（不按最长名称对齐）→ 详情列一致性断言变红；把 download.PadDisplay 改成直接返回
+// 原串（宽度表单一来源被破坏，cli 与 workflow 同时受影响）→ 详情列一致性断言同样变红。
 func TestDoctorTableColumnsAlign(t *testing.T) {
 	results := []doctorResult{
 		{"ffmpeg/mp4box", "ok", "/usr/bin/ffmpeg；杜比视界混流: 是"},
@@ -103,18 +105,18 @@ func TestDoctorTableWrapsLongDetail(t *testing.T) {
 	if len(row.Lines) < 2 {
 		t.Fatalf("超宽详情必须折行，实际 %d 行：%q", len(row.Lines), row.Lines)
 	}
-	detailCol := doctorMarkWidth + 1 + displayWidth("较长的名称") + 2
+	detailCol := doctorMarkWidth + 1 + download.DisplayWidth("较长的名称") + 2
 
 	var tail strings.Builder
 	for i, line := range row.Lines {
-		if w := displayWidth(line); w > doctorWrapWidth {
+		if w := download.DisplayWidth(line); w > doctorWrapWidth {
 			t.Errorf("第 %d 行 %d 列，超过 doctorWrapWidth=%d：%q", i+1, w, doctorWrapWidth, line)
 		}
 		if i == 0 {
 			continue
 		}
 		trimmed := strings.TrimLeft(line, " ")
-		if indent := displayWidth(line[:len(line)-len(trimmed)]); indent != detailCol {
+		if indent := download.DisplayWidth(line[:len(line)-len(trimmed)]); indent != detailCol {
 			t.Errorf("续行应缩进到详情列（%d 列），实际 %d 列：%q", detailCol, indent, line)
 		}
 		tail.WriteString(trimmed)
@@ -134,7 +136,7 @@ func TestDoctorTableWrapsLongDetail(t *testing.T) {
 		t.Cleanup(func() { doctorWrapWidth = orig })
 		narrow := renderDoctorRows(results)[1].Lines
 		for i, line := range narrow {
-			if w := displayWidth(line); w > 40 {
+			if w := download.DisplayWidth(line); w > 40 {
 				t.Errorf("第 %d 行 %d 列，超过收窄后的 40 列：%q", i+1, w, line)
 			}
 		}

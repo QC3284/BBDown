@@ -88,6 +88,70 @@ func TestMultiThreadDownloadSignalsRendererOnDataArrival(t *testing.T) {
 	}
 }
 
+// firstFrame 取出原地重绘输出里的第一帧（帧之间用 CR 分隔；收尾的擦除帧是空白，跳过）。
+func firstFrame(t *testing.T, out string) string {
+	t.Helper()
+	for _, seg := range strings.Split(out, "\r") {
+		if strings.TrimSpace(seg) != "" {
+			return seg
+		}
+	}
+	t.Fatalf("输出里没有任何进度帧：%q", out)
+	return ""
+}
+
+// TestAggregateFrameMatchesSingleThreadFrame 钉住「聚合行与单线程行是同一个渲染函数」：
+// 用同一组数字（40/100、速率未知）驱动两条**真实的**渲染循环，第一帧必须逐字一致
+// （进度条 + 动画字符 + 信息段）。
+//
+// 改前聚合用的是私有格式串：同样的进度下多线程行没有 ETA、没有总量，速率的列宽也与
+// 单线程不同——同一次下载，--multi-thread true/false 看到两种进度行。
+//
+// 变异验证：把 renderAggregateProgress 的整帧渲染改回旧格式
+// （"[bar] %6.2f%% %c%s"），两条路径的帧不再相等，本用例变红。
+func TestAggregateFrameMatchesSingleThreadFrame(t *testing.T) {
+	withFakeTerminal(t)
+	const (
+		frameTotal   = 100
+		frameCurrent = 40
+	)
+
+	var counter atomic.Int64
+	counter.Store(frameCurrent)
+	aggDone := make(chan struct{})
+	aggStopped := make(chan struct{})
+	aggOut := captureStdout(t, func() {
+		go renderAggregateProgress(&counter, frameTotal, newProgressPacer(), aggDone, aggStopped)
+		close(aggDone)
+		<-aggStopped
+	})
+
+	singleOut := captureStdout(t, func() {
+		pr := &progressReader{
+			reader:     bytes.NewReader(make([]byte, frameCurrent)),
+			total:      frameTotal,
+			lastTime:   time.Now(),
+			isTerminal: true,
+			pacer:      newProgressPacer(),
+			done:       make(chan struct{}),
+			finished:   make(chan struct{}),
+		}
+		if _, err := pr.Read(make([]byte, frameCurrent)); err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		pr.Close()
+	})
+
+	aggFrame, singleFrame := firstFrame(t, aggOut), firstFrame(t, singleOut)
+	if aggFrame != singleFrame {
+		t.Errorf("聚合行与单线程行不是同一个渲染函数：\n聚合   %q\n单线程 %q", aggFrame, singleFrame)
+	}
+	// 信息段本身也要有内容：防止两边一起退化成空帧（那时上面的相等断言会「假绿」）。
+	if !strings.Contains(singleFrame, "40.00% 40/100 B") {
+		t.Errorf("信息段缺少百分比/总量：%q", singleFrame)
+	}
+}
+
 // TestAggregateProgressRedrawsOnSignals 驱动**真实的**多线程渲染器（不是替身渲染函数）：
 // 信号到来时必须画出反映新字节数的帧。上面那条接线用例只证明「打点到了 pacer」，
 // 这条证明渲染器确实消费了这些信号。

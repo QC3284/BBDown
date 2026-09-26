@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/QC3284/BBDown/internal/config"
+	"github.com/QC3284/BBDown/internal/download"
 	"github.com/QC3284/BBDown/internal/muxer"
 	"github.com/QC3284/BBDown/internal/util"
 )
@@ -138,10 +139,13 @@ const doctorMarkWidth = 1
 //
 // 名称列宽按**显示列**算而不是 rune 数：名称中英混排（"ffmpeg/mp4box" 与 "接口/登录态"），
 // 按 rune 补空格在终端里对不齐。改前每行是「[ok] 名称: 详情」，详情长短不一没法扫。
+//
+// 宽度表只有一份：列宽与补白一律走 download.DisplayWidth/download.PadDisplay——那里同时服务流清单
+// 与任务卡，doctor 不再养第二张同名表（此前三处各一份，改表要三处一起改，漏一处就错位）。
 func renderDoctorRows(results []doctorResult) []doctorRow {
 	nameWidth := 0
 	for _, res := range results {
-		if w := displayWidth(res.Name); w > nameWidth {
+		if w := download.DisplayWidth(res.Name); w > nameWidth {
 			nameWidth = w
 		}
 	}
@@ -152,7 +156,7 @@ func renderDoctorRows(results []doctorResult) []doctorRow {
 	}
 	rows := make([]doctorRow, 0, len(results))
 	for _, res := range results {
-		head := doctorMark(res.Level) + " " + padDisplay(res.Name, nameWidth) + "  "
+		head := doctorMark(res.Level) + " " + download.PadDisplay(res.Name, nameWidth) + "  "
 		chunks := wrapDisplay(res.Detail, detailWidth)
 		if len(chunks) == 0 {
 			chunks = []string{""}
@@ -188,61 +192,12 @@ func doctorMark(level string) string {
 	}
 }
 
-// displayWidth 返回字符串在终端里占的列数：中文、全角与 emoji 2 列，控制字符/组合记号 0 列，
-// 其余 1 列。与 internal/download/tracklayout.go 的同名函数是同一张表（两条输出都要列对齐，
-// 而那份未导出、跨包用不了）——改表时两处要一起改。
-func displayWidth(s string) int {
-	w := 0
-	for _, r := range s {
-		w += runeDisplayWidth(r)
-	}
-	return w
-}
-
-// runeDisplayWidth 是 displayWidth 的单字符版本；范围按 Unicode East Asian Width 的宽/全角块
-// 与常见 emoji 块整理，够覆盖 doctor 的名称与详情。
-func runeDisplayWidth(r rune) int {
-	switch {
-	case r < 0x20 || (r >= 0x7F && r < 0xA0): // C0/C1 控制字符
-		return 0
-	case r == 0x200B || r == 0x200C || r == 0x200D || r == 0xFEFF: // 零宽字符
-		return 0
-	case r >= 0x0300 && r <= 0x036F: // 组合记号
-		return 0
-	}
-	switch {
-	case r >= 0x1100 && r <= 0x115F, // 谚文字母
-		r >= 0x2E80 && r <= 0x303E,   // CJK 部首、康熙部首、CJK 符号与标点
-		r >= 0x3041 && r <= 0x33FF,   // 假名、注音、CJK 兼容
-		r >= 0x3400 && r <= 0x4DBF,   // CJK 扩展 A
-		r >= 0x4E00 && r <= 0x9FFF,   // CJK 基本区
-		r >= 0xA000 && r <= 0xA4CF,   // 彝文
-		r >= 0xAC00 && r <= 0xD7A3,   // 谚文音节
-		r >= 0xF900 && r <= 0xFAFF,   // CJK 兼容表意文字
-		r >= 0xFE10 && r <= 0xFE19,   // 竖排标点
-		r >= 0xFE30 && r <= 0xFE6F,   // CJK 兼容形式
-		r >= 0xFF00 && r <= 0xFF60,   // 全角 ASCII
-		r >= 0xFFE0 && r <= 0xFFE6,   // 全角符号
-		r >= 0x1F300 && r <= 0x1F64F, // emoji
-		r >= 0x1F900 && r <= 0x1F9FF, // emoji 补充
-		r >= 0x20000 && r <= 0x3FFFD: // CJK 扩展 B 及以上
-		return 2
-	}
-	return 1
-}
-
-// padDisplay 在右侧补空格，让结果至少占 width 个显示列；已经够宽时原样返回——宁可让这一行
-// 变宽，也不截断信息。
-func padDisplay(s string, width int) string {
-	if n := width - displayWidth(s); n > 0 {
-		return s + strings.Repeat(" ", n)
-	}
-	return s
-}
-
 // wrapDisplay 把文本按显示列宽折成若干行：只在整字符边界断开（详情中英混排、以无空格的中文
 // 为主，不做词法断行）；断行处若是空格就丢掉，续行的缩进由调用方补。单字符本身超宽时允许该行
-// 变宽（与 padDisplay 同一取舍：不丢信息）。空串返回 nil。
+// 变宽（与 download.PadDisplay 同一取舍：不丢信息）。空串返回 nil。
+//
+// 单字符宽度用 download.DisplayWidth(string(r))：宽度表只有一份，这里不再自带 rune 版副本；
+// doctor 的详情最多几十个 rune，逐字符折算的开销可忽略。
 func wrapDisplay(s string, width int) []string {
 	if s == "" {
 		return nil
@@ -256,7 +211,7 @@ func wrapDisplay(s string, width int) []string {
 		used int
 	)
 	for _, r := range s {
-		w := runeDisplayWidth(r)
+		w := download.DisplayWidth(string(r))
 		if used+w > width && cur.Len() > 0 {
 			out = append(out, strings.TrimRight(cur.String(), " "))
 			cur.Reset()

@@ -10,6 +10,25 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.11.2] - 2026-09-26
+
+**判据修正与口径统一**：宽度表收敛到单一来源、进度条三处口径合一。
+
+### 修复 / 优化
+
+- **进度条口径不一致（真实缺陷）**：续传时终端百分比用的是「本次传输占比」，而 `--progress-json` 用的是「含已就位字节的实际占比」，
+  同一次续传两个数字。现在 `pct` / `x/y` / `ETA` 统一为含 `base` 的实际进度（速率仍按本次增量结算，计入 base 会虚高）。
+  实测（100 MiB 文件、已就位 50 MiB、本次再读 10 MiB / 2s）：终端行 `10.00% | 10.0/100.0 MB | ETA 00:00:18`
+  → **`60.00% | 60.0/100.0 MB | ETA 00:00:08`**，与 JSON 的 `percent=60 / downloaded=60MiB / total=100MiB` 一致。
+- **多线程聚合行**复用同一渲染路径（`renderProgressFrame`），与单线程行格式一致（此前聚合行无 ETA/总量）。
+- **宽度表收敛**：`displayWidth`/`padDisplay` 原有三份实现（`download` 已导出、`cli` 与 `workflow` 各私有），现统一为
+  `download.DisplayWidth`/`PadDisplay`，cli 删除 62 行重复宽度表（净删 43 行）。跨包变异证明收敛有效：
+  把 `download.PadDisplay` 改成直接返回原串后，cli 的 doctor 列对齐与 workflow 的任务卡值列**同时**断言红。
+
+### 说明
+
+- 版本位：本批为修复/优化 → **patch**。
+- 终端进度条口径变化属**有意偏离**既有行为（对齐 JSON 语义），登记台账 §4.55。
 ## [2.11.1] - 2026-09-26
 
 **界面「清爽」批次**（用户标准：清爽优先，信息不砍）：流列表排版、失败块三段式、doctor 表格、任务卡、进度条信息密度。
