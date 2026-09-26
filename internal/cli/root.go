@@ -118,13 +118,22 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "BBDown [URL]",
 	Short: "BBDown - Bilibili Downloader",
-	Long: `BBDown is a command-line Bilibili video downloader.
-Supports regular videos, bangumi, courses, collections, playlists, and more.
+	Long: `BBDown —— 命令行哔哩哔哩下载器（本仓为 BBDown 生态的 Go 主线实现）。
+支持普通视频、番剧、课程、合集、收藏夹、个人空间、直播与图文。
 
-Examples:
-  BBDown https://www.bilibili.com/video/BV1xx411c7mD
-  BBDown --use-tv-api --interactive BV1xx411c7mD
-  BBDown login`,
+常用示例:
+  BBDown BV1xx411c7mD                     下载（自动挑最高清晰度）
+  BBDown -I BV1xx411c7mD                  只列流信息，不下载
+  BBDown --audio-only --skip-mux <URL>    只下音频（保留原始轨道）
+  BBDown --print-urls <URL>               只打印所选流直链，不下载（接 aria2c/脚本）
+  BBDown --urls-file list.txt             批量下载（每行一个，# 注释，- 表示 stdin）
+  BBDown --nfo --progress-json <URL>      写侧车元数据 + 逐行 JSON 进度（媒体库/监控）
+  BBDown --overwrite <URL>                忽略已存在产物，强制重下
+  BBDown doctor                           环境自检（混流工具/输出目录/登录态/风控）
+  BBDown resume                           重试上次未完成的任务
+  BBDown login                            扫码登录（高清与字幕需要）
+
+完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
 	Version: "2.8.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
