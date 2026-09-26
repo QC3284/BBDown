@@ -59,7 +59,7 @@ func TestMultiThreadDownloadSignalsRendererOnDataArrival(t *testing.T) {
 	orig := renderProgressBar
 	t.Cleanup(func() { renderProgressBar = orig })
 	woken := make(chan struct{}, 1)
-	renderProgressBar = func(_ *atomic.Int64, _ int64, pacer progressPacer, done <-chan struct{}, stopped chan<- struct{}) {
+	renderProgressBar = func(_ *atomic.Int64, _ int64, pacer progressPacer, done <-chan struct{}, stopped chan<- struct{}, _ func(ProgressEvent)) {
 		defer close(stopped)
 		select {
 		case <-pacer.Signals():
@@ -121,7 +121,7 @@ func TestAggregateFrameMatchesSingleThreadFrame(t *testing.T) {
 	aggDone := make(chan struct{})
 	aggStopped := make(chan struct{})
 	aggOut := captureStdout(t, func() {
-		go renderAggregateProgress(&counter, frameTotal, newProgressPacer(), aggDone, aggStopped)
+		go renderAggregateProgress(&counter, frameTotal, newProgressPacer(), aggDone, aggStopped, nil)
 		close(aggDone)
 		<-aggStopped
 	})
@@ -165,7 +165,7 @@ func TestAggregateProgressRedrawsOnSignals(t *testing.T) {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	out := captureStdout(t, func() {
-		go renderAggregateProgress(&counter, 100, pacer, done, stopped)
+		go renderAggregateProgress(&counter, 100, pacer, done, stopped, nil)
 		time.Sleep(2 * minFrameInterval) // 等首帧（0.00%）落地
 		counter.Store(40)
 		pacer.Signal()

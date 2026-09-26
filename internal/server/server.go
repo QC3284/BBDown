@@ -67,6 +67,10 @@ type DownloadTask struct {
 	lastSampleTime  time.Time
 	lastSampleBytes int64
 	speedBps        float64
+
+	// lastProgressPublish 是上一个逐字节进度帧的发布时刻，供 SSE 侧的每任务节流使用
+	// （见 progress.go 的 publishDownloadProgress）。未导出 → 不进 JSON 契约。
+	lastProgressPublish time.Time
 }
 
 // Snapshot returns a thread-safe copy of the task.
@@ -164,6 +168,11 @@ type APIServer struct {
 	events     *eventHub
 	eventsAuth *authGuard
 
+	// progressPublishInterval 是同一任务两帧**逐字节**进度之间的最小间隔（SSE 侧的第二道
+	// 节流，见 progress.go）。字段而非常量：用例可以把它放大（验证帧数上限）或调零
+	// （验证上限过去后照发、以及 hub 的队列丢帧兜底）。零值 = 不限速。
+	progressPublishInterval time.Duration
+
 	// persistMu serialises bbdown-tasks.json writes: several tasks finish
 	// concurrently and each calls persistFinishedTasks.
 	persistMu sync.Mutex
@@ -189,6 +198,8 @@ func NewAPIServer(listenURL string, maxConcurrent int, serveToken, notifyWebhook
 		queryLimiter:  make(chan struct{}, maxConcurrentQueries),
 		events:        newEventHub(maxEventClients),
 		eventsAuth:    newAuthGuard(),
+
+		progressPublishInterval: defaultProgressPublishInterval,
 	}
 }
 
@@ -731,7 +742,9 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 
 	task.SetStatus(StatusRunning)
 	s.publishTaskEvent(EventTaskProgress, task, StateProgress)
-	err = wf.Run(ctx)
+	// 任务 Q：把逐字节进度观察者装到任务 ctx 上（在 workflow.Run 之前），下载层在每次
+	// DownloadFile 里从 ctx 取出它，事件经 hub 变成新的 task_progress 帧（见 progress.go）。
+	err = wf.Run(s.taskDownloadContext(ctx, task))
 	if err != nil {
 		status, msg := classifyTaskCancellation(ctx, err)
 		task.SetStatus(status)

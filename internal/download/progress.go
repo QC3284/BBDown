@@ -32,7 +32,7 @@ type progressReader struct {
 	started  int32
 	// base 是本次传输之前已就位的字节数（断点续传时 > 0）。
 	//
-	// 终端进度行与 JSON 事件共用同一口径：百分比、x/y、ETA 报的都是
+	// 终端进度行、JSON 事件与观察者事件共用同一口径：百分比、x/y、ETA 报的都是
 	// (base+current)/(base+total)，即「整份文件的实际进度」。只报这一次读了多少，
 	// 续传时百分比会偏低、x/y 偏小、ETA 偏大（剩余量被算成整份文件减去本次传输量）。
 	base int64
@@ -44,6 +44,11 @@ type progressReader struct {
 	isTerminal bool
 	// json 为真时走逐行 JSON 事件（--progress-json），与终端无关。
 	json bool
+	// observer 是上层（serve 的 SSE）挂进来的逐字节进度观察者，nil 表示没挂。
+	//
+	// 与终端进度帧 / JSON 事件走同一个渲染循环，所以回调天然在既有节流之后
+	// （不是每条 Read 一次）。nil 时渲染路径与改前完全一致，一次回调都不会发生。
+	observer func(ProgressEvent)
 }
 
 // isTerminalStdout 是 progressReader 的 TTY 判定。与 isTerminalOut 同一理由做成变量：
@@ -52,13 +57,15 @@ var isTerminalStdout = func() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-func newProgressReader(r io.Reader, total int64) *progressReader {
+// newProgressReader 构造进度读取器；observer 来自 WithProgressObserver（可为 nil）。
+func newProgressReader(r io.Reader, total int64, observer func(ProgressEvent)) *progressReader {
 	pr := &progressReader{
 		reader:     r,
 		total:      total,
 		lastTime:   time.Now(),
 		isTerminal: isTerminalStdout(),
 		json:       progressJSONEnabled.Load(),
+		observer:   observer,
 		pacer:      newProgressPacer(),
 		done:       make(chan struct{}),
 		finished:   make(chan struct{}),
@@ -77,8 +84,9 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 	n, err := pr.reader.Read(p)
 	if n > 0 {
 		atomic.AddInt64(&pr.current, int64(n))
-		// --progress-json 时不受终端限制：这正是给管道里的自动化用的。
-		if (pr.isTerminal || pr.json) && atomic.CompareAndSwapInt32(&pr.started, 0, 1) {
+		// --progress-json 与观察者不受终端限制：前者给管道里的自动化，后者给进程内的
+		// 上层（serve 的 SSE）。没装观察者时这一行与改前逐字相同。
+		if (pr.isTerminal || pr.json || pr.observer != nil) && atomic.CompareAndSwapInt32(&pr.started, 0, 1) {
 			go pr.renderLoop()
 		}
 		// 数据到达即打点（合并式、不阻塞）：进度帧由数据驱动，不再等 125ms 定时器。
@@ -105,39 +113,86 @@ func (pr *progressReader) renderLoop() {
 		return
 	}
 	if !pr.isTerminal {
+		// 非终端（serve / 管道）且没有 --progress-json 时，改前直接返回、什么都不画。
+		// 只有挂了观察者才需要这条纯回调循环（serve 的 stdout 不是终端）。
+		if pr.observer != nil {
+			pr.renderObserverLoop()
+		}
 		return
 	}
 	line := newProgressLine()
 	animIdx := 0
 
 	render := func() {
-		current := atomic.LoadInt64(&pr.current)
-		now := time.Now()
-		elapsed := now.Sub(pr.lastTime).Seconds()
-		if elapsed >= 1.0 {
-			delta := current - pr.lastBytes
-			if delta > 0 {
-				// 速率口径与 --progress-json 的 emitter 一致（增量 / 实际间隔），而不是把增量
-				// 当归一化到 1 秒的值：ETA 直接由这个数字推算，间隔略大于 1s（静默心跳下最多
-				// 1.125s）会被放大成多出来的十几秒。增量只看**本次传输**：base 是上一段传输
-				// 留下的字节，算进来会把续传第一个窗口的速率放大成假值。
-				pr.speedBps = float64(delta) / elapsed
-			}
-			pr.lastBytes = current
-			pr.lastTime = now
-		}
+		// 出数走 withBase/wholeTotal：续传时百分比、x/y、ETA、观察者事件同口径。
+		downloaded, speedBps := pr.progressSnapshot()
 
 		// 动画字符紧跟在进度条后面，其后的百分比/速率/ETA/总量各占固定列宽，
 		// 数字位数变化时后面的列不会左右抖动（进度行在终端里是原地重绘的）。
-		// 出数走 withBase/wholeTotal：续传时百分比、x/y、ETA 与 JSON 事件同口径。
-		line.draw(renderProgressFrame(pr.withBase(current), pr.wholeTotal(), pr.speedBps,
+		line.draw(renderProgressFrame(downloaded, pr.wholeTotal(), speedBps,
 			progressChars[animIdx%len(progressChars)]))
 		animIdx++
+		// 观察者在同一帧里、画完之后被调用（不持锁：帧数字已复制成值）。
+		pr.notifyObserver(downloaded, speedBps)
 	}
 
 	// 首帧、节流、静默心跳与收尾擦行统一在 runProgressLoop 里（见 pacer.go）：
 	// 上游此处是 125ms 定时器，本仓按「数据到达即重绘」的节奏驱动。
 	runProgressLoop(pr.pacer.Signals(), pr.done, true, line, render)
+	pr.notifyObserverFinal()
+}
+
+// progressSnapshot 取一帧的「整份文件已完成字节 / 速率」并推进 1 秒结算窗口。
+//
+// 终端进度行与观察者共用它，所以两处数字必然一致。速率口径与 --progress-json 的
+// emitter 一致（增量 / 实际间隔），而不是把增量当归一化到 1 秒的值：ETA 直接由这个
+// 数字推算，间隔略大于 1s（静默心跳下最多 1.125s）会被放大成多出来的十几秒。
+// 增量只看**本次传输**：base 是上一段传输留下的字节，算进来会把续传第一个窗口的
+// 速率放大成假值。
+//
+// 只由渲染协程调用（与改前一样，帧序号/速度状态是协程私有的），无需加锁。
+func (pr *progressReader) progressSnapshot() (downloaded int64, speedBps float64) {
+	current := atomic.LoadInt64(&pr.current)
+	now := time.Now()
+	if elapsed := now.Sub(pr.lastTime).Seconds(); elapsed >= 1.0 {
+		delta := current - pr.lastBytes
+		if delta > 0 {
+			pr.speedBps = float64(delta) / elapsed
+		}
+		pr.lastBytes = current
+		pr.lastTime = now
+	}
+	return pr.withBase(current), pr.speedBps
+}
+
+// renderObserverLoop 是「无终端、无 --progress-json，只有观察者」时的渲染循环
+// （serve 的场景）：节奏与另两条完全一致——首帧、minFrameInterval 节流、
+// idleHeartbeat 静默心跳、收尾由 done 关闭，全部复用 runProgressLoop。
+func (pr *progressReader) renderObserverLoop() {
+	runProgressLoop(pr.pacer.Signals(), pr.done, true, &progressLine{}, func() {
+		downloaded, speedBps := pr.progressSnapshot()
+		pr.notifyObserver(downloaded, speedBps)
+	})
+	pr.notifyObserverFinal()
+}
+
+// notifyObserver 把一帧交给观察者；observer 为 nil 时立刻返回（不进回调路径）。
+// 调用点不持任何锁：数字都是值参数。
+func (pr *progressReader) notifyObserver(downloaded int64, speedBps float64) {
+	if pr.observer == nil {
+		return
+	}
+	pr.observer(ProgressEvent{Current: downloaded, Total: pr.wholeTotal(), SpeedBps: speedBps})
+}
+
+// notifyObserverFinal 在渲染循环结束后补发一条收尾事件：末帧可能因节流被合并掉，
+// 这一条保证观察者一定看到最终计数（与 --progress-json 的 done 帧同一时序与口径）。
+func (pr *progressReader) notifyObserverFinal() {
+	if pr.observer == nil {
+		return
+	}
+	current := atomic.LoadInt64(&pr.current)
+	pr.observer(ProgressEvent{Current: pr.withBase(current), Total: pr.wholeTotal(), SpeedBps: pr.speedBps})
 }
 
 // renderJSONLoop 是 --progress-json 的渲染循环：与终端进度条共用同一套
@@ -150,8 +205,14 @@ func (pr *progressReader) renderJSONLoop() {
 	// 与终端进度行同一个口径：整份文件的总长（含 base）与整份文件的已完成字节。
 	emit := newJSONProgressEmitter(pr.wholeTotal())
 	downloaded := func() int64 { return pr.withBase(atomic.LoadInt64(&pr.current)) }
-	runProgressLoop(pr.pacer.Signals(), pr.done, true, &progressLine{}, func() { emit.progress(downloaded()) })
+	runProgressLoop(pr.pacer.Signals(), pr.done, true, &progressLine{}, func() {
+		emit.progress(downloaded())
+		// 观察者与 JSON 事件同帧、同速率口径（emitter 的 1 秒窗口）。
+		pr.notifyObserver(downloaded(), emit.speed)
+	})
 	emit.done(downloaded())
+	// 收尾事件与 done 帧同一时序：Close() 返回时它一定已经回调过。
+	pr.notifyObserver(downloaded(), emit.speed)
 }
 
 // progressFrame 是一帧进度条「数字部分」的纯数据输入（renderProgressFrame 把它交给

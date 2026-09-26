@@ -417,6 +417,10 @@ func probeFile(ctx context.Context, url string, cfg DownloadConfig) (probeResult
 // sidecar manifest proves the remote resource identity matches, otherwise the
 // stale prefix is discarded (upstream resume-manifest semantics).
 func singleDownload(ctx context.Context, url, destPath string, pr probeResult, cfg DownloadConfig) error {
+	// 逐字节进度观察者（serve 的 SSE 数据源）随 ctx 进来，不落 DownloadConfig：
+	// 先取一次，nil 表示没装——下面的进度门槛与渲染路径都保持与改前一致。
+	observer := ProgressObserverFromContext(ctx)
+
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -567,18 +571,31 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 			guard := newStallGuard(resp.Body, downloadStallTimeout)
 			defer guard.Stop()
 			// 小于 1MiB 的辅助资源（封面/字幕等）不显示进度条：它们在百毫秒内完成，
-			// 进度条只会留下一行 100% 噪声。--progress-json 不看终端、也不看大小——
-			// 它正是给 GUI/自动化消费的，每个文件都该有事件（含收尾的 done 帧）。
+			// 进度条只会留下一行 100% 噪声。--progress-json 与观察者不看终端、也不看大小——
+			// 它们正是给 GUI/自动化/SSE 消费的，每个文件都该有事件（含收尾帧）。
 			withProgress := resp.ContentLength > 0 &&
-				(progressJSONEnabled.Load() || (isTerminalOut() && pr.size >= 1<<20))
+				(progressJSONEnabled.Load() || observer != nil || (isTerminalOut() && pr.size >= 1<<20))
+			// 观察者还多覆盖一种情况：响应没声明长度（chunked / 无 Content-Length）。
+			// 终端与 JSON 的既有门槛不变，观察者照收事件、Total 报 0（未知）或由 HEAD
+			// 探测到的整份长度推出本次剩余。
+			if resp.ContentLength <= 0 && observer != nil {
+				withProgress = true
+			}
 			if !withProgress {
 				_, err = io.Copy(out, guard)
 				return err
 			}
-			// 终端进度条与 JSON 事件共用一个读取器与一套口径：total 是本次响应声明的
+			// 终端进度条、JSON 事件与观察者共用一个读取器与一套口径：total 是本次响应的
 			// **剩余**长度，base=offset 是磁盘上已就位的字节数。曾经终端那条忘了设 base，
 			// 于是同一次续传里百分比按 current/total、x/y 却按 (base+current)/total。
-			pr2 := newProgressReader(guard, resp.ContentLength)
+			remaining := resp.ContentLength
+			if remaining < 0 {
+				remaining = 0
+				if pr.size > offset {
+					remaining = pr.size - offset
+				}
+			}
+			pr2 := newProgressReader(guard, remaining, observer)
 			pr2.base = offset
 			defer pr2.Close()
 			_, err = io.Copy(out, pr2)
@@ -698,6 +715,9 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 		idx++
 	}
 
+	// 逐字节进度观察者（serve 的 SSE 数据源）随 ctx 进来，与单线程路径同一契约。
+	observer := ProgressObserverFromContext(ctx)
+
 	// 进度按「分片累计字节」实时聚合（上游 ProgressAggregator），只按分片完成累加会让
 	// 进度条以分片数为台阶跳变。
 	aggregate := newProgressAggregator(len(clips))
@@ -713,7 +733,7 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 
 	progressDone := make(chan struct{})
 	progressStopped := make(chan struct{})
-	go renderProgressBar(&totalBytes, size, pacer, progressDone, progressStopped)
+	go renderProgressBar(&totalBytes, size, pacer, progressDone, progressStopped, observer)
 
 	sem := make(chan struct{}, maxConcurrentClips())
 	var wg sync.WaitGroup
@@ -755,9 +775,10 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 				return
 			}
 			// 分片完成后再补一次 Add 是终端进度条的既有行为（帧在两次上报之间也不会低于
-			// 已完成分片）；JSON 事件按聚合总量出数，不做这一步，否则会发出
-			// downloaded > total（percent 只能靠截断才不越界）——那是给程序读的数据，不能自相矛盾。
-			if !progressJSONEnabled.Load() {
+			// 已完成分片）；JSON 事件与观察者按聚合总量出数，不做这一步，否则会发出
+			// downloaded > total（percent 只能靠截断才不越界）——那是给程序读的数据
+			// （SSE 事件同属这一类），不能自相矛盾。
+			if !progressJSONEnabled.Load() && observer == nil {
 				totalBytes.Add(n)
 			}
 		}(clip)
@@ -941,29 +962,49 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, ex
 }
 
 // renderProgressBar 是给测试留的接缝：替换它即可在不依赖真实终端的前提下断言
-// 「进度行收尾之后才允许打日志」的时序。
+// 「进度行收尾之后才允许打日志」的时序。observer 为 nil 表示没装进度观察者。
 var renderProgressBar = renderAggregateProgress
 
-// renderAggregateProgress 画多线程下载的聚合进度行。
+// renderAggregateProgress 画多线程下载的聚合进度行，并把帧交给观察者。
 //
 // 帧内容与单线程路径**同一个渲染函数**（renderProgressFrame）：进度条 + 信息段
 // （百分比 · 速率 · ETA · 总量）。此前这里是一份私有格式，只有百分比与速率、速率还
 // 不对齐——同一次下载在 --multi-thread true/false 下看到两种进度行。
 //
+// 观察者（serve 的 SSE 数据源）与进度行 / JSON 事件共用 runProgressLoop 的节奏：
+// 只在节流后的帧上回调，而不是每个 32KiB 写入块一次。回调不持锁（counter 是原子的，
+// 帧数字先取出再调）。
+//
 // 返回前关闭 stopped：调用方据此保证「进度行已擦干净」先于后续日志（上游用 using
 // 作用域表达同一件事——ProgressBar 的 Dispose 必须在合并日志之前完成）。
-func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressPacer, done <-chan struct{}, stopped chan<- struct{}) {
+func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressPacer, done <-chan struct{}, stopped chan<- struct{}, observer func(ProgressEvent)) {
 	defer close(stopped)
+
+	// notify 把一帧交给观察者；nil 时立刻返回（未装观察者 = 不进回调路径）。
+	notify := func(downloaded int64, speedBps float64) {
+		if observer == nil {
+			return
+		}
+		observer(ProgressEvent{Current: downloaded, Total: total, SpeedBps: speedBps})
+	}
+
 	// --progress-json：同一套节奏，帧内容换成一行 JSON（写 stderr），收尾补 done 帧。
 	// 零值 progressLine（enabled=false）保证这条路径不碰终端。
 	if progressJSONEnabled.Load() {
 		emit := newJSONProgressEmitter(total)
-		runProgressLoop(pacer.Signals(), done, true, &progressLine{}, func() { emit.progress(counter.Load()) })
+		runProgressLoop(pacer.Signals(), done, true, &progressLine{}, func() {
+			emit.progress(counter.Load())
+			// 观察者与 JSON 事件同帧、同速率口径（emitter 的 1 秒窗口）。
+			notify(counter.Load(), emit.speed)
+		})
 		emit.done(counter.Load())
+		// 收尾事件与 done 帧同口径：调用方拿到 stopped 时它一定已经回调过。
+		notify(counter.Load(), emit.speed)
 		return
 	}
 	line := newProgressLine()
-	if !line.enabled {
+	// 改前非终端就没有进度帧可画；只有观察者时才继续跑这条纯回调循环。
+	if !line.enabled && observer == nil {
 		return
 	}
 	animIdx := 0
@@ -984,11 +1025,15 @@ func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressP
 		}
 		line.draw(renderProgressFrame(cur, total, speedBps, progressChars[animIdx%len(progressChars)]))
 		animIdx++
+		// 同一帧、画完之后回调（数字已复制成值，不持任何锁）。
+		notify(cur, speedBps)
 	}
 
 	// 首帧、节流、静默心跳与收尾擦行统一在 runProgressLoop 里（见 pacer.go）：
 	// 上游此处是 125ms 定时器，本仓按「数据到达即重绘」的节奏驱动。
 	runProgressLoop(pacer.Signals(), done, true, line, render)
+	// 末帧可能被节流合并掉：补一条收尾事件，保证观察者一定看到最终计数。
+	notify(counter.Load(), speedBps)
 }
 
 // isTerminalOut 是变量而非函数：用例需要在不依赖真实终端的前提下驱动进度条绘制。

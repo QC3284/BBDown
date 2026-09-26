@@ -10,6 +10,30 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.12.1] - 2026-09-26
+
+**把 Web UI 的进度条做实**：`serve` 的 SSE 现在推**真实字节进度**；顺带清掉一个进了 git 的测试产物。
+
+### 改进
+
+- **下载层进度观察者**（`download.ProgressEvent` + `WithProgressObserver(ctx, fn)`）：**用 context 携带、无包级全局**
+  （本仓刚因全局可变状态栽过一次，见台账 §4.56）；回调在**既有节流之后**触发（16ms 帧间隔），单线程与多线程两条路径都覆盖，
+  续传时 `Current/Total` 含 `base`，口径与 `--progress-json` 一致；循环结束补收尾帧保证 `Current==Total`。
+- **SSE 接上真实字节进度**：单一映射纯函数（`percent` 0~100、`total<=0` 时 percent/total 均为 0 且**不估算**、`Current>Total` 只夹 percent）、
+  SSE 侧第二道节流（同任务 ≥100ms 一帧，≈10 帧/秒），发布路径只做「一次加锁读快照 + 一次非阻塞广播」，不阻塞下载渲染协程。
+  既有五类事件（`task_start`/元数据/产物落盘/`task_done`/`task_failed`）语义未变，字节进度是新增帧。
+
+### 修复
+
+- **测试产物被误提交进 git**：`internal/cli/.bbdown-pending.json` 是测试在工作目录写出的产物，却跟着 `587bd09` 一起进了版本库；
+  本次删除，并把「写工作目录」改成注入 `t.TempDir()`。加了**包级 `TestMain` 守卫**（跑完全量测试前后对比 cwd 里该文件的存在性 + sha256 + mtime）。
+  实测：改前一次全量测试会改写 **2 个文件**（cli 与 server 各一个），改后 **0 个**。
+
+### 说明
+
+- 版本位：本批是既有功能的完成度提升 + 修复 → **patch**（`2.12.0` → `2.12.1`）。
+- 两条代价如实登记 §4.57：**aria2c 路径无逐字节观察者**（黑盒，只有开始/结束）；**节流丢帧不补发**，成功路径由 `task_done` 兜底，
+  失败/取消会停在中途百分比（页面只在 Queued/Running 渲染进度面板，不显示陈旧值）。
 ## [2.12.0] - 2026-09-26
 
 功能批次：**`serve` 的极简 Web UI + SSE 进度流**、**机读模式 stdout 只留数据**。

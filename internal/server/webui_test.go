@@ -153,7 +153,7 @@ func newTestTask(jobID string) *DownloadTask {
 // 变异验证：删掉内嵌页面（rm internal/server/webui/index.html）→ 处理器回 500，本用例变红
 // （go:embed all:webui 仍能编译，所以红的是断言而不是构建）。
 func TestWebUIIndexServed(t *testing.T) {
-	h := newLoopbackServer().buildHandler()
+	h := newLoopbackServer(t).buildHandler()
 	rec := do(h, http.MethodGet, "http://127.0.0.1:23333/", "127.0.0.1:23333", "", "", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET / = %d, want 200", rec.Code)
@@ -191,7 +191,7 @@ func TestWebUIIndexServed(t *testing.T) {
 // 变异验证：去掉写首帧后的 Flush（服务端把响应头/帧缓存在缓冲区里）→ 客户端永远等不到首帧，
 // 本用例变红（读请求被自己的 ctx deadline 终止，红的是断言而不是构建）。
 func TestWebUIEventsFirstFrameIsSSE(t *testing.T) {
-	s := newLoopbackServer()
+	s := newLoopbackServer(t)
 	srv := startEventServer(t, s.buildHandler())
 
 	resp, br, _ := openEventStream(t, eventWaitTimeout, srv.URL+"/events")
@@ -209,7 +209,7 @@ func TestWebUIEventsFirstFrameIsSSE(t *testing.T) {
 
 // 内部广播（发布者就是任务生命周期用的那条路径）必须到达已连接的客户端。
 func TestWebUIEventsDeliversBroadcast(t *testing.T) {
-	s := newLoopbackServer()
+	s := newLoopbackServer(t)
 	srv := startEventServer(t, s.buildHandler())
 
 	resp, br, _ := openEventStream(t, eventWaitTimeout, srv.URL+"/events")
@@ -249,7 +249,7 @@ func TestWebUIEventsDeliversBroadcast(t *testing.T) {
 
 // publishTaskEvent 的字段映射：percent 用 --progress-json 的 0~100 口径（API 的 Progress 仍是 0~1）。
 func TestPublishTaskEventFieldMapping(t *testing.T) {
-	s := newLoopbackServer()
+	s := newLoopbackServer(t)
 	client, ok := s.events.subscribe()
 	if !ok {
 		t.Fatal("订阅失败")
@@ -289,7 +289,7 @@ func TestPublishTaskEventFieldMapping(t *testing.T) {
 
 // 产物字节只计一次：重试/断点续传会把同一路径重复上报，重复计数会虚增 downloaded。
 func TestOnArtifactSavedCountsBytesOnce(t *testing.T) {
-	s := newLoopbackServer()
+	s := newLoopbackServer(t)
 	task := newTestTask("job-bytes")
 	path := filepath.Join(t.TempDir(), "video.mp4")
 	if err := os.WriteFile(path, make([]byte, 1024), 0o644); err != nil {
@@ -323,7 +323,7 @@ func TestOnArtifactSavedCountsBytesOnce(t *testing.T) {
 // 变异验证：去掉 defer unsubscribe（订阅者计数不归零）或去掉 select 里的 ctx.Done() 分支
 // （空闲连接上的处理器一直挂着）→ 本用例变红。
 func TestWebUIEventsClientDisconnectReleasesSubscriber(t *testing.T) {
-	s := newLoopbackServer()
+	s := newLoopbackServer(t)
 	srv := startEventServer(t, s.buildHandler())
 
 	for cycle := 1; cycle <= 3; cycle++ {
@@ -471,7 +471,7 @@ func TestWebUIEventsTokenGate(t *testing.T) {
 
 // 连接上限：每个 SSE 连接占一个 goroutine + 一条队列，必须有上限（满了 503 + Retry-After）。
 func TestWebUIEventsClientCap(t *testing.T) {
-	s := newLoopbackServer()
+	s := newLoopbackServer(t)
 	held := make([]*eventClient, 0, maxEventClients)
 	for i := 0; i < maxEventClients; i++ {
 		c, ok := s.events.subscribe()
