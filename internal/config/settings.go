@@ -92,6 +92,8 @@ type MyOption struct {
 	PrintURLs bool `json:"print_urls" mapstructure:"print_urls"`
 	// WriteNFO 产物落地后写同名 .nfo 侧车元数据（Kodi/Emby/Jellyfin 可直接扫库）。
 	WriteNFO bool `json:"write_nfo" mapstructure:"write_nfo"`
+	// WriteM3U 产物落地后在产物目录写一个 .m3u 播放列表（同一稿件的多个分P串起来，VLC/mpv 直接打开）。
+	WriteM3U bool `json:"write_m3u" mapstructure:"write_m3u"`
 	// Compat 兼容优先：选档时避开 HDR Vivid / 杜比视界（本机或多数播放器可能播不了）。
 	Compat                 bool   `json:"compat" mapstructure:"compat"`
 	ForceHTTP              bool   `json:"force_http" mapstructure:"force_http"`

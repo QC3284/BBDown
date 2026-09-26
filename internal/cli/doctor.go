@@ -35,11 +35,15 @@ var doctorCmd = &cobra.Command{
 		client := buildHTTPClient(cfg)
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
-		run := runDoctor
+		// JSON 是机读契约：写 cmd 的输出流（纯 stdout、无时间戳/无色码），供脚本与监控解析。
 		if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
-			run = runDoctorJSON
+			if code := runDoctorJSON(ctx, cfg, client, cmd.OutOrStdout()); code != 0 {
+				return fmt.Errorf("自检未通过（按上面的 [fail] 项处理）")
+			}
+			return nil
 		}
-		if code := run(ctx, cfg, client, cmd.OutOrStdout()); code != 0 {
+		// 人类可读输出走 util 日志：这样 --log-file 也能抓到自检结果（见 runDoctor）。
+		if code := runDoctor(ctx, cfg, client); code != 0 {
 			return fmt.Errorf("自检未通过（按上面的 [fail] 项处理）")
 		}
 		return nil
@@ -87,18 +91,34 @@ func runDoctorJSON(ctx context.Context, cfg config.MyOption, client *util.HTTPCl
 }
 
 // runDoctor 跑完所有自检并按人类可读格式输出，返回退出码：有 fail 返回 1，否则 0。
-func runDoctor(ctx context.Context, cfg config.MyOption, client *util.HTTPClient, out io.Writer) int {
+//
+// 输出走 util 日志而不是直接写 os.Stdout：doctor 此前绕过了 logger，用户带 --log-file 跑完
+// 自检去提 issue 时，日志文件里恰恰缺了 [fail] 那几行。形态（[ok]/[warn]/[fail] + 结论行）
+// 与改前逐字一致，只多了日志时间戳与分级配色。
+func runDoctor(ctx context.Context, cfg config.MyOption, client *util.HTTPClient) int {
 	results, code := runDoctorResults(ctx, cfg, client)
 	for _, res := range results {
-		mark := map[string]string{"ok": "[ok]  ", "warn": "[warn]", "fail": "[fail]"}[res.Level]
-		fmt.Fprintf(out, "%s %s: %s\n", mark, res.Name, res.Detail)
+		line := fmt.Sprintf("%s %s: %s", doctorMark(res.Level), res.Name, res.Detail)
+		switch res.Level {
+		case "fail":
+			util.LogError("%s", line)
+		case "warn":
+			util.LogWarn("%s", line)
+		default:
+			util.Log("%s", line)
+		}
 	}
 	if code == 0 {
-		fmt.Fprintln(out, "自检通过：没有发现阻塞性问题。")
+		util.Log("自检通过：没有发现阻塞性问题。")
 	} else {
-		fmt.Fprintln(out, "存在阻塞性问题：先按上面的 [fail] 项处理，仍不行请带上本输出提 issue。")
+		util.LogError("存在阻塞性问题：先按上面的 [fail] 项处理，仍不行请带上本输出提 issue。")
 	}
 	return code
+}
+
+// doctorMark 把结论等级映射成标记；[ok] 补两个空格，让三档在终端里对齐。
+func doctorMark(level string) string {
+	return map[string]string{"ok": "[ok]  ", "warn": "[warn]", "fail": "[fail]"}[level]
 }
 
 // checkMuxTools 检查混流工具：ffmpeg 必需（含杜比视界支持探测），mp4box 仅在部分场景需要。

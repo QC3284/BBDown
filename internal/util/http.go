@@ -20,16 +20,43 @@ var (
 	apiRetryBackoff = 500 * time.Millisecond
 )
 
-// 风控（HTTP 412）的重试策略：共 3 次尝试、每次之间退避 1s，且**只轮换自动 UA**。
+// 风控（HTTP 412）的重试策略：共 3 次尝试，退避按 1s → 2s → 4s … 翻倍、上限 8s，
+// 且**只在成功轮换自动 UA 之后**才重试。
 //
 // 依据：上游把 4xx 一律视为确定性错误直接抛出；但 412 是 B 站的**限流/风控**信号（不是参数错误），
 // 等在原地重试同一 UA 往往还是 412，而换一个自动 UA 立刻就能过（同一生态的 C# 2.x 接手线 BBDownT
 // 2.1.x 就是这么做的：移除易触发 412 的默认 UA + 412 时轮换 UA 重试）。本仓的有意偏离，登记见
 // docs/UPSTREAM_ALIGNMENT.md §4.40。变量化是为了让用例把退避缩到毫秒。
+//
+// 「只在轮换成功后重试」是任务 C 的收敛：显式 --user-agent 换不掉 UA，带着同一个 UA 连打正是
+// 风控提示里劝阻的行为——直接抛出 412（附带下面的可操作提示），不再空转。
 var (
 	riskControlMaxAttempts = 3
-	riskControlRetryDelay  = time.Second
+	riskControlBackoffBase = time.Second
+	riskControlBackoffMax  = 8 * time.Second
 )
+
+// RiskControlBackoff 计算 412 风控第 retry 次重试（1 起，0 按第 1 次算）前的退避：
+// base 起每次翻倍，上限 max（max<=0 表示不限；base<=0 表示不退避）。
+//
+// 纯函数：API 层（本文件）与下载层（internal/download 的 planTrackRetry）共用同一条曲线，
+// 避免两处 412 退避各自漂移。
+func RiskControlBackoff(retry int, base, max time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if retry < 1 {
+		retry = 1
+	}
+	d := base
+	for i := 1; i < retry && (max <= 0 || d < max); i++ {
+		d *= 2
+	}
+	if max > 0 && d > max {
+		d = max
+	}
+	return d
+}
 
 // SetRetries overrides the retry count for this client (from --retry-count).
 func (c *HTTPClient) SetRetries(n int) {
@@ -277,22 +304,28 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 	for attempt := 0; ; attempt++ {
 		resp, err = c.client.Do(attemptReq)
 
-		// 风控（412）：换一个自动 UA 再试；显式 --user-agent 时保持原样（只退避重试）。
+		// 风控（412）：先换一个自动 UA，换成功才值得退避重试——显式 --user-agent 换不掉，
+		// 带着同一个 UA 连打只会加重风控（任务 C）。
 		if err == nil && resp.StatusCode == http.StatusPreconditionFailed {
 			riskAttempts++
 			if riskAttempts >= riskControlMaxAttempts || ctx.Err() != nil {
 				break // 用尽风控尝试：按 4xx 原样抛出（下面统一处理）
 			}
-			rotated := c.rotateAutomaticUserAgent()
+			if !c.rotateAutomaticUserAgent() {
+				if c.debugFn != nil {
+					c.debugFn("GET %s 被风控拦截(412)，UA 为显式指定、无法轮换，不再重试", MaskUrl(url))
+				}
+				break
+			}
+			backoff := RiskControlBackoff(riskAttempts, riskControlBackoffBase, riskControlBackoffMax)
 			if c.debugFn != nil {
-				c.debugFn("GET %s 被风控拦截(412)，%v 后重试（第 %d/%d 次%s）", MaskUrl(url),
-					riskControlRetryDelay, riskAttempts+1, riskControlMaxAttempts,
-					map[bool]string{true: "，已轮换自动 UA", false: "，UA 为显式指定、不轮换"}[rotated])
+				c.debugFn("GET %s 被风控拦截(412)，%v 后重试（第 %d/%d 次，已轮换自动 UA）", MaskUrl(url),
+					backoff, riskAttempts+1, riskControlMaxAttempts)
 			}
 			resp.Body.Close()
 			select {
 			case <-ctx.Done():
-			case <-time.After(riskControlRetryDelay):
+			case <-time.After(backoff):
 			}
 			if ctx.Err() != nil {
 				return "", nil, ctx.Err()
@@ -450,6 +483,10 @@ func (c *HTTPClient) rotateAutomaticUserAgent() bool {
 	c.userAgent = randomUserAgent()
 	return true
 }
+
+// RotateAutomaticUserAgent 轮换自动 UA（412 风控用），返回是否真的换了：显式 --user-agent
+// 时返回 false，调用方据此放弃重试（下载层的 412 策略与 API 层同源）。
+func (c *HTTPClient) RotateAutomaticUserAgent() bool { return c.rotateAutomaticUserAgent() }
 
 // SetUserAgent sets a custom user agent.
 func (c *HTTPClient) SetUserAgent(ua string) {

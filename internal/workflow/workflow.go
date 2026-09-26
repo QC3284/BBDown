@@ -50,6 +50,10 @@ type Workflow struct {
 	// OnSaved is invoked with each final output path (serve mode uses it to
 	// collect SavePaths).
 	OnSaved func(path string)
+
+	// m3u 累积本次运行的播放列表（--write-m3u）。由 Run 开头重置：同一个 Workflow 连着跑
+	// 两个地址时，不能让上一个稿件的产物混进这一个的列表。
+	m3u *m3uPlaylist
 }
 
 // New creates a new Workflow.
@@ -80,6 +84,9 @@ func InitSession(ctx context.Context, cfg *config.MyOption, client *util.HTTPCli
 
 // Run executes the complete download workflow.
 func (w *Workflow) Run(ctx context.Context) error {
+	// 每次运行都是一份新的播放列表：Workflow 复用（同一进程连跑多个地址）时不能把上一次的产物带进来。
+	w.m3u = nil
+
 	input := w.Cfg.URL
 	if input == "" {
 		return fmt.Errorf("请提供视频地址")
@@ -564,6 +571,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		// 否则只能手动删文件（本仓新增开关，见 §4.44）。
 		if shouldSkipProduct(w.Cfg.Overwrite, savePath) {
 			util.Log("%s 已存在, 跳过下载...", savePath)
+			// 已存在的产物同样是「已产出」：不登记的话，对已经下好的库补开 --write-m3u
+			// 会什么都不生成，中断后重跑也会缺掉被跳过的分P。
+			w.writeM3USidecar(savePath, title, page)
 			return true
 		}
 		if w.Cfg.Overwrite {
@@ -1000,6 +1010,7 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		util.Log("下载P%d完毕", page.Index)
 
 		w.writeNFOSidecar(savePath, title, page)
+		w.writeM3USidecar(savePath, title, page)
 
 		if w.OnSaved != nil && savePath != "" {
 			w.OnSaved(savePath)

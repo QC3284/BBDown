@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,44 +97,9 @@ func candidateAttempts(chain []string, retryCount int) int {
 	return n
 }
 
-// candidateAdvanceable 判断这次失败是否值得换下一个候选地址：
-//   - 404：镜像没有这个对象（确定性失败，重试同一个地址只会再 404）；
-//   - 连接/传输失败：DNS 失败、连接被拒/重置、读到一半断流（client.Do 的网络错误、停滞看门狗
-//     关掉响应体、Content-Length 没读满的 EOF）。
+// 「要不要换候选、换之前退多久」此前由 candidateAdvanceable/advanceCandidate 各自判断；
+// 现在统一由 planTrackRetry（见 retry_policy.go）按错误分类给出，单线程与分片两条循环共用。
 //
-// 其它失败不换地址：服务器明确回了别的状态码（换地址只会拿到同样的应答）、Range 不支持、
-// 本地磁盘错误、ctx 取消。按错误类型判断而不是「一律换」，是为了不白白烧掉候选。
-func candidateAdvanceable(err error) bool {
-	if err == nil || errors.Is(err, ErrRangeNotSupported) {
-		return false
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	var se *httpStatusError
-	if errors.As(err, &se) {
-		return se.code == http.StatusNotFound
-	}
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		return true
-	}
-	var ne net.Error
-	if errors.As(err, &ne) {
-		return true
-	}
-	return errors.Is(err, http.ErrBodyReadAfterClose) || errors.Is(err, io.ErrUnexpectedEOF)
-}
-
-// advanceCandidate 在候选链上推进一格；没有下一个候选、或这次失败不该换地址时保持原位。
-func advanceCandidate(chain []string, cur *int, err error) bool {
-	if *cur+1 >= len(chain) || !candidateAdvanceable(err) {
-		return false
-	}
-	*cur++
-	return true
-}
-
 // candidateSwitchReason 给出换候选的用户可见原因（404 与连接失败的说法不同）。
 func candidateSwitchReason(err error) string {
 	var se *httpStatusError
@@ -489,19 +452,10 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 	// 候选链：主地址在前，替换前的原地址与 playurl 的 backup_url 依次在后（本仓有意差异，§4.33）。
 	// 每个候选至少出场一次，所以尝试次数取 max(--retry-count, 候选数)。
 	chain := cfg.candidateChain(url)
+	attempts := candidateAttempts(chain, cfg.retryCount())
 	cur := 0
-	for attempt := 0; attempt < candidateAttempts(chain, cfg.retryCount()); attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		activeURL := chain[cur]
-		if attempt > 0 {
-			backoff := time.Duration(attempt) * cfg.retryDelay()
-			// 轨道级重试（上游 BBDownDownloadUtil.DownloadFileCoreAsync）记 Debug：
-			// 终端默认只该看到页面级那条 Warn。两级此前用同一句话，日志读起来像
-			// 「3×3=9 次连续重试」——用户实测就是这么被绕进去的。
-			util.LogDebug("下载失败(第%d次重试, %dms后): %v", attempt, backoff.Milliseconds(), lastErr)
-			if !sleepCtx(ctx, backoff) {
-				return ctx.Err()
-			}
-		}
 
 		var offset int64
 		var ifRange string
@@ -619,32 +573,52 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 			}
 			return err
 		}()
-		if err != nil {
-			lastErr = err
-			if ctx.Err() != nil {
-				return ctx.Err()
+		// Verify the final length before adopting the file.
+		if err == nil && pr.size > 0 {
+			if info, statErr := os.Stat(tmp); statErr != nil || info.Size() != pr.size {
+				err = fmt.Errorf("下载产物长度(%d)与服务器声明(%d)不符", fileSizeOrZero(tmp), pr.size)
 			}
-			// 404 与连接失败都是确定性的「这个地址不行」：换下一个候选，而不是对同一个死地址
-			// 重试满 retryCount 次（本仓有意差异，见 §4.33）。
-			if advanceCandidate(chain, &cur, err) {
-				util.LogWarn("%s，改用候选地址重试: %s", candidateSwitchReason(err), util.MaskUrl(chain[cur]))
+		}
+		if err == nil {
+			if renameErr := os.Rename(tmp, destPath); renameErr != nil {
+				return renameErr
 			}
+			os.Remove(metaPath)
+			return nil
+		}
+
+		lastErr = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// 分类重试策略（见 retry_policy.go）：确定性失败立刻放弃；412 只在成功轮换自动 UA
+		// 之后才重试；网络/404 有候选就立刻换地址，没有候选时才退避（网络短退避、404 沿用阶梯）。
+		plan := planTrackRetry(err, attempt, len(chain)-cur, cfg.retryDelay())
+		if !plan.Retry {
+			util.LogDebug("下载失败（%s，不再重试）: %v", plan.Class, err)
+			break
+		}
+		if attempt+1 >= attempts {
+			break // 阶梯用尽：不要再轮换 UA / 换候选（那些只对"下一次尝试"有意义）
+		}
+		if plan.NeedsUARotation && !cfg.rotateUserAgentFor412() {
+			util.LogDebug("下载被风控拦截(412)，但 UA 为显式指定、无法轮换，不再重试: %v", err)
+			break
+		}
+		if plan.SwitchCandidate {
+			cur++
+			util.LogWarn("%s，改用候选地址重试: %s", candidateSwitchReason(err), util.MaskUrl(chain[cur]))
+		}
+		if plan.Backoff <= 0 {
 			continue
 		}
-
-		// Verify the final length before adopting the file.
-		if pr.size > 0 {
-			if info, statErr := os.Stat(tmp); statErr != nil || info.Size() != pr.size {
-				lastErr = fmt.Errorf("下载产物长度(%d)与服务器声明(%d)不符", fileSizeOrZero(tmp), pr.size)
-				continue
-			}
+		// 轨道级重试（上游 BBDownDownloadUtil.DownloadFileCoreAsync）记 Debug：
+		// 终端默认只该看到页面级那条 Warn。两级此前用同一句话，日志读起来像
+		// 「3×3=9 次连续重试」——用户实测就是这么被绕进去的。
+		util.LogDebug("下载失败(%s，第%d次重试, %dms后): %v", plan.Class, attempt+1, plan.Backoff.Milliseconds(), lastErr)
+		if !sleepCtx(ctx, plan.Backoff) {
+			return ctx.Err()
 		}
-
-		if err := os.Rename(tmp, destPath); err != nil {
-			return err
-		}
-		os.Remove(metaPath)
-		return nil
 	}
 	return lastErr
 }
@@ -857,20 +831,13 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, ex
 	// 候选链与单线程路径同语义：每个分片独立走一遍链，404/连接失败就换下一个候选
 	// （本仓有意差异，见 §4.33）。
 	chain := cfg.candidateChain(url)
+	attempts := candidateAttempts(chain, cfg.retryCount())
 	cur := 0
 	var lastErr error
-	for attempt := 0; attempt < candidateAttempts(chain, cfg.retryCount()); attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		activeURL := chain[cur]
-		if attempt > 0 {
-			if onProgress != nil {
-				onProgress(0) // 分片从头重下，聚合总量随之回退
-			}
-			backoff := time.Duration(attempt) * cfg.retryDelay()
-			// 上游多线程分片重试用同一口径的 Debug（分段下载失败(第N次重试, Xms后)）。
-			util.LogDebug("分段下载失败(第%d次重试, %dms后): %v", attempt, backoff.Milliseconds(), lastErr)
-			if !sleepCtx(ctx, backoff) {
-				return 0, ctx.Err()
-			}
+		if attempt > 0 && onProgress != nil {
+			onProgress(0) // 分片从头重下，聚合总量随之回退
 		}
 
 		n, err := func() (int64, error) {
@@ -932,9 +899,31 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, ex
 		}
 		lastErr = err
 		os.Remove(tmpPath)
-		// 分片 404/连接失败同样换下一个候选（镜像覆盖不全时会整片 404）。
-		if advanceCandidate(chain, &cur, err) {
+		// 与单线程同一条分类策略（见 retry_policy.go）：分片 412 同样只在轮换 UA 后重试，
+		// 404/连接失败同样立刻换候选（镜像覆盖不全时会整片 404）。
+		plan := planTrackRetry(err, attempt, len(chain)-cur, cfg.retryDelay())
+		if !plan.Retry {
+			util.LogDebug("分段下载失败（%s，不再重试）: %v", plan.Class, err)
+			return 0, err
+		}
+		if attempt+1 >= attempts {
+			continue // 阶梯用尽：循环随即结束，不再轮换 UA / 换候选
+		}
+		if plan.NeedsUARotation && !cfg.rotateUserAgentFor412() {
+			util.LogDebug("分段下载被风控拦截(412)，但 UA 为显式指定、无法轮换，不再重试: %v", err)
+			return 0, err
+		}
+		if plan.SwitchCandidate {
+			cur++
 			util.LogWarn("%s，改用候选地址重试: %s", candidateSwitchReason(err), util.MaskUrl(chain[cur]))
+		}
+		if plan.Backoff <= 0 {
+			continue
+		}
+		// 上游多线程分片重试用同一口径的 Debug（分段下载失败(第N次重试, Xms后)）。
+		util.LogDebug("分段下载失败(%s，第%d次重试, %dms后): %v", plan.Class, attempt+1, plan.Backoff.Milliseconds(), lastErr)
+		if !sleepCtx(ctx, plan.Backoff) {
+			return 0, ctx.Err()
 		}
 	}
 	return 0, lastErr

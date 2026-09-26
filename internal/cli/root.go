@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
 
 	"github.com/QC3284/BBDown/internal/config"
@@ -68,6 +67,7 @@ var (
 	optNFO                bool
 	optCompat             bool
 	optLogFile            string
+	optM3U                bool
 	optForceHTTP          bool
 	optAria2cProxy        string
 	optAddDfnSuffix       bool
@@ -131,13 +131,14 @@ var rootCmd = &cobra.Command{
   BBDown --urls-file list.txt             批量下载（每行一个，# 注释，- 表示 stdin）
   BBDown --nfo --progress-json <URL>      写侧车元数据 + 逐行 JSON 进度（媒体库/监控）
   BBDown --compat <URL>                   兼容优先：避开 HDR Vivid/杜比视界档位
+  BBDown --write-m3u <URL>                产物旁写 .m3u 播放列表（多P 按分P顺序）
   BBDown --overwrite <URL>                忽略已存在产物，强制重下
   BBDown doctor                           环境自检（混流工具/输出目录/登录态/风控）
   BBDown resume                           重试上次未完成的任务
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.9.0",
+	Version: "2.10.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -175,15 +176,33 @@ func Execute() {
 	}
 
 	if err := rootCmd.Execute(); err != nil {
-		// Ctrl+C 取消：对齐上游 Console_CancelKeyPress —— 提示后正常退出(0)，
-		// 不打印 usage。
-		if errors.Is(err, context.Canceled) {
-			util.LogWarn("Force Exit...")
-			os.Exit(0)
+		// 退出码由纯函数决定（可单测）：取消/中断 → 130，其它错误 → 1。
+		code := exitCodeFor(err)
+		if code == interruptExitCode {
+			util.LogWarn("已取消")
+		} else {
+			reportError(err, os.Stderr)
 		}
-		reportError(err, os.Stderr)
-		os.Exit(1)
+		os.Exit(code)
 	}
+}
+
+// errInterrupted 标记「用户中断导致的中止」（Ctrl+C 的优雅取消路径）。
+var errInterrupted = errors.New("interrupted")
+
+// exitCodeFor 决定进程退出码：取消/中断 → 130（128+SIGINT，同上游 Environment.Exit(130)），其它错误 → 1。
+//
+// 抽成纯函数是为了能直接单测（os.Exit 在用例里观察不到）。此前取消是退出 0，与上游不一致；
+// 本仓 docs/alignment 把这条列为待对齐项，本次补齐。
+
+func exitCodeFor(err error) int {
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, errInterrupted) {
+		return interruptExitCode
+	}
+	return 1
 }
 
 // usageError 标记「参数/用法错误」：只有这类错误才连带打印 usage。
@@ -367,6 +386,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&optNFO, "nfo", false, "产物旁写同名 .nfo 侧车元数据（Kodi/Emby/Jellyfin 可读）")
 	rootCmd.Flags().BoolVar(&optCompat, "compat", false, "兼容优先：选档避开 HDR Vivid / 杜比视界（本机或多数播放器可能播不了）")
 	rootCmd.PersistentFlags().StringVar(&optLogFile, "log-file", "", "同时把日志写入文件（追加；写失败会自动挂起并在控制台提示）")
+	rootCmd.Flags().BoolVar(&optM3U, "write-m3u", false, "产物旁写 .m3u 播放列表（多P 按分P顺序，播放器可直接播）")
 	rootCmd.Flags().BoolVar(&optForceHTTP, "force-http", false, "强制HTTP协议")
 	// Deprecated compatibility options (upstream hidden flags).
 	rootCmd.Flags().StringVar(&optAria2cProxy, "aria2c-proxy", "", "aria2c代理(已弃用)")
@@ -476,17 +496,21 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.9.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.10.0")
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-
-	return downloadTargets(ctx, cmd, cfg, client, targets)
+	// Ctrl+C 的收尾（第一次优雅取消 / 第二次强制退出）由 downloadTargets 统一安装，
+	// runDownload 与 resume 走的是同一条路径，不会出现两套取消语义。
+	return downloadTargets(context.Background(), cmd, cfg, client, targets)
 }
 
 // downloadTargets 执行一批目标，并维护**未完成任务清单**（bbdown resume 的底座）：
 // 成功的从清单移除，失败/被取消的登记（含最后错误）。抽成函数让 runDownload 与 resume 共用同一条路径。
+//
+// 取消语义也在这里统一安装（newInterruptContext，见 interrupt.go）：调用方不需要自己建信号 ctx。
 func downloadTargets(ctx context.Context, cmd *cobra.Command, cfg config.MyOption, client *util.HTTPClient, targets []string) error {
+	ctx, cancel := newInterruptContext(ctx)
+	defer cancel()
+
 	var firstErr error
 	failures := runTargets(ctx, targets, func(ctx context.Context, target string) error {
 		one := cfg

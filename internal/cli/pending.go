@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"time"
 
@@ -48,9 +47,9 @@ var resumeCmd = &cobra.Command{
 		}
 
 		client := buildHTTPClient(cfg)
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
-		return downloadTargets(ctx, cmd, cfg, client, targets)
+		// Ctrl+C 的收尾（第一次优雅取消 / 第二次强制退出）由 downloadTargets 统一安装：
+		// 与 runDownload 共用同一条取消语义。
+		return downloadTargets(context.Background(), cmd, cfg, client, targets)
 	},
 }
 

@@ -20,6 +20,8 @@ func TestRootHelpListsOwnFeatures(t *testing.T) {
 		"--nfo",
 		"--progress-json",
 		"--overwrite",
+		"--write-m3u",
+		"--compat",
 		"BBDown login",
 	} {
 		if !strings.Contains(long, want) {

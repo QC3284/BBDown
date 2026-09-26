@@ -1,10 +1,11 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,8 +15,12 @@ import (
 
 // bbdown doctor（本仓特色功能）：自检项要能离线覆盖——接口用假 hosts，外部工具用假可执行文件。
 //
+// 输出从 os.Stdout 改成走 util 日志后，用例改为把日志指到临时文件再读文件（doctorWith 的返回值
+// 就是日志内容）：这既让断言继续可读，也顺带守住「--log-file 抓得到自检结果」。
+//
 // 变异验证：把 checkAPIAndLogin 改成恒返回 ok → 412 用例变红；把 checkMuxTools 的 ffmpeg 检查删掉
-// → 「找不到 ffmpeg」用例变红。
+// → 「找不到 ffmpeg」用例变红；把 runDoctor 的 util.Log 换回 fmt.Fprintf(os.Stdout, ...)
+// → 本文件所有用例（读到的日志为空）与 doctor_log_test.go 一起变红。
 func doctorWith(t *testing.T, stubTools bool, nav string, status int) (string, int) {
 	t.Helper()
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,9 +51,16 @@ func doctorWith(t *testing.T, stubTools bool, nav string, status int) (string, i
 		t.Cleanup(func() { doctorChecks = orig })
 	}
 
-	var buf bytes.Buffer
-	code := runDoctor(context.Background(), cfg, client, &buf)
-	return buf.String(), code
+	logPath := filepath.Join(t.TempDir(), "doctor.log")
+	util.SetLogFile(logPath)
+	t.Cleanup(func() { util.SetLogFile("") })
+
+	code := runDoctor(context.Background(), cfg, client)
+	body, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("doctor 输出必须落进日志文件（--log-file 要覆盖自检结果）：%v", err)
+	}
+	return string(body), code
 }
 
 func TestDoctorReportsLoggedInState(t *testing.T) {
