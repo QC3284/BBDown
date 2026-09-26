@@ -141,7 +141,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.11.0",
+	Version: "2.11.1",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -169,6 +169,10 @@ func Execute() {
 
 	// --log-file 要在任何命令真正干活之前生效：放在根命令的 PersistentPreRun（cobra 在所有命令前调用它）。
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		// 机读模式：日志让位给数据（stdout 只留 JSON），这是「清爽」的底线。
+		if optInfoJSON {
+			util.SetConsoleOutput(os.Stderr)
+		}
 		if optLogFile != "" {
 			util.SetLogFile(optLogFile)
 			util.LogDebug("日志同时写入 %s", optLogFile)
@@ -507,7 +511,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.11.0")
+	util.CheckUpdateAsync(context.Background(), client, "v2.11.1")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。

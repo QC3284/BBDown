@@ -37,6 +37,7 @@ var doctorCmd = &cobra.Command{
 		ctx := commandContext(cmd)
 		// JSON 是机读契约：写 cmd 的输出流（纯 stdout、无时间戳/无色码），供脚本与监控解析。
 		if asJSON, _ := cmd.Flags().GetBool("json"); asJSON {
+			util.SetConsoleOutput(os.Stderr) // 机读模式：stdout 只留 JSON，日志让位到 stderr
 			if code := runDoctorJSON(ctx, cfg, client, cmd.OutOrStdout()); code != 0 {
 				return fmt.Errorf("自检未通过（按上面的 [fail] 项处理）")
 			}

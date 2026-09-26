@@ -3,6 +3,7 @@ package util
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -106,6 +107,21 @@ func sanitizeLogArgs(args []interface{}) []interface{} {
 // 「合并分片...」时，上一帧的 25.07% 尾巴连同它一起显示成两行进度）。
 var ConsoleLock sync.Mutex
 
+// consoleOut 是日志的写入目标，默认 stdout。
+//
+// SetConsoleOutput 让 `--info-json` / `doctor --json` 这类**机读模式**把日志挪到 stderr：
+// stdout 只留数据，管道（jq/脚本）才拿得到干净输入。清爽感的代价只是「日志换个流」。
+var consoleOut io.Writer = os.Stdout
+
+// SetConsoleOutput 切换日志输出流（nil 视为还原 stdout）。
+func SetConsoleOutput(w io.Writer) {
+	if w == nil {
+		consoleOut = os.Stdout
+		return
+	}
+	consoleOut = w
+}
+
 // progressLineActive 表示终端当前行上停着一条尚未收尾的进度条。
 var progressLineActive atomic.Bool
 
@@ -120,7 +136,7 @@ func consoleWrite(write func()) {
 	ConsoleLock.Lock()
 	defer ConsoleLock.Unlock()
 	if progressLineActive.Swap(false) {
-		fmt.Print("\n")
+		fmt.Fprint(consoleOut, "\n")
 	}
 	write()
 }
@@ -207,7 +223,7 @@ func timestamp() string {
 func (l *Logger) Log(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
-	consoleWrite(func() { fmt.Println(line) })
+	consoleWrite(func() { fmt.Fprintln(consoleOut, line) })
 	l.appendToFile(line)
 }
 
@@ -216,8 +232,8 @@ func (l *Logger) LogError(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	consoleWrite(func() {
-		fmt.Print(timestamp() + " - ")
-		fmt.Print(AnsiRed + msg + AnsiReset + "\n")
+		fmt.Fprint(consoleOut, timestamp()+" - ")
+		fmt.Fprint(consoleOut, AnsiRed+msg+AnsiReset+"\n")
 	})
 	l.appendToFile(line)
 }
@@ -227,8 +243,8 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	consoleWrite(func() {
-		fmt.Print(timestamp() + " - ")
-		fmt.Print(AnsiDarkYellow + msg + AnsiReset + "\n")
+		fmt.Fprint(consoleOut, timestamp()+" - ")
+		fmt.Fprint(consoleOut, AnsiDarkYellow+msg+AnsiReset+"\n")
 	})
 	l.appendToFile(line)
 }
@@ -236,7 +252,7 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 // LogColorNoTime prints a colored line in cyan without timestamp, indented to align.
 func (l *Logger) LogColorNoTime(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
-	consoleWrite(func() { fmt.Print("                            " + AnsiCyan + msg + AnsiReset + "\n") })
+	consoleWrite(func() { fmt.Fprint(consoleOut, "                            "+AnsiCyan+msg+AnsiReset+"\n") })
 	l.appendToFile("                             " + msg)
 }
 
@@ -245,8 +261,8 @@ func (l *Logger) LogColor(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
 	consoleWrite(func() {
-		fmt.Print(timestamp() + " - ")
-		fmt.Print(AnsiCyan + msg + AnsiReset + "\n")
+		fmt.Fprint(consoleOut, timestamp()+" - ")
+		fmt.Fprint(consoleOut, AnsiCyan+msg+AnsiReset+"\n")
 	})
 	l.appendToFile(line)
 }
@@ -258,14 +274,14 @@ func (l *Logger) LogDebug(format string, args ...interface{}) {
 	}
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
-	consoleWrite(func() { fmt.Print(AnsiDarkGray + line + AnsiReset + "\n") })
+	consoleWrite(func() { fmt.Fprint(consoleOut, AnsiDarkGray+line+AnsiReset+"\n") })
 	l.appendToFile(line)
 }
 
 // Printf prints without timestamp prefix (for interactive prompts).
 func (l *Logger) Printf(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	consoleWrite(func() { fmt.Print(msg) })
+	consoleWrite(func() { fmt.Fprint(consoleOut, msg) })
 }
 
 // Default package-level logger.
