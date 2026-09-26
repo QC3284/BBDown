@@ -107,7 +107,13 @@
    `hdr_reminder_test.go`、`onlyshowinfo_chapters_test.go` 改成用它，消掉「假地址被生产逻辑改写」这一类坑。
 3. **NFO 侧车元数据**：渲染层已完成（`internal/download/nfo.go` 的 `RenderNFO` + 用例，字段/转义/单P不写 episode/
    时间未知不写 aired）；**接线待做**——`--nfo` 开关 + 产物成功后写 `savePath + ".nfo"` + 变异验证。
-4. **M3U 改进（小）**：时长目前写 `-1`，改用 `page.Dur` 需同时更新 `m3u_sidecar_test.go` 的两条接线期望（渲染层已支持）。
+4. **偶发 15/16 的定位（观察项）**：全仓 `go test ./... -count=1` 在**高负载**下（并行跑测试、多代理同时作业）出现过数次
+   单包失败，空载连跑 8 次 0 失败，且每次都来不及抓到失败用例名 → 怀疑是**负载敏感的时序用例**（墙钟/进度/超时类）。
+   下一步：在有负载的情况下连跑并落盘 `--- FAIL` 行（脚本已备：8 轮循环写 /tmp/flake.log），拿到名字再修；
+   在那之前 CI 是判据。
+5. **`--info-json` 的日志分流（小）**：JSON 目前与日志同在 stdout，管道消费要截取最后一段；让 `--info-json` 时
+   日志走 stderr（或加 `--quiet`）即可，根因在 util 日志缺少输出分流。
+6. **M3U 改进（小）**：时长目前写 `-1`，改用 `page.Dur` 需同时更新 `m3u_sidecar_test.go` 的两条接线期望（渲染层已支持）。
 5. **下一批功能候选**（凑齐后发下一版）：`--compat` 智能选档（自动避开
    HDR Vivid/杜比视界）、订阅调度（`sub check` 定时/并发）。
 

@@ -95,7 +95,9 @@ type MyOption struct {
 	// WriteM3U 产物落地后在产物目录写一个 .m3u 播放列表（同一稿件的多个分P串起来，VLC/mpv 直接打开）。
 	WriteM3U bool `json:"write_m3u" mapstructure:"write_m3u"`
 	// Compat 兼容优先：选档时避开 HDR Vivid / 杜比视界（本机或多数播放器可能播不了）。
-	Compat                 bool   `json:"compat" mapstructure:"compat"`
+	Compat bool `json:"compat" mapstructure:"compat"`
+	// InfoJSON 只输出解析结果的 JSON 元数据后退出（给脚本/GUI/调度器；与人看的 -I 互补）。
+	InfoJSON               bool   `json:"info_json" mapstructure:"info_json"`
 	ForceHTTP              bool   `json:"force_http" mapstructure:"force_http"`
 	DownloadDanmaku        bool   `json:"download_danmaku" mapstructure:"download_danmaku"`
 	DownloadDanmakuFormats string `json:"download_danmaku_formats" mapstructure:"download_danmaku_formats"`

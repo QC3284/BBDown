@@ -22,6 +22,7 @@ func TestRootHelpListsOwnFeatures(t *testing.T) {
 		"--overwrite",
 		"--write-m3u",
 		"--compat",
+		"--info-json",
 		"BBDown login",
 	} {
 		if !strings.Contains(long, want) {

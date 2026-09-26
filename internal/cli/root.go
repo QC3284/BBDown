@@ -69,6 +69,7 @@ var (
 	optCompat             bool
 	optLogFile            string
 	optM3U                bool
+	optInfoJSON           bool
 	optForceHTTP          bool
 	optAria2cProxy        string
 	optAddDfnSuffix       bool
@@ -133,13 +134,14 @@ var rootCmd = &cobra.Command{
   BBDown --nfo --progress-json <URL>      写侧车元数据 + 逐行 JSON 进度（媒体库/监控）
   BBDown --compat <URL>                   兼容优先：避开 HDR Vivid/杜比视界档位
   BBDown --write-m3u <URL>                产物旁写 .m3u 播放列表（多P 按分P顺序）
+  BBDown --info-json <URL>                只输出解析结果 JSON 元数据（给脚本/GUI/调度器）
   BBDown --overwrite <URL>                忽略已存在产物，强制重下
   BBDown doctor                           环境自检（混流工具/输出目录/登录态/风控）
   BBDown resume                           重试上次未完成的任务
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.10.1",
+	Version: "2.11.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -395,6 +397,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&optCompat, "compat", false, "兼容优先：选档避开 HDR Vivid / 杜比视界（本机或多数播放器可能播不了）")
 	rootCmd.PersistentFlags().StringVar(&optLogFile, "log-file", "", "同时把日志写入文件（追加；写失败会自动挂起并在控制台提示）")
 	rootCmd.Flags().BoolVar(&optM3U, "write-m3u", false, "产物旁写 .m3u 播放列表（多P 按分P顺序，播放器可直接播）")
+	rootCmd.Flags().BoolVar(&optInfoJSON, "info-json", false, "只输出解析结果的 JSON 元数据后退出（给脚本/GUI；比 -I 更适合程序消费）")
 	rootCmd.Flags().BoolVar(&optForceHTTP, "force-http", false, "强制HTTP协议")
 	// Deprecated compatibility options (upstream hidden flags).
 	rootCmd.Flags().StringVar(&optAria2cProxy, "aria2c-proxy", "", "aria2c代理(已弃用)")
@@ -504,7 +507,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	util.CheckUpdateAsync(context.Background(), client, "v2.10.1")
+	util.CheckUpdateAsync(context.Background(), client, "v2.11.0")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。

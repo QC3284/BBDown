@@ -464,6 +464,28 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			result.RoleAudioList = nil
 		}
 
+		// --info-json：只输出机器可读的元数据（不打印人看的流列表，保证 stdout 能被直接管道解析）。
+		if w.Cfg.InfoJSON {
+			body, err := download.RenderInfoJSON(download.InfoPayload{
+				Title:       title,
+				Bvid:        page.Bvid(),
+				Aid:         page.Aid,
+				Cid:         page.Cid,
+				PageIndex:   page.Index,
+				PageTitle:   page.Title,
+				DurationSec: page.Dur,
+				Video:       result.VideoTracks,
+				Audio:       result.AudioTracks,
+				Clips:       result.Clips,
+			})
+			if err != nil {
+				util.LogError("生成元数据 JSON 失败: %v", err)
+				return false
+			}
+			fmt.Print(body)
+			return true
+		}
+
 		if !w.Cfg.HideStreams {
 			download.PrintAllTracks(result, page.Dur, w.Cfg.OnlyShowInfo)
 		}

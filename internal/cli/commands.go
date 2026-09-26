@@ -99,7 +99,7 @@ var serveCmd = &cobra.Command{
 		ctx := commandContext(cmd)
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.10.1")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.11.0")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -617,6 +617,7 @@ func buildMyOption() config.MyOption {
 		WriteNFO:               optNFO,
 		Compat:                 optCompat,
 		WriteM3U:               optM3U,
+		InfoJSON:               optInfoJSON,
 		ForceHTTP:              optForceHTTP,
 		DownloadDanmaku:        optDownloadDanmaku,
 		DownloadDanmakuFormats: optDanmakuFormats,

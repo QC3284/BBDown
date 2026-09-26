@@ -10,6 +10,31 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.11.0] - 2026-09-26
+
+**`--info-json`：解析结果机读化**（本仓特色功能）。
+
+自动化链路里最后缺的一环：`-I` 给人看（清晰度/编码/体积列表）、`--print-urls` 给下载器（直链），
+**缺「给程序的元数据」**。现在 `BBDown --info-json <URL>` 输出一份 JSON：
+
+```json
+{
+  "title": "视频标题", "bvid": "BV...", "aid": "2", "cid": "62131",
+  "page_index": 1, "page_title": "P1", "duration_sec": 2055,
+  "video": [ { "id": "129", "dfn": "HDR Vivid", "res": "1920x1080", "fps": "30", "codecs": "av01...", "bandwidth": 3145694 } ],
+  "audio": [ { "id": "30280", "codecs": "mp4a.40.2", "bandwidth": 134737 } ]
+}
+```
+
+- 字段名与仓库其它 JSON 输出一致（snake_case：`doctor --json`、`--progress-json`）；
+- 空轨道写 `[]` 而不是 `null`（调用方不必判空），空 `clips` 直接省略；
+- 只解析不下载，也不打印人看的流列表（有反例断言钉住），便于脚本/GUI/调度器消费；
+- 它是将来 `serve` Web UI 的天然数据源。
+
+### 如实说明
+
+- **JSON 会跟在日志之后**（我们目前没有 quiet/日志分流开关）：管道消费需要取最后一段 JSON（例如
+  `BBDown --info-json URL | sed -n "/^{/,$p" | jq`）。把「`--info-json` 时日志走 stderr」列为后续小项（ROADMAP）。
 ## [2.10.1] - 2026-09-26
 
 收尾批次（三条线并行）：**M3U 两项改进**、**下载层 412 提示**、**全局 Ctrl+C 语义 + 收尾汇总行**。
