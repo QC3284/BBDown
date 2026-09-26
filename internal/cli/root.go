@@ -142,7 +142,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.12.4",
+	Version: "2.12.5",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -669,7 +669,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	updateCheck(context.Background(), client, "v2.12.4")
+	updateCheck(context.Background(), client, "v2.12.5")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。
@@ -754,7 +754,8 @@ func downloadTargets(ctx context.Context, cmd *cobra.Command, cfg config.MyOptio
 	}
 	// 任务 G-2：整批跑完时打一行收尾汇总（含部分失败——那正是要看到失败数的时候）。
 	// 被 Ctrl+C 打断时不打：「成功/失败数」没有意义，取消提示已由中断处理给出。
-	util.Log("%s", formatBatchSummary(batchSummary{
+	// 走内容通道（无时间戳）：汇总行是这次运行的结果，不是「发生了一件事」。
+	util.Content("%s", formatBatchSummary(batchSummary{
 		succeeded: len(targets) - failures,
 		failed:    failures,
 		elapsed:   time.Since(started),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,12 @@ func TestDownloadTargetsPrintsBatchSummary(t *testing.T) {
 	}
 	if !strings.Contains(console, "下载完成：成功 0 个，失败 1 个，耗时 ") {
 		t.Fatalf("收尾汇总的计数与本次运行不符：%q", console)
+	}
+	// 汇总行是这次运行的结果（内容通道），不带日志时间戳前缀。
+	for _, line := range strings.Split(console, "\n") {
+		if strings.Contains(line, "下载完成：") && regexp.MustCompile(`^\[\d{2}:\d{2}:\d{2}\]`).MatchString(line) {
+			t.Errorf("汇总行不该带时间戳前缀：%q", line)
+		}
 	}
 
 	// 失败目标要登记进**注入的** WorkDir：resume 功能的前提，也是本用例的隔离证据。

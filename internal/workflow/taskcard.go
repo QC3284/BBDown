@@ -27,11 +27,13 @@ type taskCard struct {
 // 标签列宽度取候选标签里最宽的「输出路径」（4 个全角字符 = 8 显示列）。
 // 用固定值而不是「本次出现过的标签的最大宽度」：某些行被省略时，其余行的值列才不会整体左移。
 const (
-	taskCardHeader     = "任务卡"
-	taskCardIndent     = "  "
+	taskCardIndent     = " " // 与其它内容行同一缩进（标题行顶格、内容行缩进一格）
 	taskCardLabelWidth = 8
 	taskCardGap        = 2
 )
+
+// taskCardHeader 是卡片的标题行，与流清单/分P 一样用 ── 标题 ──── 分隔（标题行不缩进）。
+var taskCardHeader = download.SectionTitle("任务卡")
 
 // renderTaskCard 渲染任务卡：每个存在的字段一行，标签列对齐，值从固定的显示列开始。
 //
@@ -68,11 +70,12 @@ func renderTaskCard(c taskCard) string {
 
 // printTaskCard 把卡片原样写到控制台。
 //
-// 用 Logger.Printf 而不是 util.Log：Log 会按「单行日志」清洗参数（控制字符变空格、连续空白折叠），
-// 多行且靠空白对齐的卡片会被压成一行。Printf 走同一个 util.ConsoleLock 与「先给进度行收尾」的
-// 约定（internal/util/logger.go 的 consoleWrite），所以与日志/进度条不会互相插行。
+// 用 util.ContentBlock 而不是 util.Log：Log 会按「单行日志」清洗参数（控制字符变空格、连续空白折叠），
+// 多行且靠空白对齐的卡片会被压成一行。ContentBlock 走内容通道——无时间戳（卡片是结果不是事件），
+// 并且与日志共用 util.ConsoleLock 与「先给进度行收尾」的约定（internal/util/logger.go 的
+// consoleWrite），所以与日志/进度条不会互相插行。
 func printTaskCard(c taskCard) {
-	util.GetLogger().Printf("%s", renderTaskCard(c))
+	util.ContentBlock(renderTaskCard(c))
 }
 
 // buildTaskCard 用本页的解析结果填卡片数据；没有的字段留空，由 renderTaskCard 省略那一行。
@@ -119,7 +122,9 @@ func describeVideoTrack(v *entity.Video, pageDur int) string {
 		add(fmt.Sprintf("%d kbps", v.Bandwidth))
 	}
 	if size := trackSize(v.Size, v.Bandwidth, pageDur, v.Dur); size > 0 {
-		add("~" + util.FormatFileSize(size))
+		// 体积不带 "~"：流清单的列同样不带（目标形态的定稿），两处口径必须一致，
+		// 否则同一份数据在清单里是 "51.68 MB"、在卡片里是 "~51.68 MB"。
+		add(util.FormatFileSize(size))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -138,7 +143,7 @@ func describeAudioTrack(a *entity.Audio, pageDur int) string {
 		parts = append(parts, fmt.Sprintf("%d kbps", a.Bandwidth))
 	}
 	if size := trackSize(0, a.Bandwidth, pageDur, a.Dur); size > 0 {
-		parts = append(parts, "~"+util.FormatFileSize(size))
+		parts = append(parts, util.FormatFileSize(size))
 	}
 	return strings.Join(parts, " · ")
 }

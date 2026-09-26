@@ -1037,13 +1037,10 @@ func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressP
 }
 
 // isTerminalOut 是变量而非函数：用例需要在不依赖真实终端的前提下驱动进度条绘制。
-var isTerminalOut = func() bool {
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
-}
+//
+// 默认判定复用 util.IsTerminalOut（内容通道的着色/直链截断也看它）：口径只有一份，
+// 用例注入 util.SetTerminalForTest 时进度条与内容一起进 TTY 分支，不会只切一半。
+var isTerminalOut = func() bool { return util.IsTerminalOut() }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	select {
@@ -1259,53 +1256,81 @@ func SortAudioTracks(tracks []entity.Audio, encodingPriority map[string]int, asc
 
 // PrintAllTracks displays available tracks, in the order upstream Display.PrintAllTracksInfo
 // prints them: 背景音频流与配音（仅当两者都存在时）→ 视频流 → 音频流。
+//
+// 每一段都是「标题行（── 可用流（6）────）+ 表头 + 数据行」，走内容通道（util.Content*，
+// 无时间戳）而不是日志通道：清单是这次解析的**结果**，不是过程中发生的一件事。
 func PrintAllTracks(result *entity.ParsedResult, pageDur int, onlyShowInfo bool) {
 	// 背景音频与配音属于同一块信息（上游 Display.cs:19-35）：两者都存在才打印，
 	// 只打印首条配音名下的配音流。
 	if len(result.BackgroundAudioTracks) > 0 && len(result.RoleAudioList) > 0 {
-		util.Log("共计%d条背景音频流.", len(result.BackgroundAudioTracks))
+		util.ContentColored(util.ContentCyan, "%s", SectionTitle(fmt.Sprintf("可用背景音频流（%d）", len(result.BackgroundAudioTracks))))
+		util.ContentColored(util.ContentDim, "%s", audioTrackHeader)
 		for i, a := range result.BackgroundAudioTracks {
-			util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+			util.ContentColored(util.ContentCyan, "%s", formatAudioTrackLine(i, a, pageDur))
 		}
 		if firstRole := result.RoleAudioList[0].Audio; len(firstRole) > 0 {
-			util.Log("共计%d条配音, 每条包含%d条配音流.", len(result.RoleAudioList), len(firstRole))
+			util.ContentColored(util.ContentCyan, "%s", SectionTitle(fmt.Sprintf("可用配音（%d · 每条 %d 条流）", len(result.RoleAudioList), len(firstRole))))
+			util.ContentColored(util.ContentDim, "%s", audioTrackHeader)
 			for i, a := range firstRole {
-				util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+				util.ContentColored(util.ContentCyan, "%s", formatAudioTrackLine(i, a, pageDur))
 			}
 		}
 	}
 	if len(result.VideoTracks) > 0 {
-		util.Log("共计%d条视频流.", len(result.VideoTracks))
+		util.ContentColored(util.ContentCyan, "%s", SectionTitle(fmt.Sprintf("可用流（%d）", len(result.VideoTracks))))
+		util.ContentColored(util.ContentDim, "%s", videoTrackHeader)
 		for i, v := range result.VideoTracks {
-			util.LogColorNoTime("%s", formatVideoTrackLine(i, v, pageDur))
+			util.ContentColored(util.ContentCyan, "%s", formatVideoTrackLine(i, v, pageDur))
 			// --only-show-info：每条流后面直接给出可下载地址（上游 Console.WriteLine(v.baseUrl)），
 			// 少了这一行，-I 拿到的就只是体积/码率清单，脚本无法据此取流。
 			if onlyShowInfo {
-				fmt.Println(v.BaseURL)
+				printStreamURL(v.BaseURL)
 			}
 		}
 	}
 	if len(result.AudioTracks) > 0 {
-		util.Log("共计%d条音频流.", len(result.AudioTracks))
+		util.ContentColored(util.ContentCyan, "%s", SectionTitle(fmt.Sprintf("可用音频流（%d）", len(result.AudioTracks))))
+		util.ContentColored(util.ContentDim, "%s", audioTrackHeader)
 		for i, a := range result.AudioTracks {
-			util.LogColorNoTime("%s", formatAudioTrackLine(i, a, pageDur))
+			util.ContentColored(util.ContentCyan, "%s", formatAudioTrackLine(i, a, pageDur))
 			if onlyShowInfo {
-				fmt.Println(a.BaseURL)
+				printStreamURL(a.BaseURL)
 			}
 		}
 	}
 }
 
-// PrintSelectedTrack shows the chosen tracks (matching C# format).
+// printStreamURL 打出一条流的直链（--only-show-info）。
 //
-// 与流清单共用 tracklayout.go 的列宽：行首是 [视频]/[音频] 标签而不是序号，
-// 但名称列、码率列、体积列都落在与清单行相同的显示列上。
+// 管道里**逐字节原样**输出（一行 url 加换行，无前缀无缩进无颜色）：脚本按行取地址是本仓的
+// 对外契约（见 content_contract_test.go），所以非终端一律走 fmt.Println，与改前一致。
+// 终端里则换成灰色截断的提示行——几百字符的 CDN 直链会把表格冲散（改前的真实反馈），
+// 而这么长的地址在终端里也复制不走；要全文用 --print-urls（专为管道设计的出口）。
+func printStreamURL(raw string) {
+	if raw == "" {
+		return
+	}
+	if !util.IsTerminalOut() {
+		fmt.Println(raw)
+		return
+	}
+	util.ContentColored(util.ContentDim, "   ↳ %s", ElideURL(raw, contentLinkWidth))
+}
+
+// PrintSelectedTrack shows the chosen tracks.
+//
+// 与流清单共用 tracklayout.go 的列宽：行首是选中标记 "*"（宽度与序号列一致），
+// 名称列、码率列、体积列都落在与清单行相同的显示列上，上下对照着看。
+// 段标题里写明是视频还是音频——改前是行首的 [视频]/[音频] 标签，那个标签宽 6 列，
+// 塞不进 1 列的序号列，硬塞会把整行的列位置推歪。
 func PrintSelectedTrack(video *entity.Video, audio *entity.Audio, pageDur int) {
 	if video != nil {
-		util.LogColorNoTime("%s", formatVideoTrackRow("[视频]", *video, pageDur))
+		util.ContentColored(util.ContentCyan, "%s", SectionTitle("已选择的视频流"))
+		util.ContentColored(util.ContentCyan, "%s", formatVideoTrackRow("*", *video, pageDur))
 	}
 	if audio != nil {
-		util.LogColorNoTime("%s", formatAudioTrackRow("[音频]", *audio, pageDur))
+		util.ContentColored(util.ContentCyan, "%s", SectionTitle("已选择的音频流"))
+		util.ContentColored(util.ContentCyan, "%s", formatAudioTrackRow("*", *audio, pageDur))
 	}
 }
 

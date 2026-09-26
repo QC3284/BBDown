@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -95,6 +96,13 @@ func TestPrintTaskCardFinishesProgressLineFirst(t *testing.T) {
 	if !strings.HasPrefix(out, "\n") {
 		t.Errorf("进度行还留在当前行时，卡片应先换行再打：%q", out)
 	}
+	// 卡片走内容通道：无时间戳、以标题行开头（改前是 28 列缩进的日志行）。
+	if !strings.HasPrefix(out, "\n"+taskCardHeader+"\n") {
+		t.Errorf("卡片应走内容通道（无时间戳、以标题行开头）：%q", out)
+	}
+	if regexp.MustCompile(`\[\d{2}:\d{2}:\d{2}\]`).MatchString(out) {
+		t.Errorf("卡片不该带日志时间戳：%q", out)
+	}
 }
 
 // ---- 接线：真实下载路径打，解析/机读模式不打 ----
@@ -142,7 +150,7 @@ func TestTaskCardWiring(t *testing.T) {
 			t.Errorf("任务卡缺少 %q：%q", want, out)
 		}
 	}
-	selected := strings.Index(out, "已选择的流")
+	selected := strings.Index(out, "已选择的视频流")
 	card := strings.Index(out, taskCardHeader)
 	started := strings.Index(out, "开始下载P1视频")
 	if selected < 0 || card < 0 || started < 0 {
@@ -163,8 +171,14 @@ func TestTaskCardWiring(t *testing.T) {
 	if !strings.Contains(outHide, taskCardHeader) {
 		t.Errorf("--hide-streams 不该把整张卡片也去掉：%q", outHide)
 	}
-	if strings.Contains(outHide, "视频流") || strings.Contains(outHide, "音频流") {
-		t.Errorf("--hide-streams 下卡片仍打了流信息：%q", outHide)
+	// 断言只覆盖卡片本身：--hide-streams 是「不要显示所有**可用**流」（见 --help），
+	// 「已选择的视频流/音频流」两段不在这个契约里（它们是你这次真正要下的东西）。
+	cardStart := strings.Index(outHide, taskCardHeader)
+	if cardStart < 0 {
+		t.Fatalf("--hide-streams 下应仍有卡片：%q", outHide)
+	}
+	if card := outHide[cardStart:]; strings.Contains(card, "视频流") || strings.Contains(card, "音频流") {
+		t.Errorf("--hide-streams 下卡片仍打了流信息：%q", card)
 	}
 
 	// 3) 三种「只解析/只输出数据」的模式各有输出契约，都不能混进任务卡。
@@ -174,7 +188,7 @@ func TestTaskCardWiring(t *testing.T) {
 	if strings.Contains(outInfo, taskCardHeader) {
 		t.Errorf("-I 不该打任务卡：%q", outInfo)
 	}
-	if !strings.Contains(outInfo, "共计1条视频流") {
+	if !strings.Contains(outInfo, "可用流（1）") {
 		t.Errorf("-I 的流清单没出现（用例没走到那条路径）：%q", outInfo)
 	}
 

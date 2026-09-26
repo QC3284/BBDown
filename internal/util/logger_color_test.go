@@ -44,8 +44,7 @@ func TestLogColorsMatchUpstreamConsoleColors(t *testing.T) {
 		{"LogError", "[91m", func() { l.LogError("err") }},  // ConsoleColor.Red
 		{"LogWarn", "[33m", func() { l.LogWarn("warn") }},   // ConsoleColor.DarkYellow
 		{"LogColor", "[96m", func() { l.LogColor("hint") }}, // ConsoleColor.Cyan
-		{"LogColorNoTime", "[96m", func() { l.LogColorNoTime("hint") }},
-		{"LogDebug", "[90m", func() { l.LogDebug("dbg") }}, // ConsoleColor.DarkGray
+		{"LogDebug", "[90m", func() { l.LogDebug("dbg") }},  // ConsoleColor.DarkGray
 	}
 	for _, tc := range cases {
 		out := captureStdout(t, tc.call)
@@ -55,6 +54,15 @@ func TestLogColorsMatchUpstreamConsoleColors(t *testing.T) {
 		if !strings.Contains(out, AnsiReset) {
 			t.Errorf("%s: 输出未复位颜色，实际为 %q", tc.name, out)
 		}
+	}
+
+	// 内容通道的着色同样取 ConsoleColor.Cyan，但只在 TTY 生效——用例显式注入终端判定，
+	// 否则 captureStdout 用的是管道，真实判定恒为假，这条断言就永远看不到颜色。
+	restore := SetTerminalForTest(func() bool { return true })
+	defer restore()
+	out := captureStdout(t, func() { l.Content(ContentCyan, "hint") })
+	if !strings.Contains(out, "[96m") || !strings.Contains(out, AnsiReset) {
+		t.Errorf("ContentCyan（TTY）应输出 ConsoleColor.Cyan 并复位，实际 %q", out)
 	}
 }
 

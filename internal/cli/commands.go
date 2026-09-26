@@ -99,7 +99,7 @@ var serveCmd = &cobra.Command{
 		ctx := commandContext(cmd)
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.12.4")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.12.5")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -383,7 +383,8 @@ func runWatchLater(cmd *cobra.Command, args []string) error {
 		}
 		succeeded++
 	}
-	util.Log("稍后再看下载完成：成功 %d 个，失败 %d 个", succeeded, failed)
+	// 汇总行（内容通道，无时间戳）：这次批量下载的结果。
+	util.Content("稍后再看下载完成：成功 %d 个，失败 %d 个", succeeded, failed)
 	if failed > 0 {
 		return fmt.Errorf("%d 个下载失败", failed)
 	}

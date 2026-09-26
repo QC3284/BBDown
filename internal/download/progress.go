@@ -256,10 +256,14 @@ func progressPercent(downloaded, total int64) float64 {
 
 // renderProgressFrame 渲染整帧：进度条 + 动画字符 + 信息段。单线程读取与多线程聚合
 // 两条路径共用（单一来源）——同一次下载在多线程下看到的进度行必须与单线程下逐字同格式。
+//
+// 顶格渲染：改前这里硬编码 28 个空格去对齐旧日志前缀（"[日期 时分秒.毫秒] - "，恰好 28 列），
+// 时间戳缩短到 [时分秒] 之后这 28 列不再对齐任何东西，还把「40 列进度条 + 信息段」推到
+// 80 列终端之外换行。进度行是原地重绘的过场，不参与内容的层级缩进。
 func renderProgressFrame(downloaded, total int64, speedBps float64, anim byte) string {
 	blocks := int(progressPercent(downloaded, total) * progressBlocks)
 	bar := strings.Repeat("#", blocks) + strings.Repeat("-", progressBlocks-blocks)
-	return fmt.Sprintf("                            [%s] %c%s", bar, anim, renderProgressInfo(progressFrame{
+	return fmt.Sprintf("[%s] %c%s", bar, anim, renderProgressInfo(progressFrame{
 		speedBps:   speedBps,
 		downloaded: downloaded,
 		total:      total,

@@ -445,3 +445,21 @@ func TestProgressSnapshotSettlesRateFromWindowDelta(t *testing.T) {
 		t.Errorf("第二个窗口：速率 %v B/s，期望 %v B/s（本窗口 12 MiB / 2s）", speed, float64(12*mib)/2.0)
 	}
 }
+
+// TestProgressFrameIsNotIndentedToTheOldLogPrefix 进度帧顶格渲染：改前硬编码 28 个空格去对齐
+// 旧日志前缀，时间戳缩短后这 28 列不再对齐任何东西，还会把整行推到 80 列终端之外换行。
+//
+// 变异验证：把 renderProgressFrame 的 28 空格缩进加回去 → 本用例红。
+func TestProgressFrameIsNotIndentedToTheOldLogPrefix(t *testing.T) {
+	frame := renderProgressFrame(50<<20, 100<<20, 1<<20, '|')
+	if !strings.HasPrefix(frame, "[") {
+		t.Errorf("进度帧应以 [ 开头（顶格）：%q", frame)
+	}
+	if strings.HasPrefix(frame, " ") {
+		t.Errorf("进度帧不该带旧的 28 列日志前缀缩进：%q", frame)
+	}
+	// 起始帧（还没有速率与总量）必须整行放进 80 列终端：改前那 28 列缩进下它已经 90 列。
+	if start := renderProgressFrame(0, 0, 0, '|'); DisplayWidth(start) > 80 {
+		t.Errorf("起始帧 %d 列，超过 80 列终端会折行：%q", DisplayWidth(start), start)
+	}
+}
