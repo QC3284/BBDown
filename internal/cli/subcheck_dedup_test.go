@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QC3284/BBDown/internal/entity"
+	"github.com/QC3284/BBDown/internal/muxer"
 	"github.com/QC3284/BBDown/internal/substore"
 )
 
@@ -190,7 +191,9 @@ func TestSubCheckDuplicatedManifestDownloadsOnce(t *testing.T) {
 // 做法：用**已取消的 ctx** 把整条路径收进一个离线用例——HTTP 客户端在 ctx 已取消时
 // 不会真的发请求（net/http 的 Transport 先查 ctx.Done）；InitSession 在无凭据时打
 // 「你尚未登录B站账号！」后返回 nil（不联网），随后 subCheckRun 走取消路径返回 Canceled，
-// 既不联网也不下载任何东西；而 runSubCheck 的去重日志出现在建会话之前，所以输出里
+// 既不联网也不下载任何东西。InitSession 里的 findBinaries 会找 ffmpeg（CI 镜像上没有
+// → 提前报错、横幅断言走不到），所以用例在 PATH 里放一个假 ffmpeg 并还原 muxer.FFMPEG
+// 全局（仓库纪律：外部工具用假可执行文件，不依赖真实安装）；而 runSubCheck 的去重日志出现在建会话之前，所以输出里
 // 只要能看到它，就说明去重确实在调度之前发生。清单目录的签名还必须逐字节不变
 // （没有历史文件写出来）。
 //
@@ -202,6 +205,17 @@ func TestRunSubCheckDedupsManifestBeforeScheduling(t *testing.T) {
 	setSubStoreRoot(t, dir)
 	writeManifest(t, dir, []string{"mid:1", "mid:1"})
 	before := dirSignature(t, dir)
+
+	// InitSession 会经 findBinaries 找 ffmpeg：CI 镜像/精简 PATH 上没有 ffmpeg 时会
+	// 提前报错，横幅断言走不到。按仓库纪律用**假可执行文件**（不调用真实工具），
+	// 并把 muxer.FFMPEG 全局还原（doctor 用例靠「桩」路径 + 还原维持同样的不变量）。
+	fakebin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakebin, "ffmpeg"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("写假 ffmpeg: %v", err)
+	}
+	oldFF := muxer.FFMPEG
+	t.Setenv("PATH", fakebin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Cleanup(func() { muxer.FFMPEG = oldFF })
 
 	optSubCheckSince, optSubCheckConcurrency = "", 2
 	t.Cleanup(func() { optSubCheckSince, optSubCheckConcurrency = "", 1 })
