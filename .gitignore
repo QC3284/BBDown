@@ -39,3 +39,7 @@ debug_*.json
 *.m4a
 *.mp4
 *.jpg
+
+# Agent session state
+.agent-teams/
+docs/aegis/

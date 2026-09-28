@@ -59,14 +59,14 @@ type DownloadTask struct {
 	TaskFinishTime int64  `json:"TaskFinishTime,omitempty"`
 	// 进度口径（契约由 progress_contract_test.go 钉住，理由见 progress.go 顶部注释）：
 	//   - Progress 是任务级进度的**服务端边界值**（0~1）：执行期间保持 0，只在任务成功时
-	//     置 1.0（见 processTask）。它**不是**实时字节进度；
-	//   - TotalDownloadedBytes 是**已落盘产物**的字节数合计（onArtifactSaved 累加、同一路径
-	//     去重），不是传输中的字节数；aria2c 路径没有逐字节观察者（§4.57），产物字节数
-	//     是那里唯一的进度信号。
-	// 实时字节进度只在 SSE（GET /events）的 task_progress 帧上：percent 0~100、
-	// downloaded/total 为整份文件口径（含续传 base），单一来源是下载层观察者。
-	// 两个口径**有意不同**——把观察者回写任务字段会让多产物任务的字节数回跳，也会让
-	// aria2c 任务的进度永远停在 0（详见 progress.go）。
+	//     置 1.0（见 processTask）。它**不是**实时字节比例，是 bbdown-tasks.json 与上游
+	//     兼容契约消费的字段；
+	//   - TotalDownloadedBytes 是**任务已下载字节数**：取两个来源的较大者（口径见
+	//     totalBytesLocked）——①下载执行期间按文件身份累计的实时字节（含续传 base，
+	//     与 SSE 同口径）；②已落盘产物字节合计（aria2c 等没有逐字节观察者的路径的唯一
+	//     进度信号，§4.57）。
+	// SSE（GET /events）的 task_progress 帧是**逐文件**口径：percent 0~100、downloaded/total
+	// 为整份文件（含续传 base）；任务级数字按文件身份求和，文件切换不回跳（详见 progress.go）。
 	Progress             float64    `json:"Progress"`
 	DownloadSpeed        string     `json:"DownloadSpeed,omitempty"`
 	TotalDownloadedBytes int64      `json:"TotalDownloadedBytes"`
@@ -86,6 +86,13 @@ type DownloadTask struct {
 	// lastProgressPublish 是上一个逐字节进度帧的发布时刻，供 SSE 侧的每任务节流使用
 	// （见 progress.go 的 publishDownloadProgress）。未导出 → 不进 JSON 契约。
 	lastProgressPublish time.Time
+
+	// artifactBytes 是**已落盘产物**的字节合计（onArtifactSaved 累加、同一路径去重）。
+	// 未导出 → 不进 JSON 契约；TotalDownloadedBytes 由它与 progressBytes 刷新。
+	artifactBytes int64
+	// progressBytes 是**按文件身份累计**的实时字节映射：身份 → 该文件最新一帧观察者上报的
+	// 整份文件已完成字节（含续传 base）。未导出 → 不进 JSON 契约；口径见 progress.go。
+	progressBytes map[string]int64
 }
 
 // Snapshot returns a thread-safe copy of the task.
@@ -95,6 +102,8 @@ func (t *DownloadTask) Snapshot() DownloadTask {
 	cp := *t
 	cp.SavePaths = make([]string, len(t.SavePaths))
 	copy(cp.SavePaths, t.SavePaths)
+	// 未导出的实时映射不进快照：只读副本不该与任务共享可变映射（它也不进 JSON 契约）。
+	cp.progressBytes = nil
 	return cp
 }
 
@@ -116,6 +125,54 @@ func (t *DownloadTask) AddSavePath(path string) bool {
 	}
 	t.SavePaths = append(t.SavePaths, path)
 	return true
+}
+
+// recordProgressBytesLocked 记下一帧观察者的逐字节进度，并按 totalBytesLocked 的口径
+// 刷新 TotalDownloadedBytes。**调用方必须持 t.mu**（发布路径已经在节流的那段临界区里）。
+//
+// identity 来自 download.ProgressEvent.Key（任务内文件身份，见 internal/download/
+// progressobserver.go）：同一件产物续传/重试拿同一个身份，不同产物不同。空身份合法
+// ——自建观察者的调用方（用例）全部落在同一个「未知文件」桶里。
+func (t *DownloadTask) recordProgressBytesLocked(identity string, current int64) {
+	if current < 0 {
+		current = 0 // 负值只来自计数异常；契约里 0 就是「未知」，负值只会污染累计
+	}
+	if t.progressBytes == nil {
+		t.progressBytes = make(map[string]int64, 1)
+	}
+	t.progressBytes[identity] = current
+	t.TotalDownloadedBytes = t.totalBytesLocked()
+}
+
+// addArtifactBytes 记下一件已落盘产物的字节数并刷新 TotalDownloadedBytes。
+func (t *DownloadTask) addArtifactBytes(size int64) {
+	if size <= 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.artifactBytes += size
+	t.TotalDownloadedBytes = t.totalBytesLocked()
+}
+
+// totalBytesLocked 是 TotalDownloadedBytes 的口径：**两个来源取较大者**（调用方持 t.mu）。
+//
+//   - 实时映射 progressBytes：下载执行期间与服务端边界无关的真实字节（含续传 base），
+//     按文件身份求和——多产物任务在文件切换时不回跳，单产物任务就等于最近一帧；
+//   - 已落盘产物字节 artifactBytes：aria2c 路径没有逐字节观察者（§4.57），这是那里
+//     唯一的进度信号，也是「产物已落盘」这一服务端边界的字节数。
+//
+// 为什么不是相加：两个来源量的是同一批字节（观察者报完 → 产物落盘），相加会双计。
+// 为什么不是只取实时：aria2c 任务会永久停在 0。取较大者让来源切换时数字不回跳。
+func (t *DownloadTask) totalBytesLocked() int64 {
+	var live int64
+	for _, n := range t.progressBytes {
+		live += n
+	}
+	if t.artifactBytes > live {
+		return t.artifactBytes
+	}
+	return live
 }
 
 // sampleSpeed 按 --progress-json 的口径（满 1 秒结算一次，分片回退时 delta 按 0 处理）

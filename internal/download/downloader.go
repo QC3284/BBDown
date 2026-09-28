@@ -419,7 +419,8 @@ func probeFile(ctx context.Context, url string, cfg DownloadConfig) (probeResult
 func singleDownload(ctx context.Context, url, destPath string, pr probeResult, cfg DownloadConfig) error {
 	// 逐字节进度观察者（serve 的 SSE 数据源）随 ctx 进来，不落 DownloadConfig：
 	// 先取一次，nil 表示没装——下面的进度门槛与渲染路径都保持与改前一致。
-	observer := ProgressObserverFromContext(ctx)
+	// 身份绑定：本件产物的路径。同一文件续传/重试拿同一个身份，上层据此累计任务级字节。
+	observer := progressObserverFor(ctx, destPath)
 
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -715,8 +716,9 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 		idx++
 	}
 
-	// 逐字节进度观察者（serve 的 SSE 数据源）随 ctx 进来，与单线程路径同一契约。
-	observer := ProgressObserverFromContext(ctx)
+	// 逐字节进度观察者（serve 的 SSE 数据源）随 ctx 进来，与单线程路径同一契约；
+	// 身份绑定在 destPath 上：分片聚合帧与单线程帧在服务端是同一个「文件」（同一条身份）。
+	observer := progressObserverFor(ctx, destPath)
 
 	// 进度按「分片累计字节」实时聚合（上游 ProgressAggregator），只按分片完成累加会让
 	// 进度条以分片数为台阶跳变。

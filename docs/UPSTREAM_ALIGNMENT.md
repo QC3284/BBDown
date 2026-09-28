@@ -899,8 +899,9 @@ chdir 成功而 Getwd 返回解析路径。第三版抽 sameDir（os.Stat + os.S
   单线程与多线程都覆盖，续传含 base，末帧计满。
 - **SSE 真实进度**：internal/server/progress.go 单一映射纯函数（total<=0 → percent/total 均 0、**不估算**；Current>Total 只夹 percent；NaN/Inf 归 0）
   + 第二道节流（≥100ms/任务）。代价：aria2c 无逐字节观察者（黑盒）；节流丢帧不补发（成功路径由 task_done 兜底）；
-  观察者只覆盖真实下载阶段（解析/混流停在最后一帧）；/get-tasks 的 Progress 与 TotalDownloadedBytes 仍是**服务端边界值**
-  （与 SSE 数字不一致，**有意不改既有 API 契约**，由 progress_contract_test.go 机械钉住）。
+  观察者只覆盖真实下载阶段（解析/混流停在最后一帧）；/get-tasks 的 Progress 与 TotalDownloadedBytes 起初是**服务端边界值**
+  （与 SSE 数字不一致、有意不改既有 API 契约）；2.13.0 起字节口径统一为「按文件身份累计的实时字节与产物字节的较大者」，
+  Progress 仍保持边界语义（详见 §4.64，progress_contract_test.go 机械钉住）。
 - **测试卫生**：internal/cli/.bbdown-pending.json 曾被误提交进 git（587bd09）；删文件 + 测试注入 t.TempDir() + 包级 TestMain 守卫
   （cli 与 server 各一；server 侧覆盖 bbdown-tasks.json 与原子写临时文件）。实测：改前一次全量测试改写 2 个文件 → 改后 0 个。
 
@@ -1009,4 +1010,22 @@ SubtitleItem{lan=3,lanDoc=4,subtitleUrl=5}）。只手解三个字段（手写 v
 **用例与变异**：宽度表覆盖 40/60/80/120/200（每行 ≤ 宽度、表头存在且对齐、降级顺序、窄终端不退化、悬挂缩进）；7 组变异全断言红
 （去自适应、去表头、管道也省略、固定 40 格、非 TTY 读 COLUMNS、续行顶格、终端打裸直链）。
 **独立复验**（我做，不是代理自述）：80 列 `-I` 流列表 0 行超宽；真实下载 29 帧全部恰好 80 列、超宽 0；`-I` 管道仍逐字节原样。
+
+### 4.64 第五十九轮：订阅调度 + serve 进度口径统一（**新功能 + 修复**）
+
+- **`sub check` 订阅调度（自研）**：上游 v1.6.20 `SubCommand.cs` 无对应选项，本批为自研功能（无对齐物，仅登记）。
+  `--since <duration>`（Go duration 语法，不支持 `"d"`，报错提示用 `"24h"`）按 `Page.PubTime` 增量过滤（PubTime<=0 保留+日志、恰等边界在窗口内）；
+  `--concurrency <n>`（默认 1、上限 8）并行检查阶段、下载串行（渲染竞态二期再评估）；非法参数校验在清单加载之前、退出非 0、零状态文件；
+  默认无参行为与 2.12.8 逐字一致（串行/并发两条路径）；并发共享 client/factory/wbi 已证安全（UA 在 uaMu 下、时钟偏移 atomic、Factory 只读，-race 钉住）。
+- **serve 进度口径统一**：`ProgressEvent` 加文件身份 `Key`（按产物路径绑定）；`/get-tasks` 的 `TotalDownloadedBytes` =
+  「按身份累计的实时字节 与 产物字节 的较大者」——与 SSE 同口径（单产物=最近一帧、多产物=Σ各身份最近一帧不回跳）；
+  aria2c 无观察者路径保持边界语义。与上游对比（A-serve 第 30 条）：上游 `TotalDownloadedBytes` 由进度条累计，本次字节口径**向该语义靠拢**；
+  **`Progress` 保持 0/1.0 边界语义为有意保守偏离**——bbdown-tasks.json 与上游兼容契约消费它，且实时分母（各产物总长）在多产物任务里不完整，
+  理由写进 internal/server/progress.go 顶部声明。
+- **修复 `avav101` 双前缀**（2.12.8 既有显示缺陷，用户确认作为缺陷修复）：格式串 `av` + `joinAids` 的 `av` 双重前缀 → 单前缀；
+  属**有意偏离 2.12.8 逐字基线**的用户可见修复，同步更新既有逐字断言并变异验证（撤掉修复 → 断言红）。
+- **修复手改清单重复 Target 去重**：并发路径丢失「前一条下载写进该 Target 历史」的跨订阅交互 → `--concurrency 2` 重复下载；
+  `Load` 后按 Target 去重（保留先出现条目 + 日志点名），无重复清单行为逐字不变。
+- 审查门双 PASS：无删断言（回退测试文件实证）、变异全红、真实 CLI 非法参数组、并发 barrier 真重叠、0 处 time.Sleep。
+
 

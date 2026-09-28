@@ -88,6 +88,52 @@ func TestProgressObserverSingleThreadReportsWholeFile(t *testing.T) {
 	}
 }
 
+// TestProgressObserverCarriesFileIdentity 钉住**文件身份**契约（ProgressEvent.Key，
+// 见 progressobserver.go）：观察者事件必须带任务内文件标识——上层（serve 的
+// /get-tasks）按它把逐文件计数累计成任务级字节数，没有身份就会在文件切换时回跳。
+//
+// 判据（都是行为）：
+//  1. 每条事件的身份都等于该次下载的**产物路径**（身份按产物绑定，不按 URL——B 站每次
+//     解析都换签名参数，按 URL 绑定会让同一件产物在续传里换身份）；
+//  2. 同一文件的所有事件身份相同（首帧 / 节流帧 / 收尾帧不改身份）；
+//  3. 两个不同文件的身份必然不同（两份映射各自累计）。
+//
+// 变异验证：去掉 downloader.go 两个下载路径上的 progressObserverFor 包装（回到裸的
+// ProgressObserverFromContext），Key 为空，本用例红。
+func TestProgressObserverCarriesFileIdentity(t *testing.T) {
+	const size = 2 << 20
+	srv := serveMedia(t, size)
+	rec := &observerRecorder{}
+	ctx := WithProgressObserver(context.Background(), rec.observer)
+
+	first := filepath.Join(t.TempDir(), "video.mp4")
+	second := filepath.Join(t.TempDir(), "audio.m4a")
+	cfg := DownloadConfig{Client: newTestClient(), RetryCount: 1}
+	for _, dest := range []string{first, second} {
+		// 同一路由、不同产物：身份必须跟着产物走，而不是跟着 URL 走。
+		if err := DownloadFile(ctx, srv.URL+"/media.bin", dest, cfg); err != nil {
+			t.Fatalf("下载 %s 失败: %v", dest, err)
+		}
+	}
+
+	byKey := map[string]int{}
+	for i, ev := range rec.snapshot() {
+		if ev.Key == "" {
+			t.Fatalf("第 %d 个事件没有文件身份（Key 为空）：上层无法区分文件，任务级字节会回跳", i)
+		}
+		if ev.Key != first && ev.Key != second {
+			t.Errorf("第 %d 个事件的身份 = %q，既不是 %q 也不是 %q", i, ev.Key, first, second)
+		}
+		byKey[ev.Key]++
+	}
+	if byKey[first] == 0 || byKey[second] == 0 {
+		t.Errorf("身份分布 = %v，期望两个产物键各至少一条事件", byKey)
+	}
+	if len(byKey) != 2 {
+		t.Errorf("两个文件产生了 %d 种身份（want 2）：身份必须按产物区分", len(byKey))
+	}
+}
+
 // TestProgressObserverMultiThreadAggregates 覆盖多线程分片聚合路径：同样能收到事件，
 // Total 是整份文件长度，Current 不回退、不越过 Total，末事件计满。
 //
@@ -116,6 +162,10 @@ func TestProgressObserverMultiThreadAggregates(t *testing.T) {
 	for i, ev := range events {
 		if ev.Total != size {
 			t.Errorf("第 %d 个事件 Total=%d，期望 %d", i, ev.Total, size)
+		}
+		// 分片聚合路径的身份同样按产物绑定（由 multiThreadDownload 的接线加上）。
+		if ev.Key != dest {
+			t.Errorf("第 %d 个事件的身份 = %q，期望产物路径 %q（聚合帧也要能归属到文件）", i, ev.Key, dest)
 		}
 		if ev.Current < 0 || ev.Current > ev.Total {
 			t.Errorf("第 %d 个事件 Current=%d 越界（total=%d）：给程序读的数据不能自相矛盾", i, ev.Current, ev.Total)
@@ -278,6 +328,11 @@ func TestProgressObserverResumeStartsFromBase(t *testing.T) {
 		}
 		if ev.Current < cut {
 			t.Errorf("第 %d 个事件 Current=%d < base=%d：续传口径没含 base", i, ev.Current, cut)
+		}
+		// 第二段的 URL 换了签名参数（deadline/sign），身份仍是同一个产物：身份按产物绑定，
+		// 否则上层会把续传后的同一件产物当成第二个文件、任务级字节数虚增。
+		if ev.Key != dest {
+			t.Errorf("第 %d 个事件的身份 = %q，期望 %q（换签名参数不得换身份）", i, ev.Key, dest)
 		}
 	}
 	last := events[len(events)-1]

@@ -16,11 +16,18 @@ type progressObserverKey struct{}
 
 // ProgressEvent 是一帧进度。
 //
+// Key 是**任务内文件身份**：同一任务里同一件产物在整条传输（续传、重试、分片聚合）中
+// 保持同一个值，不同产物必然不同。由下载路径在「知道产物」的接缝上绑定（见
+// progressObserverFor）。上层据此把逐文件计数累计成任务级字节数——没有身份时，
+// 多产物任务在文件切换的那一刻会让任务级数字回跳（见 internal/server/progress.go）。
+// 空身份是合法的：没有产物的调用方（自建观察者的用例）留在同一个「未知文件」桶里。
+//
 // Current/Total 都**含续传 base**：它们与 --progress-json 的 downloaded/total 逐字同义
 // （整份文件口径，见 progressReader.withBase/wholeTotal），不是「本次响应读了多少」。
 // Total==0 表示长度未知（拿不到 Content-Length），此时不要按百分比展示。
 // SpeedBps 是最近一个 ≥1 秒窗口结算出的速率（字节/秒），0 表示还没结算出来。
 type ProgressEvent struct {
+	Key      string
 	Current  int64
 	Total    int64
 	SpeedBps float64
@@ -50,4 +57,24 @@ func ProgressObserverFromContext(ctx context.Context) func(ProgressEvent) {
 	}
 	fn, _ := ctx.Value(progressObserverKey{}).(func(ProgressEvent))
 	return fn
+}
+
+// progressObserverFor 取出 ctx 上的观察者，并把**文件身份**（本次下载的产物路径）绑到
+// 它的每一帧上——契约见 ProgressEvent.Key。
+//
+// 身份在「知道产物」的接缝上绑定：singleDownload 与 multiThreadDownload 都拿着 destPath，
+// 所以同一件产物在续传、重试、分片聚合之间拿到同一个身份，而不同产物天然不同。
+//
+// 没装观察者时返回 nil（与 ProgressObserverFromContext 逐字一致）：**不要**用一个非 nil 的
+// 包装闭包顶替「没装」——那会让「没装观察者 = 不进回调路径」不再成立，也让调用方的
+// nil 判定失效（§4.56 的全局观察者坑同源）。
+func progressObserverFor(ctx context.Context, identity string) func(ProgressEvent) {
+	fn := ProgressObserverFromContext(ctx)
+	if fn == nil {
+		return nil
+	}
+	return func(ev ProgressEvent) {
+		ev.Key = identity
+		fn(ev)
+	}
 }

@@ -1,14 +1,15 @@
 # 交接文件（HANDOVER）
 
 > 面向接手的下一位（人或代理）。**先读 `AGENTS.md`**（项目规矩），再看本文件（现状 + 坑 + 待办）。
-> 最后更新：版本 `2.12.8`，提交 `4c11ac3`，工作区干净，`go test ./... -count=1` 16 包全绿，CI 三平台绿。
+> 最后更新：版本 `2.13.0`（AgentTeams 首期两线闭环），提交见 tag `v2.13.0`，工作区干净，
+> `go test ./... -count=1` 16 包全绿，两条实现线审查门 verdict=pass。
 
 ---
 
 ## 1. 一句话现状
 
 `/home/qc233/github-code/BBDown`（分支 `main`）是 **BBDown 生态的 Go 主线实现**：起步自 C# 版 `AliverAnme/BBDown` v1.6.20 的重写，
-此后独立演进。当前版本 **`2.12.8`**，已发布 tag / GitHub Release（5 产物）/ AUR 包 `bbdown-go-git 2.12.8.r220.4c11ac3-1`。
+此后独立演进。当前版本 **`2.13.0`**，已发布 tag / GitHub Release（5 产物）/ AUR 包 `bbdown-go-git`（VCS 包，随 tag 自动更新）。
 
 规格来源有四个，冲突时**以实测为准**：上游 C#（本地 git 对象库即可查）、`LOVAHE/BBDownT`（C# 2.x，风控情报价值最高）、
 `bilibili-API-collect`、探针实测。
@@ -48,8 +49,8 @@ go test ./... -count=1             # 判据是**退出码**，不是「数 ok �
 
 | 类别 | 内容 |
 |---|---|
-| 新功能 | `--nfo`（侧车元数据）、`--compat`（避开 HDR Vivid/杜比视界）、`--write-m3u`（播放列表，含读回合并）、`--info-json`（解析结果机读化）、`--log-file`（日志落盘）、`--print-urls`、`--overwrite`、`bbdown resume`（断点续跑）、`bbdown doctor`（`--json`） |
-| 服务端 | `serve` 的 **Web UI + SSE**（`GET /` 内嵌单页、`GET /events` 推 `task_start/task_progress/task_done/task_failed`；连接上限 64、队列满丢帧、回放 64 条 + `seq` 去重）；**SSE 已接真实字节进度**（`download.WithProgressObserver(ctx, fn)`，context 携带、无全局） |
+| 新功能 | `--nfo`（侧车元数据）、`--compat`（避开 HDR Vivid/杜比视界）、`--write-m3u`（播放列表，含读回合并）、`--info-json`（解析结果机读化）、`--log-file`（日志落盘）、`--print-urls`、`--overwrite`、`bbdown resume`（断点续跑）、`bbdown doctor`（`--json`）、**`sub check --since/--concurrency`（2.13.0 订阅调度，可 cron）** |
+| 服务端 | `serve` 的 **Web UI + SSE**（`GET /` 内嵌单页、`GET /events` 推 `task_start/task_progress/task_done/task_failed`；连接上限 64、队列满丢帧、回放 64 条 + `seq` 去重）；**SSE 已接真实字节进度**（`download.WithProgressObserver(ctx, fn)`，context 携带、无全局）；**2.13.0 口径统一**：`/get-tasks` 的 `TotalDownloadedBytes` 与 SSE 同口径（`ProgressEvent.Key` 文件身份 + max(Σ实时, 产物)），`Progress` 保持边界语义（上游兼容契约） |
 | 风控/网络 | 412：UA 轮换 + 退避 1s→2s→4s（上限 8s），且需先成功轮换 UA 才重试；**按错误分类的重试**（`planTrackRetry`）：确定性 4xx 不重试、网络错误有候选立刻换、无候选短退避；下载层 412 最终错误带可操作提示（`util.StatusHint` 单一来源） |
 | 交互 | Ctrl+C 双击语义（首次优雅取消 + 提示 / 二次退出 **130** / 退出前恢复终端），**全局子命令**生效；收尾汇总行；进度条口径统一（含续传 `base`） |
 | 接口 | **新版字幕接口是 protobuf**（`x/v2/subtitle/web/view`，字段号取自 BBDownT 的 `dmviewreply.proto`），手解三字段、新接口优先、老三条回退、**只在有 cookie 时试** |
@@ -62,12 +63,13 @@ go test ./... -count=1             # 判据是**退出码**，不是「数 ok �
 
 `docs/ROADMAP.md` 第 98 行起是「下一批（未完成）」。要点：
 
-1. **订阅调度**（下一个大件）：`sub check` 加 `--concurrency`/`--since`，做成可 cron 的增量订阅；
-2. **Web UI 增强**：`/get-tasks` 的 `Progress`/`TotalDownloadedBytes` 仍是**服务端边界值**，与 SSE 的真实字节进度口径不同——
-   已在 `internal/server/progress.go` 显式声明并由 `progress_contract_test.go` 机械钉住；若要统一，需给 `ProgressEvent` 加**文件身份**并同步改 3 处既有用例；
+1. ~~**订阅调度**~~ **已完成（2.13.0）**：`sub check` 支持 `--since`（Go duration 语法，按 Page.PubTime 增量过滤）与 `--concurrency`（并行检查、下载串行），可 cron；详见 CHANGELOG 与 UPSTREAM_ALIGNMENT §4.64；
+2. ~~**Web UI 增强**~~ **已完成（2.13.0）**：`ProgressEvent` 加**文件身份**，`/get-tasks` 的 `TotalDownloadedBytes` 与 SSE 真实字节同口径
+   （单产物=最近一帧、多产物=Σ各身份最近一帧不回跳、aria2c 无观察者保持边界语义）；`Progress` 仍是边界语义（0/成功 1.0，上游兼容契约，有意不改）。
+   勘误：原计划写「同步改 3 处既有用例」，实测钉旧口径的只有 1 处（progress_test.go 产物帧断言），另加 download 侧 3 处身份断言；
 3. **`--progress-json` 首窗速率**在续传时仍含 `base`（既有行为，未修）；聚合帧在「分片计数瞬时越过总长」时可能短暂显示 `4.0/3.0 MB`（pct 已夹 100%）；
 4. **aria2c 路径没有逐字节进度**（黑盒，只有开始/结束）——SSE 在 `--use-aria2c` 下只有边界事件；
-5. **`~` 估算标记**：体积列目前在估算值上也不带 `~`（数字显得比实际精确），列出待修；
+5. **`~` 估算标记**（**勘误，本条过时**）：2.12.8 起体积列**全部**带 `~`，与上游 C# `Display.cs` 一致；「精确值不带 `~`」属于有意偏离，需开关+登记差异，未采纳；
 6. **M3U**：回读条目的**分P序号缺失**（M3U 文本无此字段）→ 乱序分批下载（先 `-p 5` 再 `-p 1`）会得到 P5,P1；要彻底解决需把序号写进文件；
 7. **`internal/util/testsupport` 抽包**：`cli` 与 `server` 两份工作目录守卫语义相同、实现各一份（各有用例，已互标注镜像关系）；
 8. **风格化（若要做）**：见 §3.3——必须加开关、默认上游风格；
@@ -115,5 +117,5 @@ gh run view <id> -R QC3284/BBDown --json jobs,conclusion --jq '.conclusion + " |
 
 1. 跑一遍 `go test ./... -count=1` 与 `make smoke`（后者需联网，会做真实下载 + ffprobe + 进度 JSON）；
 2. 读 `docs/ROADMAP.md` 的「下一批（未完成）」；
-3. 按 §5 的编号挑一件：**订阅调度**（大件、用户价值高）或 §5.3/§5.5 的小项（低风险、适合热身）；
+3. 按 §5 的编号挑一件：**下载并行二期**（`--concurrency` 目前只并行检查、下载串行，大件）或 §5.3/§5.6/§5.7 的小项（低风险、适合热身）；
 4. 动任何东西之前先想清楚：**这条判据跨平台吗？有变异验证吗？会有数字吗？会不会改变默认观感？**

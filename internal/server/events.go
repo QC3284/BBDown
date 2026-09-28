@@ -266,13 +266,14 @@ func writeEvent(w io.Writer, ev ServerEvent) error {
 // publishTaskEvent 把任务的当前状态推成一条事件。
 //
 // 进度粒度说明：这里发布的是**服务端边界**事件——入队、开始执行、拿到元数据、每件产物落盘、
-// 终止状态；downloaded 取产物字节数累计（也就是 API 的 TotalDownloadedBytes 字段），
+// 终止状态；downloaded 取「按文件身份累计的实时字节」与「产物字节累计」的较大者
+// （与 API 的 TotalDownloadedBytes 同口径，分工见 progress.go 顶部「两个进度口径」），
 // 总量在没有可靠来源时保持 0（未知），页面据此显示「未知」而不是编一个数字。
 //
-// 逐字节的真实进度走**另一条帧**：下载层观察者 → progress.go 的 publishDownloadProgress，
-// 与这里发布的边界事件并存、字段语义不同（见 progress.go 顶部「两个进度口径」）。
-// 本函数是边界事件的唯一出口，**不要**把观察者的数字并进来：那会让 /get-tasks 与 SSE
-// 的口径混在一起（progress_contract_test.go 钉的就是这条边界）。
+// 逐字节的真实进度帧由下载层观察者 → progress.go 的 publishDownloadProgress 发布，
+// 与这里发布的边界事件并存：SSE 帧是逐文件口径，这里的事件字段是任务级口径。
+// 本函数仍是边界事件的唯一出口——不直接发布观察者的字节帧，但 downloaded
+// 字段的口径已与字节进度统一（progress_contract_test.go 钉的就是这条边界）。
 func (s *APIServer) publishTaskEvent(typ string, task *DownloadTask, state string) {
 	if s.events == nil {
 		return
@@ -299,14 +300,16 @@ func (s *APIServer) publishTaskEvent(typ string, task *DownloadTask, state strin
 
 // onArtifactSaved 记录一件产物落盘：更新任务字节数并推一条进度事件。
 // 同一路径重复上报（分片重试 / 断点续传会重复调用 OnSaved）只计一次，不重复计字节。
+//
+// 字节数走 artifactBytes 口径（见 DownloadTask.totalBytesLocked）：与实时映射取较大者，
+// 所以这里**不再**直接累加 TotalDownloadedBytes——那个字段是派生值，直接累加会与
+// 「观察者已经报过同一批字节」双计。
 func (s *APIServer) onArtifactSaved(task *DownloadTask, path string) {
 	if !task.AddSavePath(path) {
 		return
 	}
 	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
-		task.mu.Lock()
-		task.TotalDownloadedBytes += info.Size()
-		task.mu.Unlock()
+		task.addArtifactBytes(info.Size())
 	}
 	s.publishTaskEvent(EventTaskProgress, task, StateProgress)
 }

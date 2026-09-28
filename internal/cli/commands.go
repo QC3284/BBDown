@@ -99,7 +99,7 @@ var serveCmd = &cobra.Command{
 		ctx := commandContext(cmd)
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.12.8")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.13.0")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -424,11 +424,26 @@ func fetchWatchLater(ctx context.Context, client *util.HTTPClient) ([]watchLater
 }
 
 // runSubCheck checks all subscriptions and downloads new content (upstream).
+//
+// 本期新增调度（见 subcheck_schedule.go）：--since 增量窗口 + --concurrency 并发检查。
+// 检查/下载的编排本身在 subCheckRun 里（依赖可注入，离线可测）；这里负责参数校验、
+// 订阅清单与会话准备，以及把结果映射回既有的退出码语义。
 func runSubCheck(cmd *cobra.Command, args []string) error {
+	// ① 参数校验放在最前面：--since/--concurrency 打错时必须当场报错（退出码非 0），
+	// 且不读、不写任何状态文件（损坏清单不会被隔离、也不发任何网络请求）。
+	sched, err := parseSubCheckSchedule(optSubCheckSince, optSubCheckConcurrency)
+	if err != nil {
+		return err
+	}
+
 	subs, err := substore.Load()
 	if err != nil {
 		return err
 	}
+	// ② 去重（Load 之后、进入调度之前）：手改清单可能让同一 Target 出现多条，而 --concurrency≥2
+	// 会先把所有订阅检查完再下载——重复的订阅各自在「历史还空着」时取到同一批新稿，同一批 aid
+	// 就被下载两遍。正常用法造不出重复（sub add 同 Target 是替换），只有手改清单能。
+	subs = subCheckDeduped(subs)
 	if len(subs) == 0 {
 		util.LogWarn("当前没有订阅，请先用 BBDown sub add <目标> 添加")
 		return nil
@@ -455,74 +470,15 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 	subCheckWbi = wbi
 
 	factory := fetcher.NewFactory(client, cfg.UseIntlAPI, wbi, cfg.Cookie, cfg.Host, cfg.EpHost, cfg.AccessToken)
-	failures := 0
-	for _, sub := range subs {
-		if ctx.Err() != nil {
-			return silenceOnCancel(cmd, ctx.Err())
-		}
-		util.Log("检查订阅: %s (%s)", sub.Name, sub.Target)
-		resolved, err := workflow.ResolveURL(ctx, client, sub.Target)
-		if err != nil {
-			util.LogWarn("订阅解析失败（跳过）: %v", err)
-			continue
-		}
-		if resolved == "" {
-			continue
-		}
-		vInfo, err := factory.Create(resolved).Fetch(ctx, resolved)
-		if err != nil {
-			util.LogWarn("订阅拉取失败（跳过）: %v", err)
-			continue
-		}
-		var allAids []string
-		seen := make(map[string]bool)
-		for _, p := range vInfo.PagesInfo {
-			if p.Aid != "" && !seen[p.Aid] {
-				seen[p.Aid] = true
-				allAids = append(allAids, p.Aid)
-			}
-		}
-		history, err := substore.LoadHistory(sub.Target)
-		if err != nil {
-			return err
-		}
-		newAids, err := subNewAids(sub, vInfo.Title, allAids, history)
-		if err != nil {
-			util.LogWarn("订阅 %s 的过滤条件无效（跳过）: %v", sub.Name, err)
-			continue
-		}
-		if len(newAids) == 0 {
-			if sub.Filter != "" {
-				util.Log("  没有匹配过滤 %q 的新内容（稿件标题: %s）", sub.Filter, vInfo.Title)
-			} else {
-				util.Log("  没有新增内容")
-			}
-			continue
-		}
-		util.Log("  发现 %d 个新内容: av%s", len(newAids), joinAids(newAids))
-		for _, aid := range newAids {
-			opt := config.DefaultMyOption()
-			opt.URL = "av" + aid
-			opt.Cookie = cfg.Cookie
-			opt.AccessToken = cfg.AccessToken
-			opt.EncodingPriority = optEncodingPriority
-			opt.DfnPriority = optDfnPriority
-			opt.UseAppAPI = cfg.UseAppAPI
-			opt.UseTvAPI = cfg.UseTvAPI
-			opt.UseIntlAPI = cfg.UseIntlAPI
-			opt.WorkDir = cfg.WorkDir
-			opt.Wbi = subCheckWbi
-			if err := workflow.New(opt, client).Run(ctx); err != nil {
-				util.LogWarn("av%s 下载失败: %v", aid, err)
-				failures++
-				continue
-			}
-			if err := substore.RecordDownloaded(sub.Target, aid); err != nil {
-				return err
-			}
-		}
+	deps := defaultSubCheckDeps(cfg, client, factory, subCheckWbi)
+
+	// 窗口边界只取一次：同一次运行里所有订阅共用同一个 now，长跑时各订阅的窗口不会互相漂移。
+	now := time.Now()
+	failures, err := subCheckRun(ctx, subs, deps, sched, now)
+	if err != nil {
+		// ctx 被取消（订阅边界上中断）时与改前同样走 silenceOnCancel：静默 + 非 0 的取消退出码。
+		return silenceOnCancel(cmd, err)
 	}
-	util.Log("订阅检查完成")
 	return subCheckResult(ctx.Err() != nil, failures)
 }
 

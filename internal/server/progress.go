@@ -11,37 +11,38 @@ import (
 // 任务 Q：把下载层的「逐字节进度观察者」（download.ProgressEvent，见
 // internal/download/progressobserver.go）接到既有 SSE 进度流上。
 //
-// # 两个进度口径（有意不同，契约由 progress_contract_test.go 钉住）
+// # 两个进度口径（分工，契约由 progress_contract_test.go 钉住）
 //
-//   - SSE 帧（GET /events 的 task_progress）：**真实字节进度**。percent 是 0~100，
+//   - SSE 帧（GET /events 的 task_progress）：**逐文件真实字节进度**。percent 是 0~100，
 //     downloaded/total 是整份文件口径（含续传 base），与 --progress-json 逐字段同义；
 //     单一来源是下载层观察者。
-//   - 任务 API（/get-tasks 的 Progress / TotalDownloadedBytes）：**服务端边界值**。
-//     Progress 执行期间保持 0、只在任务成功时置 1.0（processTask）；TotalDownloadedBytes
-//     只随产物落盘累加（onArtifactSaved，同一路径去重）。两者都只反映「服务端可观测的边界」
-//     ——入队 / 开始执行 / 拿到元数据 / 每件产物落盘 / 终止，不是传输中的字节数。
+//   - 任务 API（/get-tasks）：
+//     · TotalDownloadedBytes 是**任务级字节数**：取「按文件身份累计的实时字节」与
+//     「已落盘产物字节」的较大者（口径与理由见 DownloadTask.totalBytesLocked）。下载
+//     执行期间因此与 SSE 同口径——多产物任务的任务级数字 = 各文件身份**最近一帧**之和
+//     （A 报完切到 B 时 A 的值留在映射里，字节数不回跳）；单产物任务就等于最近一帧。
+//     · Progress 仍是**边界语义**（0~1）：执行期间 0、成功 1.0（processTask）。它是
+//     bbdown-tasks.json 与上游兼容契约消费的字段，**有意**不改成实时比例。
 //
-// 为什么不把观察者的最新值回写任务字段（评估过的一致性方案①，未采用）：
+// 为什么 Progress 不跟着走：它是任务级比例，而实时分母（各产物的总长）在服务端并不完整
+// ——封面/字幕/分离音轨的长度只在各自文件内可见，且多产物任务是串行的。把它做成实时
+// 百分比就得引入一个与上游契约不同的语义，收益只是「轮询客户端也能看到百分比」，而
+// 需要实时进度的客户端本来就该订阅 /events。
 //
-//  1. ProgressEvent 没有**文件身份**，Current 是单个 DownloadFile 的整份文件口径
-//     （progressobserver.go）：一个任务要下多件产物（多 P / 分离音视频）时，把它写进
-//     任务级字段会让字节数在文件切换时回跳——除非再给观察者加「文件身份 + 何时收尾」的契约，
-//     那是 internal/download 的接口扩张，不在本文件范围内；
-//  2. aria2c 路径**没有**观察者（台账 §4.57 记的代价：黑盒，只有开始/结束），产物字节数
-//     是那里唯一的进度信号——回写会把这类任务的服务端进度永久钉在 0；
-//  3. /get-tasks 与 bbdown-tasks.json 是上游兼容的既有契约（Progress 0~1、字节数），
-//     改语义要动持久化记录与既有用例，而收益只是「轮询客户端也能看到实时百分比」——
-//     Web UI 与需要实时进度的客户端本来就该订阅 /events。
+// aria2c 路径**没有**观察者（台账 §4.57 记的代价：黑盒，只有开始/结束），产物字节数是
+// 那里唯一的进度信号：TotalDownloadedBytes 取两个来源的较大者，正是为了这条路径保持
+// 既有边界语义不变（实时映射为空时它就等于产物累计）。
 //
-// 所以这里选择**显式声明 + 用例钉住**：契约写在 DownloadTask 的字段注释与本段，
-// 由 progress_contract_test.go 机械保证（观察者不改任务字段、SSE 帧不读任务字段）。
+// 契约写在 DownloadTask 的字段注释与本段，由 progress_contract_test.go 机械保证
+// （SSE 帧是真实字节、任务字段按身份同口径且不回跳、Progress 仍是边界值）。
 //
-// 本文件只做两件事，且都是**新增**的：既有事件（task_start / 元数据 / 产物落盘 /
+// 本文件只做三件事，且都是**新增**的：既有事件（task_start / 元数据 / 产物落盘 /
 // task_done / task_failed）的发布点与字段语义一个都没改（见 events.go 的
 // publishTaskEvent）——字节进度是同一任务上多出来的 task_progress 帧，不和它们抢位：
 //
 //  1. 映射：progressServerEvent（纯函数，表驱动用例逐条钉住口径）；
-//  2. 节流：publishDownloadProgress 里按**任务**丢弃过密的帧。
+//  2. 节流：publishDownloadProgress 里按**任务**丢弃过密的帧；
+//  3. 接线：把同一帧按**文件身份**记进任务级映射（recordProgressBytesLocked）。
 //
 // 为什么观察者已经节流了、SSE 侧还要再设一道：观察者的节奏由下载层的进度渲染协程决定
 // （minFrameInterval ≈60fps，见 internal/download/pacer.go），那一档是给终端重绘定的；
@@ -129,12 +130,18 @@ func (s *APIServer) taskDownloadContext(ctx context.Context, task *DownloadTask)
 // 末帧因此可能被丢，但收尾不会停在半路：成功时既有的 task_done 帧带 percent=100
 // （processTask 把 task.Progress 置 1.0，走的是 publishTaskEvent 那条既有路径），
 // 页面在任务进入终态后也不再把它当「当前任务」渲染（见 webui/index.html 的 renderCurrent）。
+//
+// 字节映射**接线在同一段临界区里**：被节流丢掉的帧同样记进任务级映射。丢掉一帧只是
+// 少一次 SSE 广播，任务级字节数仍要跟上最新观察值——否则 /get-tasks 会落后于 SSE，
+// 正是这次要统一的口径。撤掉 recordProgressBytesLocked 这条接线，
+// progress_contract_test.go 的任务级字节断言立刻变红（变异验证）。
 func (s *APIServer) publishDownloadProgress(task *DownloadTask, ev download.ProgressEvent) {
 	if s.events == nil {
 		return
 	}
 	now := time.Now()
 	task.mu.Lock()
+	task.recordProgressBytesLocked(ev.Key, ev.Current)
 	if !task.lastProgressPublish.IsZero() && now.Sub(task.lastProgressPublish) < s.progressPublishInterval {
 		task.mu.Unlock()
 		return

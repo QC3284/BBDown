@@ -117,6 +117,10 @@ var (
 	optSubName         string
 	optSubFilter       string
 	optWatchLaterLimit int
+
+	// sub check 的调度参数（本期新增）：--since 增量窗口 + --concurrency 并发检查。
+	optSubCheckSince       string
+	optSubCheckConcurrency int
 )
 
 // rootCmd represents the base command.
@@ -142,7 +146,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.12.8",
+	Version: "2.13.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -611,6 +615,10 @@ func init() {
 	watchLaterCmd.Flags().IntVar(&optWatchLaterLimit, "limit", 0, "最多下载前 N 个稍后再看视频(默认 0=全部)")
 	subAddCmd.Flags().StringVar(&optSubName, "name", "", "订阅显示名称(默认使用目标字符串)")
 	subAddCmd.Flags().StringVar(&optSubFilter, "filter", "", "标题过滤正则(仅下载标题匹配的新稿)")
+	// 订阅调度（本期新增）：默认 since 空 + concurrency 1，即与改前完全相同的串行检查、
+	// 不做窗口过滤——cron 用户显式给参数才启用增量。
+	subCheckCmd.Flags().StringVar(&optSubCheckSince, "since", "", "只下载最近这段时间内发布的新内容，Go duration 语法(如 24h/30m；不支持 d，一天写 24h)")
+	subCheckCmd.Flags().IntVar(&optSubCheckConcurrency, "concurrency", 1, "检查阶段的并发订阅数(1-8)，下载仍按订阅顺序串行")
 	doctorCmd.Flags().Bool("json", false, "以 JSON 输出自检结果（便于脚本/监控）")
 
 	// watchlater / sub check inherit the download option semantics (upstream).
@@ -669,7 +677,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	updateCheck(context.Background(), client, "v2.12.8")
+	updateCheck(context.Background(), client, "v2.13.0")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。

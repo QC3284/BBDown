@@ -185,8 +185,15 @@ func TestDownloadProgressReachesSSEClient(t *testing.T) {
 		t.Errorf("seq/time 未填充: %+v", got)
 	}
 
-	// 既有事件仍然是独立的一帧（新增的字节进度不顶掉它们）：产物落盘照旧按既有语义发
-	// downloaded=产物字节数、percent 仍是任务快照的 Progress（未改动的旧口径）。
+	// 既有事件仍然是独立的一帧（新增的字节进度不顶掉它们）：产物落盘照旧按既有语义发一条
+	// task_progress、percent 仍是任务快照的 Progress。
+	//
+	// 口径变更（本条断言随任务 T ② 更新）：downloaded 现在取**任务级字节数**——实时映射与
+	// 产物字节的较大者（见 DownloadTask.totalBytesLocked）。上面那帧观察者已经把
+	// 3*progressMiB/2 记进任务映射，所以产物落盘（2048 字节）之后任务级数字是两者较大者，
+	// 而不是只算产物。旧断言（2048）钉的是「产物字节是唯一来源」，那正是本次要统一掉的口径：
+	// 下载执行期间 /get-tasks 必须与 SSE 同口径。**产物字节仍然计入**这条语义由
+	// progress_contract_test.go 的「无观察者路径」段钉住（aria2c 场景：映射为空 → 2048）。
 	artifact := filepath.Join(t.TempDir(), "video.mp4")
 	if err := os.WriteFile(artifact, make([]byte, 2048), 0o644); err != nil {
 		t.Fatal(err)
@@ -205,8 +212,9 @@ func TestDownloadProgressReachesSSEClient(t *testing.T) {
 			break
 		}
 	}
-	if artifactEvent.Downloaded != 2048 {
-		t.Errorf("产物帧的 downloaded = %d, want 2048（既有语义不变）", artifactEvent.Downloaded)
+	if artifactEvent.Downloaded != 3*progressMiB/2 {
+		t.Errorf("产物帧的 downloaded = %d, want %d（任务级字节数 = 实时映射与产物字节的较大者）",
+			artifactEvent.Downloaded, 3*progressMiB/2)
 	}
 }
 
