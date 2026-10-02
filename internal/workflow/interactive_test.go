@@ -135,12 +135,13 @@ func (f *tierFlowFixture) run(t *testing.T, cfg config.MyOption) (string, int32)
 	return out, atomic.LoadInt32(f.hits) - before
 }
 
-// setStdin 注入交互输入并在用例结束时还原（readint_test.go 的 seam）。
+// setStdin 注入交互输入并在用例结束时还原（stdin 接缝见 workflow.go 的 stdinReaderValue/
+// setStdinReader：接缝是原子指针，因为 readIntSafe 的读在另一个协程里，裸变量会被 -race 报竞争）。
 func setStdin(t *testing.T, input string) {
 	t.Helper()
-	old := stdinReader
-	stdinReader = strings.NewReader(input)
-	t.Cleanup(func() { stdinReader = old })
+	old := stdinReaderValue()
+	setStdinReader(strings.NewReader(input))
+	t.Cleanup(func() { setStdinReader(old) })
 }
 
 // TestInteractiveTierFlowIsLayeredAndFetchesNothing：-i 的全流程（v3 ①）——

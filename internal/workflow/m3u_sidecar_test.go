@@ -2,8 +2,10 @@ package workflow
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -131,10 +133,12 @@ func TestWriteM3USidecarMultiPageOrderAndDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("应当写出 %s：%v", playlist, err)
 	}
+	// 每条目前多一行自研的分P序号注释（#EXT-BBDOWN-PAGE:N，t21）：回读靠它恢复「这是第几P」，
+	// 否则先 -p 5 再 -p 1 会合成 P5,P1；EXTINF 与路径行本身逐字未变（播放器那条路径不受影响）。
 	want := "#EXTM3U\n" +
-		"#EXTINF:-1,第一话\n[P01]第一话.mp4\n" +
-		"#EXTINF:-1,第二话\n[P02]第二话.mp4\n" +
-		"#EXTINF:-1,第三话\n[P03]第三话.mp4\n"
+		"#EXT-BBDOWN-PAGE:1\n#EXTINF:-1,第一话\n[P01]第一话.mp4\n" +
+		"#EXT-BBDOWN-PAGE:2\n#EXTINF:-1,第二话\n[P02]第二话.mp4\n" +
+		"#EXT-BBDOWN-PAGE:3\n#EXTINF:-1,第三话\n[P03]第三话.mp4\n"
 	if string(body) != want {
 		t.Errorf("多P播放列表 = %q, want %q", body, want)
 	}
@@ -181,7 +185,8 @@ func TestWriteM3USidecarFailureOnlyWarns(t *testing.T) {
 		t.Fatalf("重试应当写出播放列表：%v", err)
 	}
 	// 这个分P也没给时长（Dur 为零值）→ 未知分支的 -1。
-	if want := "#EXTM3U\n#EXTINF:-1,P1\n剧.mp4\n"; string(body) != want {
+	// 单P 也写序号（N=1）：统一格式，回读时同样能恢复序号。
+	if want := "#EXTM3U\n#EXT-BBDOWN-PAGE:1\n#EXTINF:-1,P1\n剧.mp4\n"; string(body) != want {
 		t.Errorf("重试后的播放列表 = %q, want %q", body, want)
 	}
 }
@@ -227,10 +232,11 @@ func TestWriteM3USidecarMergesExistingPlaylist(t *testing.T) {
 	second.writeM3USidecar(products[1], "剧", entity.Page{Index: 1, Title: titles[1], Dur: 301})
 
 	playlist := filepath.Join(show, "剧.m3u")
+	// 序号随注释写出去：回读时 P1..P3 因此仍有序号（EXTINF 的标题与时长照旧跟着回来）。
 	want := "#EXTM3U\n" +
-		"#EXTINF:301,第一话\n[P01]第一话.mp4\n" +
-		"#EXTINF:302,第二话\n[P02]第二话.mp4\n" +
-		"#EXTINF:303,第三话\n[P03]第三话.mp4\n"
+		"#EXT-BBDOWN-PAGE:1\n#EXTINF:301,第一话\n[P01]第一话.mp4\n" +
+		"#EXT-BBDOWN-PAGE:2\n#EXTINF:302,第二话\n[P02]第二话.mp4\n" +
+		"#EXT-BBDOWN-PAGE:3\n#EXTINF:303,第三话\n[P03]第三话.mp4\n"
 	assertPlaylist(t, playlist, want)
 
 	body, err := os.ReadFile(playlist)
@@ -314,7 +320,131 @@ func TestWriteM3USidecarCorruptPlaylistTreatedAsEmpty(t *testing.T) {
 		t.Errorf("损坏的旧列表应当在 --debug 下留一行线索，实际输出：%q", out)
 	}
 	want := "#EXTM3U\n" +
-		"#EXTINF:100,第一话\n[P01]第一话.mp4\n" +
-		"#EXTINF:200,第二话\n[P02]第二话.mp4\n"
+		"#EXT-BBDOWN-PAGE:1\n#EXTINF:100,第一话\n[P01]第一话.mp4\n" +
+		"#EXT-BBDOWN-PAGE:2\n#EXTINF:200,第二话\n[P02]第二话.mp4\n"
 	assertPlaylist(t, playlist, want)
+}
+
+// TestWriteM3USidecarScrambleBatchesRestorePageOrder 乱序分批下载（先 -p 5、再 -p 1…）之后，
+// 播放列表必须仍按分P顺序 P1..P5——这正是 t21 修的缺陷：2.15.0 的 M3U 文本没有分P序号字段，
+// 回读的 P5 只能当「未知」，第二次运行就把它排在了 P1 前面（得到 P5,P1）。
+//
+// 变异验证：
+//   - 撤掉 RenderM3U 里的 #EXT-BBDOWN-PAGE 写入 → 本用例红（顺序退回登记顺序 P5,P3,P1,P4,P2）；
+//   - 撤掉 parseM3U 里对该注释的解析（回读序号恒 0）→ 本用例红（同上）。
+func TestWriteM3USidecarScrambleBatchesRestorePageOrder(t *testing.T) {
+	dir := t.TempDir()
+	show := filepath.Join(dir, "剧")
+	if err := os.MkdirAll(show, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	titles := map[int]string{1: "第一话", 2: "第二话", 3: "第三话", 4: "第四话", 5: "第五话"}
+	products := make(map[int]string, len(titles))
+	for i := 1; i <= len(titles); i++ {
+		products[i] = filepath.Join(show, fmt.Sprintf("[P%02d]%s.mp4", i, titles[i]))
+		if err := os.WriteFile(products[i], []byte("fake"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 乱序分批：每一批是一个新的 Workflow（等价于一次单独的 -p N 运行，会读回上一次的列表再合并）。
+	for _, idx := range []int{5, 3, 1, 4, 2} {
+		wf := newM3UTestWorkflow()
+		wf.Cfg.WriteM3U = true
+		wf.writeM3USidecar(products[idx], "剧", entity.Page{Index: idx, Title: titles[idx], Dur: 100 + idx})
+	}
+
+	// 逐字断言：P1..P5 升序，每条目前一行序号注释，EXTINF 与路径行照旧。
+	want := "#EXTM3U\n"
+	for i := 1; i <= len(titles); i++ {
+		want += fmt.Sprintf("#EXT-BBDOWN-PAGE:%d\n#EXTINF:%d,%s\n[P%02d]%s.mp4\n",
+			i, 100+i, titles[i], i, titles[i])
+	}
+	assertPlaylist(t, filepath.Join(show, "剧.m3u"), want)
+}
+
+// TestWriteM3USidecarLegacyPlaylistRewrittenVerbatim 旧 M3U（没有任何序号注释）的回读与
+// 原样重写与 2.15.0 逐字相同：序号未知的条目不编造 N、重写时不凭空加注释。
+//
+// 边界（修复的必然结果）：只有当本次运行新登记了**带序号**的条目时，旧条目才按新口径排到它们
+// 之后（见 sortM3UEntries）——这正是乱序分批修复要的语义；旧文件**单独**回读/重写仍逐字不变。
+func TestWriteM3USidecarLegacyPlaylistRewrittenVerbatim(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "b.mp4"), []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	playlist := filepath.Join(dir, "剧.m3u")
+	legacy := "#EXTM3U\n#EXTINF:100,旧一\nb.mp4\n#EXTINF:200,旧二\nc.mp4\n"
+	if err := os.WriteFile(playlist, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := readM3UEntries(playlist)
+	wantEntries := []M3UEntry{
+		{Title: "旧一", Path: "b.mp4", Duration: 100},
+		{Title: "旧二", Path: "c.mp4", Duration: 200},
+	}
+	if !reflect.DeepEqual(entries, wantEntries) {
+		t.Fatalf("旧列表回读 = %+v, want %+v（Index 应为未知的 0）", entries, wantEntries)
+	}
+
+	// 原样重写（旧条目 + 旧条目合并）：逐字等于旧文件——既不编造序号，也不加注释。
+	if got := RenderM3U(mergeM3UEntries(entries, entries)); got != legacy {
+		t.Errorf("旧列表重写 = %q, want %q（旧格式必须原样保留）", got, legacy)
+	}
+}
+
+// TestWriteM3USidecarUpgradeMixedPreservesLegacyOrder 钉住升级混合场景（t26 F1 的教训，
+// t32 修复后的永久网）：旧 .m3u 是 2.15.0 及更早写的（条目无 #EXT-BBDOWN-PAGE 注释，序号未知=0），
+// 本次补下新分P P4——合并后顺序必须是 P01..P04（新条目追加在后，绝不插到最前），
+// 且只有新条目带序号注释、旧 EXTINF 行一字不改。
+//
+// 变异验证：把 sortM3UEntries 的比较函数改回「有序号一律在前」→ 本用例红（P04 跑到最前），
+// 同时乱序修复用例仍绿（新格式每条都带序号，承重点是「每条都带序号」而非排序分组）。
+func TestWriteM3USidecarUpgradeMixedPreservesLegacyOrder(t *testing.T) {
+	dir := t.TempDir()
+	playlist := filepath.Join(dir, "剧.m3u")
+	legacy := strings.Join([]string{
+		"#EXTM3U",
+		"#EXTINF:101,P01 第一集",
+		"剧 P01.mp4",
+		"#EXTINF:102,P02 第二集",
+		"剧 P02.mp4",
+		"#EXTINF:103,P03 第三集",
+		"剧 P03.mp4",
+		"",
+	}, "\n")
+	if err := os.WriteFile(playlist, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	product := filepath.Join(dir, "剧 P04.mp4")
+	if err := os.WriteFile(product, []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wf := newM3UTestWorkflow()
+	wf.Cfg.WriteM3U = true
+	wf.writeM3USidecar(product, "剧", entity.Page{Index: 4, Title: "P04 新一集", Dur: 200})
+
+	body, err := os.ReadFile(playlist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	idx1 := strings.Index(text, "P01 第一集")
+	idx4 := strings.Index(text, "P04 新一集")
+	if idx1 == -1 || idx4 == -1 || idx1 > idx4 {
+		t.Fatalf("升级混合：新分P 应追加在旧条目之后（P01 在 P04 前），实际:\n%s", text)
+	}
+	if got := strings.Count(text, "#EXT-BBDOWN-PAGE:"); got != 1 {
+		t.Fatalf("注释行应恰好 1 条（只有新条目 :4，旧条目不得被编造序号），实际 %d 条:\n%s", got, text)
+	}
+	if !strings.Contains(text, "#EXT-BBDOWN-PAGE:4") {
+		t.Errorf("新条目应带 #EXT-BBDOWN-PAGE:4：\n%s", text)
+	}
+	for _, want := range []string{"#EXTINF:101,P01 第一集", "#EXTINF:102,P02 第二集", "#EXTINF:103,P03 第三集"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("旧条目 EXTINF 被改动，缺少 %q：\n%s", want, text)
+		}
+	}
 }

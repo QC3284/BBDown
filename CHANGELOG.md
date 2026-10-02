@@ -10,6 +10,40 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.15.1] - 2026-10-02
+
+**修复/重构批次**（AgentTeams 四期）。
+
+### 修复
+
+- **stdin 测试接缝数据竞争**（15/16 观察项定位的战果）：包级 stdinReader 的读（workflow.go 的 Fscanf 协程）与测试接缝的写无 happens-before 边，
+  `go test -race ./internal/workflow/` 确定性红。现接缝改 `atomic.Pointer[stdinSource]` + 访问器（生产行为不变），blockingReader 增加 entered 信号
+  （「进读之前 cleanup 不得返回」纪律由看门狗钉住）。`-race` 连跑 3 次全绿；变异（裸读回退）红。
+- **aria2c 逐字节进度（能力补全 + 接线修复）**：解析 `--summary-interval` 摘要块经既有观察者管线发帧（Key=产物路径），SSE/Web UI 获得 aria2c 实时进度；
+  审查用真 aria2c 实测抓出「摘要写在 stdout、实现却接 stderr」的接错流缺陷（单元假执行器复刻了行格式却复刻错了流）→ 双流接泵修复，
+  真机端到端 8 帧逐字节验证。无观察者路径参数与继承行为逐字不变；解析失败静默降级。
+- **M3U 分P序号**：乱序分批下载（先 -p 5 再 -p 1）回读合并顺序错。现每条目前写自研注释 `#EXT-BBDOWN-PAGE:N`（播放器忽略），回读恢复序号按分P升序；
+  排序口径最终维持 2.15.0 语义（未知序号=旧条目最小、保持出现序）——升级用户「补下新一集」仍是追加而非插队（t26 审查抓出的回归已闭环）。
+- **汇总字节按路径去重**：CLI 收尾汇总的 OnSaved 累计照 serve 语义去重（分片重试/断点续传重复上报只计一次）。
+
+### 重构 / 工程
+
+- **testsupport 抽包**：cli 与 server 两份工作目录守卫合并到 `internal/util/testsupport`（判据逐条一致、镜像实现零残留、不进生产二进制），
+  两侧薄接线共用同一实现，变异一处两侧同红。
+- **下载并行评估文档**（docs/parallel-download-eval.md）：`--concurrency` 二期方案定案 B（并行时终端降级边界日志、细节走 --progress-json/SSE），
+  并发现「serve 多任务在 TTY 下今天就存在单行进度互踩」——B 顺带修复（serve 启动接线已补进实现表）。
+- 顺手：tracklayout 死常量清理；testsupport 自守注释与实现对齐。
+
+### 验证
+
+- 七条审查门全 PASS（含三条 needs_revision 修复线闭环：M3U 升级排序、aria2c 接错流、stdin 竞争）；
+- 15/16 观察项负载 campaign 7 轮（24+8 suite）未复现纯负载 flake；`-race` 全绿；全仓 gofmt/build/vet/test 全绿。
+
+### 说明
+
+- 版本位：修复 + 重构 + 能力补全 → **patch**（2.15.0 → 2.15.1）。
+- 遗留候选（ROADMAP 已登记）：CI 加 workflow 包 `-race` 常规跑法；`--progress-json` 显式速率/字节入口（aria2c 进度进机器面）；ctx 感知的可取消读；下载并行实现（按评估文档开工）。
+
 ## [2.15.0] - 2026-10-01
 
 **功能批次**（AgentTeams 二期+三期：serve /add-task 白名单 + Web UI 重设计 + CLI 观感对齐 BBDownT 微调）。

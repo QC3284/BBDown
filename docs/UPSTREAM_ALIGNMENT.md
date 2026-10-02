@@ -1050,6 +1050,18 @@ SubtitleItem{lan=3,lanDoc=4,subtitleUrl=5}）。只手解三个字段（手写 v
 - 同批（§4.65 之后落地的增量）：⚠ 编号空间修复（-i 分层下曾用全表下标，现与屏幕表一致）；汇总字节按路径去重（对齐 serve 语义）；tracklayout 死常量清理。
 - 审查门：t14/t10/t17/t18→t19/t20 全 PASS（含窄终端 20..300 零超宽、零额外 fetch 复算、⚠ 编号 ⊆ 屏上表行号断言）。
 
+### 4.67 第六十二轮：四期——竞争修复、aria2c 进度、M3U 序号、testsupport 抽包（**修复 + 能力 + 重构**）
+
+- **stdin 测试接缝数据竞争修复**：包级 stdinReader 的读写无 happens-before 边（-race 确定性红，15/16 观察项定位的战果）。接缝改 `atomic.Pointer[stdinSource]` + 访问器（生产行为不变）；
+  blockingReader 加 entered 信号（「进读之前 cleanup 不得返回」）。ctx 感知的可取消读仍是候选（ROADMAP）。
+- **aria2c 逐字节进度（能力补全）**：`--summary-interval=1` 摘要块经观察者管线发帧（SSE 受益）；上游/aria2c 无对齐物（自研）。审查真机实测抓出「摘要走 stdout、实现接 stderr」的接错流——
+  **教训：单元级假执行器必须复刻外部进程的流，不只是行格式**。修复=双流接泵；无观察者路径逐字不变。
+- **M3U 分P序号（自研扩展）**：`#EXT-BBDOWN-PAGE:N` 注释行（播放器忽略未知注释）+ 回读排序。排序口径与 2.15.0 语义一致（未知序号最小），
+  升级混合场景（旧列表+补下新集）保持追加语义——t26 审查抓出的「新分P插队」回归已闭环并永久钉住（sidecar 级用例）。
+- **testsupport 抽包**：cli/server 两份工作目录守卫合并 `internal/util/testsupport`，判据逐条一致、不进生产二进制。
+- **下载并行评估文档**（docs/parallel-download-eval.md）：方案定案 B；发现 serve 多任务 TTY 下既有单行进度互踩（B 顺带修复）。
+
+
 
 
 

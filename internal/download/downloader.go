@@ -1082,6 +1082,13 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 		"--console-log-level=warn",
 		"-x16", "-s16", "-j16", "-k5M",
 	}
+	// 逐字节进度（任务 R）：aria2c 是黑盒，只有 --summary-interval 的摘要块能给出已下载/
+	// 总量/速率。**只在挂了观察者时加**：没有观察者时摘要只是终端噪声，而 CLI 的 aria2c
+	// 路径必须与改前逐字一致（参数、stderr 转发方式都不动）。
+	observer := progressObserverFor(ctx, destPath)
+	if observer != nil {
+		args = append(args, fmt.Sprintf("--summary-interval=%d", aria2cSummaryInterval))
+	}
 	if cfg.Aria2cArgs != "" {
 		args = append(args, splitArgs(cfg.Aria2cArgs)...)
 	}
@@ -1093,7 +1100,21 @@ func downloadWithAria2c(ctx context.Context, url, destPath string, cfg DownloadC
 	defer cancelAria2c()
 	cmd := exec.CommandContext(aria2cCtx, bin, args...)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if observer == nil {
+		// 没有观察者（普通 CLI）：stderr 直接继承，行为与改前逐字一致。
+		cmd.Stderr = os.Stderr
+	} else {
+		// 有观察者（serve 的 SSE 等）：stdout 与 stderr **两条流都**走解析泵——实测 aria2c 的
+		// 摘要块写在 **stdout** 上（--summary-interval 的摘要 + --show-console-readout 的进度条），
+		// 只接 stderr 会一帧都收不到；stderr 上则可能来 --log 与错误行。泵只消费识别出的
+		// 摘要行，其余行一律转发到 os.Stderr（错误一个都不吞）；解析失败静默降级。
+		pump := startAria2ProgressPump(func(s aria2Summary) {
+			observer(s.progressEvent(destPath))
+		})
+		defer pump.Close() // 等泵处理完所有已写出的行再返回：事件不会漏在返回之后
+		cmd.Stdout = pump
+		cmd.Stderr = pump
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

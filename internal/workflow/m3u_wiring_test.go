@@ -87,7 +87,8 @@ func TestWriteM3UWiringAtProductAndSkipPaths(t *testing.T) {
 		t.Fatalf("首次下载应当产出 out.m4a：%v", err)
 	}
 	// 时长用分P声明的秒数（page.Dur=100 → #EXTINF:100），播放器据此显示长度。
-	assertPlaylist(t, "t.m3u", "#EXTM3U\n#EXTINF:100,t\nout.m4a\n")
+	// 单P 也写分P序号注释（N=1，t21）：格式统一，回读时能恢复「这是第几P」。
+	assertPlaylist(t, "t.m3u", "#EXTM3U\n#EXT-BBDOWN-PAGE:1\n#EXTINF:100,t\nout.m4a\n")
 
 	// 第二段：产物已存在（走跳过分支，不重新下载）——先把列表删掉，证明「已产出」的产物
 	// 在补开/重跑时仍会被登记，而不是只有本次新下载的分P才进列表。
@@ -102,7 +103,7 @@ func TestWriteM3UWiringAtProductAndSkipPaths(t *testing.T) {
 		t.Fatalf("第二段应当走「已存在, 跳过下载」分支，实际输出: %s", out)
 	}
 	// 时长用分P声明的秒数（page.Dur=100 → #EXTINF:100），播放器据此显示长度。
-	assertPlaylist(t, "t.m3u", "#EXTM3U\n#EXTINF:100,t\nout.m4a\n")
+	assertPlaylist(t, "t.m3u", "#EXTM3U\n#EXT-BBDOWN-PAGE:1\n#EXTINF:100,t\nout.m4a\n")
 }
 
 func assertPlaylist(t *testing.T, path, want string) {

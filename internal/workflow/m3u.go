@@ -19,8 +19,9 @@ import (
 // 与 NFO 侧车同一纪律：渲染层是纯函数（可离线表驱动），写入层只告警——播放列表是附加价值，
 // 它出问题绝不能牵连已经下载好的产物。
 
-// M3UEntry 是播放列表的一条：标题、相对播放列表所在目录的路径、时长（秒，<=0 表示未知）。
-// Index 是分P序号，只用于排序、不进 M3U 文本：它让「按分P顺序」由数据决定，而不是依赖调用顺序。
+// M3UEntry 是播放列表的一条：标题、相对播放列表所在目录的路径、时长（秒，<=0 表示未知）、
+// 分P序号（Index，1 起；0 = 未知）。Index 既参与排序，也随 m3uPageComment 写进文本——
+// 不写出去的话，回读的旧条目就丢了「这是第几P」，先 -p 5 再 -p 1 会合成 P5,P1。
 type M3UEntry struct {
 	Title    string
 	Path     string
@@ -31,6 +32,16 @@ type M3UEntry struct {
 // m3uUnknownDuration 是 M3U 约定的「时长未知」（-1）：播放器据此显示 --:--，
 // 而不是把 0 当成零长度。
 const m3uUnknownDuration = -1
+
+// m3uPageComment 是自研的分P序号注释行前缀：M3U 允许出现未知注释（播放器忽略不认识的行），
+// 而 M3U 文本本身没有「这是第几P」这个字段。
+//
+// 为什么要写出去：合并是「读回旧文件 + 本次登记」再按序号排序。旧条目若没有序号，
+// 先 -p 5 再 -p 1 就会把它当成「未知」，合成 P5,P1（乱序分批下载的真实缺陷）。
+//
+// 单独一行、写在 #EXTINF 之前：绝不塞进 #EXTINF 的标题（标题是「首个逗号之后的全部内容」，
+// 塞进去会被播放器当标题显示出来）。EXTINF 与路径行本身逐字节不变。
+const m3uPageComment = "#EXT-BBDOWN-PAGE:"
 
 // RenderM3U 渲染播放列表全文（UTF-8，含 #EXTM3U 头），按给定顺序逐条输出。
 //
@@ -49,6 +60,13 @@ func RenderM3U(entries []M3UEntry) string {
 		dur := e.Duration
 		if dur <= 0 {
 			dur = m3uUnknownDuration
+		}
+		// 序号未知（0，来自没有注释的旧 M3U）就不写这一行：不能给旧条目编造一个 N，
+		// 它们靠稳定排序保持原出现序（见 sortM3UEntries）。
+		if e.Index > 0 {
+			sb.WriteString(m3uPageComment)
+			sb.WriteString(strconv.Itoa(e.Index))
+			sb.WriteByte('\n')
 		}
 		sb.WriteString("#EXTINF:")
 		sb.WriteString(strconv.Itoa(dur))
@@ -106,20 +124,23 @@ func parseM3UExtinf(line string) (title string, duration int) {
 	return spec[i+1:], duration
 }
 
-// parseM3U 回读已有播放列表（供合并）：路径行是条目，#EXTINF 是紧随其后那条的元数据。
+// parseM3U 回读已有播放列表（供合并）：路径行是条目，#EXTINF 与 #EXT-BBDOWN-PAGE 是
+// 紧随其后那条的元数据。
 //
 //   - 第一条非空行必须是 #EXTM3U，否则判为损坏（ok=false）：不能把任意文本当成路径并进播放列表；
 //   - 其余以 # 开头的行是注释/指令（#EXTGRP、#EXTVLCOPT…），与空行一并跳过；
-//   - 回读的条目没有分P序号（M3U 文本里没有这个字段），Index 记 0：稳定排序会保持它们在
-//     文件里的原顺序，而文件本来就是我们按分P顺序写的。
+//   - 分P序号从自研注释 #EXT-BBDOWN-PAGE:N 里恢复（N<=0 或非数字按未知处理，不当损坏）；
+//     没有这行注释的旧条目 Index=0——稳定排序把它当最小，保持它在文件里的原顺序
+//     （与 2.15.0 同语义，见 sortM3UEntries）。
 //
 // 保留 #EXTINF 的标题与时长是必要的：只认路径行会让回读的每条都退化成「无标题、时长未知」，
 // 而合并结果马上覆盖旧文件——一次重跑就把旧条目已经能显示的标题与长度抹掉。
 func parseM3U(body string) (entries []M3UEntry, ok bool) {
 	var (
-		title    string
-		duration int
-		sawHead  bool
+		title     string
+		duration  int
+		pageIndex int
+		sawHead   bool
 	)
 	for _, raw := range strings.Split(body, "\n") {
 		// 记事本另存会加 UTF-8 BOM：剥掉行首的那个，别让它把整个老列表判成损坏。
@@ -137,11 +158,16 @@ func parseM3U(body string) (entries []M3UEntry, ok bool) {
 		switch {
 		case strings.HasPrefix(line, "#EXTINF:"):
 			title, duration = parseM3UExtinf(line)
+		case strings.HasPrefix(line, m3uPageComment):
+			// 自研的分P序号注释：非法/非正的 N 按「未知」处理（旧版本或手改都不会让它变成损坏）。
+			if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, m3uPageComment))); err == nil && n > 0 {
+				pageIndex = n
+			}
 		case strings.HasPrefix(line, "#"):
 			// 其它指令/注释行：不是条目。
 		default:
-			entries = append(entries, M3UEntry{Title: title, Path: line, Duration: duration})
-			title, duration = "", 0
+			entries = append(entries, M3UEntry{Title: title, Path: line, Duration: duration, Index: pageIndex})
+			title, duration, pageIndex = "", 0, 0
 		}
 	}
 	return entries, sawHead
@@ -167,7 +193,8 @@ func readM3UEntries(path string) []M3UEntry {
 
 // mergeM3UEntries 把回读的旧条目与本次登记的条目合并成一条列表：按路径去重，按分P序号稳定排序。
 //
-//   - 旧条目沿用它在文件里的位置（回读条目 Index=0，稳定排序保持原顺序），重复路径只留一条；
+//   - 旧条目带着回读到（或没有）的分P序号进入结果：按序号升序排，序号未知（旧格式列表）视为
+//     最小——旧条目因此保持原出现序且不会被重排（见 sortM3UEntries），重复路径只留一条；
 //   - 路径已在旧列表里时用本次的标题/时长刷新它：2.10.0 之前写出的列表时长一律是 -1，
 //     不刷新的话重跑/补下永远修不好这些条目，播放器也就一直显示不出长度；
 //   - 本次新登记的路径追加到末尾（同样按路径去重，同一次运行内首次登记为准）。
@@ -200,10 +227,19 @@ func mergeM3UEntries(existing, current []M3UEntry) []M3UEntry {
 	return sortM3UEntries(out)
 }
 
-// sortM3UEntries 按分P序号稳定排序（序号相同保持首次出现的顺序），返回副本、不动入参。
+// sortM3UEntries 按分P序号稳定排序（升序），返回副本、不动入参。
+//
+// 口径就是 2.15.0 的那一行比较：out[i].Index < out[j].Index，且**序号未知的条目 Index=0 视为最小**
+// （稳定排序因此让它们保持文件里的原出现序，并排在最前面）。
+//
+// 为什么不用「有序号的排在无序号的之后/之前」这类额外规则：升级混合场景（旧格式列表 + 本次新登记
+// 的带序号条目）里，旧条目没有序号，任何「按有无序号分组」的规则都会重排旧列表——用户只会看到
+// 自己原来的播放列表被改乱了。2.15.0 语义下「旧列表 + 新下的 P4」仍得到 P01..P04，正是期望行为。
 //
 // 「按分P顺序」不能依赖「Run 恰好是按 pagesInfo 顺序下载」这个调用顺序的巧合：
 // 顺序一旦错，用户看到的是一条乱序的播放列表，而没人会去核对它。
+// 乱序分批下载（先 -p 5 再 -p 1）的正确顺序由「新格式文件里每条都带 #EXT-BBDOWN-PAGE 序号」保证：
+// 那种文件里不存在 Index=0 的条目，升序排序就是分P顺序（m3u_sidecar_test.go 的乱序用例逐字钉住）。
 func sortM3UEntries(entries []M3UEntry) []M3UEntry {
 	out := append([]M3UEntry(nil), entries...)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Index < out[j].Index })
@@ -222,9 +258,10 @@ func m3uFileName(title string) string {
 // m3uPlaylist 累积一个稿件的产物（Path 是相对 dir 的路径），每登记一条就整体重写文件：
 // 一个稿件的分P数有限，重写换来的是「任何时刻文件里都是当前完整的列表」。
 //
-// 分两层：existing 是本次运行开始时从文件读回的旧条目（Index 未知），entries 是本次运行
-// 登记的条目。写入时两者合并——只写 entries 的话，`-p 1` 重跑会把上一次下好的 P2..PN
-// 从列表里抹掉（文件都还在，列表却指不全）。
+// 分两层：existing 是本次运行开始时从文件读回的旧条目（序号来自 #EXT-BBDOWN-PAGE，
+// 旧格式文件里没有这行注释，读到的是「未知」），entries 是本次运行登记的条目。
+// 写入时两者合并——只写 entries 的话，-p 1 重跑会把上一次下好的 P2..PN 从列表里抹掉
+// （文件都还在，列表却指不全）。
 type m3uPlaylist struct {
 	path     string
 	dir      string

@@ -147,6 +147,18 @@
 
 - 完成：/add-task 15 字段白名单（t13/t14）、serve Web UI 重设计（t8/t10）、页面 415 修复、202 用例异步 join 竞态修复（疑为 15/16 真根因之一）。
 - 新增遗留（随本批发现）：
+
+### 2.15.1 批次（2026-10-02）闭环（四期）
+
+- 完成：M3U 分P序号（#EXT-BBDOWN-PAGE:N，排序=2.15.0 语义）、testsupport 抽包、aria2c 逐字节进度（双流接泵）、stdin 接缝数据竞争修复（-race 全绿）、下载并行评估文档（定案 B）、汇总字节去重。
+- 关闭的旧条目：M3U 回读分P序号缺失、testsupport 抽包、aria2c 无逐字节进度（能力补全）；15/16 观察项**部分关闭**（纯负载 flake 7 轮未复现；抓到并修掉 stdin 竞争这一个真根因）。
+- 新增候选：
+  1. **下载并行实现**（按 docs/parallel-download-eval.md 表 1/表 2 开工，B 路线 ≈4.5 人日 + 量化 0.5）；
+  2. CI/Makefile 加 workflow 包 `-race` 常规跑法（t25/t31 两次建议）；
+  3. `--progress-json` 显式速率/字节入口（aria2c 进度进机器面，t24 契约偏差的后续）；
+  4. ctx 感知的可取消读（readIntSafe 不泄漏读者协程）；
+  5. flake 排查纪律：先冻结工作树（go test -json 记失败用例名，不用全量重跑猜）。
+
   1. **select_page 1000 上限在展开后判定**：单请求可先让解析器展开 10 万项（受 MaxExpandedPages 约束、约几 MB 瞬时分配）才被拒——优化候选：先按表达式计数再展开；
   2. **renderList 每帧重建列表 DOM**：几十任务无感，几百任务看板需增量更新；
   3. **work_dir 无根目录约束** + applyConfig 的 os.Chdir 进程级副作用（有意设计风险，非回环监听必须带 token，已在 CHANGELOG/A-serve 登记）；

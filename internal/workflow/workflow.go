@@ -24,6 +24,7 @@ import (
 	"github.com/QC3284/BBDown/internal/parser"
 	"github.com/QC3284/BBDown/internal/util"
 	"sync"
+	"sync/atomic"
 )
 
 const backupHost = "upos-sz-mirrorcoso1.bilivideo.com"
@@ -2101,8 +2102,28 @@ func (w *Workflow) saveAidArchived(aid string) {
 	fmt.Fprintf(f, "%s|", aid)
 }
 
-// stdinReader is os.Stdin in production; tests can swap it.
-var stdinReader io.Reader = os.Stdin
+// stdinSource 把「当前的标准输入」包成一种固定类型：接缝用 atomic.Pointer 承载，
+// 而 atomic.Value 要求每次 Store 的具体类型一致（os.Stdin 是 *os.File，用例塞进去的
+// 是 *strings.Reader / blockingReader——直接存接口值会 panic）。
+type stdinSource struct{ r io.Reader }
+
+// stdinReader 是「标准输入」的测试接缝（生产恒为 os.Stdin），必须能并发访问：
+// 用例在 defer 里把它换回默认值（写），而 readIntSafe 的读发生在**另一个协程**里
+// （见下），裸包级变量在这对访问之间没有 happens-before 边——go test -race 实测
+// 报 DATA RACE（readint_test.go 的 TestReadIntSafeCancelled）。
+// 只经 stdinReaderValue/setStdinReader 访问；生产路径的读仍是同一次 Fscanf，行为不变。
+var stdinReader atomic.Pointer[stdinSource]
+
+// stdinReaderValue 取当前的标准输入；未设置（生产未显式设置、或用例换回 nil）时回落到 os.Stdin。
+func stdinReaderValue() io.Reader {
+	if p := stdinReader.Load(); p != nil && p.r != nil {
+		return p.r
+	}
+	return os.Stdin
+}
+
+// setStdinReader 换掉接缝指向的 reader（用例用）。
+func setStdinReader(r io.Reader) { stdinReader.Store(&stdinSource{r: r}) }
 
 // readIntSafe reads an integer from stdin. Returns ok=false when the context
 // is cancelled (e.g. Ctrl+C): the caller must abort instead of silently
@@ -2111,7 +2132,9 @@ func readIntSafe(ctx context.Context) (int, bool) {
 	ch := make(chan int, 1)
 	go func() {
 		var v int
-		fmt.Fscanf(stdinReader, "%d", &v)
+		// 读接缝放在这个协程里（与改前同一位置）：用例换回默认值可能发生在本协程读完之前，
+		// 所以这里必须走原子访问器，而不是裸读包级变量。
+		fmt.Fscanf(stdinReaderValue(), "%d", &v)
 		ch <- v
 	}()
 	select {
