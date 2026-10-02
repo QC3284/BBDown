@@ -8,6 +8,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QC3284/BBDown/internal/config"
@@ -146,7 +148,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.13.0",
+	Version: "2.15.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -677,7 +679,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	updateCheck(context.Background(), client, "v2.13.0")
+	updateCheck(context.Background(), client, "v2.15.0")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。
@@ -700,6 +702,9 @@ type batchSummary struct {
 	failed    int
 	elapsed   time.Duration
 
+	// bytes 是本轮落盘的**字节数**（OnSaved 钩子累计）；<=0 表示拿不到，此时汇总里不报平均速率。
+	bytes int64
+
 	// products 是本轮落盘的产物文件数；<0 表示拿不到产出列表，此时汇总里不报这一项。
 	//
 	// 下载路径目前恒为 productsUnknown：workflow.Run 只返回 error，要拿到完整产物列表
@@ -709,15 +714,58 @@ type batchSummary struct {
 	products int
 }
 
+// byteAccumulator 累计落盘字节（按路径去重）。OnSaved 在分片重试/断点续传时会重复调用，
+// 同路径重复上报只计一次（与 serve 的 onArtifactSaved 同一语义）；stat 失败/非普通文件
+// 不计（宁可少报不虚报）。返回本次实际计入的字节数，0 = 重复或拿不到。
+type byteAccumulator struct {
+	saved sync.Map
+}
+
+func (a *byteAccumulator) add(path string) int64 {
+	if _, dup := a.saved.LoadOrStore(path, struct{}{}); dup {
+		return 0
+	}
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		return info.Size()
+	}
+	return 0
+}
+
 // formatBatchSummary 把收尾统计拼成一行。耗时按 100ms 取整：一次批量下载报「1m2.3s」
 // 足够，没必要把亚毫秒抖动写进去。
 func formatBatchSummary(stats batchSummary) string {
 	line := fmt.Sprintf("下载完成：成功 %d 个，失败 %d 个，耗时 %s",
 		stats.succeeded, stats.failed, stats.elapsed.Round(100*time.Millisecond))
+	if speed := formatAverageSpeed(stats.bytes, stats.elapsed); speed != "" {
+		line += " · 平均 " + speed
+	}
 	if stats.products >= 0 {
 		line += fmt.Sprintf("，产出 %d 个文件", stats.products)
 	}
 	return line
+}
+
+// formatAverageSpeed 是本批下载的平均速率（落盘字节 / 实际耗时）。
+//
+// 单位与进度行的速率**同一口径**（MB 一位小数、KB/B 取整，见 download.formatSpeed）：
+// 用户在进度行看到 6.2 MB/s，收尾行说「平均 6.8 MB/s」——两处单位一致才看得出快慢。
+//
+// 字节数或耗时为 0（拿不到产物、或瞬时完成）时返回空串：汇总里不报这一项，
+// 而不是打一个没有意义的「平均 0 B/s」。耗时与字节数都是入参，用例可注入，不读墙钟。
+func formatAverageSpeed(bytes int64, elapsed time.Duration) string {
+	secs := elapsed.Seconds()
+	if bytes <= 0 || secs <= 0 {
+		return ""
+	}
+	b := float64(bytes) / secs
+	switch {
+	case b >= 1024*1024:
+		return fmt.Sprintf("%.1f MB/s", b/(1024*1024))
+	case b >= 1024:
+		return fmt.Sprintf("%.0f KB/s", b/1024)
+	default:
+		return fmt.Sprintf("%.0f B/s", b)
+	}
 }
 
 // downloadTargets 执行一批目标，并维护**未完成任务清单**（bbdown resume 的底座）：
@@ -731,12 +779,24 @@ func downloadTargets(ctx context.Context, cmd *cobra.Command, cfg config.MyOptio
 	defer stopInterrupts()
 
 	started := time.Now()
+	var batchBytes atomic.Int64 // 本批落盘字节数（OnSaved 累计）
 
 	var firstErr error
 	failures := runTargets(ctx, targets, func(ctx context.Context, target string) error {
 		one := cfg
 		one.URL = target
-		err := workflow.New(one, client).Run(ctx)
+		wf := workflow.New(one, client)
+		// 收尾汇总的平均速率要的是**落盘字节**：OnSaved 是产物落盘的唯一出口（与 serve 同一钩子），
+		// 这里顺手累计一次；拿不到大小（stat 失败）就不计，宁可少报也不虚报。
+		// 按路径去重（与 serve 的 onArtifactSaved 同一语义）：分片重试/断点续传会重复调用 OnSaved，
+		// 同路径重复上报只计一次（byteAccumulator 有回归用例）。
+		acc := &byteAccumulator{}
+		wf.OnSaved = func(path string) {
+			if n := acc.add(path); n > 0 {
+				batchBytes.Add(n)
+			}
+		}
+		err := wf.Run(ctx)
 		// Ctrl+C 取消：静默 cobra 的 "Error:" 与 usage 输出，由 Execute 统一提示。
 		if errors.Is(err, context.Canceled) {
 			cmd.SilenceErrors = true
@@ -766,6 +826,7 @@ func downloadTargets(ctx context.Context, cmd *cobra.Command, cfg config.MyOptio
 		succeeded: len(targets) - failures,
 		failed:    failures,
 		elapsed:   time.Since(started),
+		bytes:     batchBytes.Load(),
 		products:  productsUnknown,
 	}))
 	if failures > 0 {

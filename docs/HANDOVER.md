@@ -1,15 +1,15 @@
 # 交接文件（HANDOVER）
 
 > 面向接手的下一位（人或代理）。**先读 `AGENTS.md`**（项目规矩），再看本文件（现状 + 坑 + 待办）。
-> 最后更新：版本 `2.13.0`（AgentTeams 首期两线闭环），提交见 tag `v2.13.0`，工作区干净，
-> `go test ./... -count=1` 16 包全绿，两条实现线审查门 verdict=pass。
+> 最后更新：版本 `2.15.0`（二期 /add-task 白名单 + Web UI 重设计，三期 CLI 观感对齐 BBDownT 微调），提交见 tag `v2.15.0`，
+> 工作区干净，`go test ./... -count=1` 16 包全绿，两条实现线审查门 verdict=pass。
 
 ---
 
 ## 1. 一句话现状
 
 `/home/qc233/github-code/BBDown`（分支 `main`）是 **BBDown 生态的 Go 主线实现**：起步自 C# 版 `AliverAnme/BBDown` v1.6.20 的重写，
-此后独立演进。当前版本 **`2.13.0`**，已发布 tag / GitHub Release（5 产物）/ AUR 包 `bbdown-go-git`（VCS 包，随 tag 自动更新）。
+此后独立演进。当前版本 **`2.15.0`**，已发布 tag / GitHub Release（5 产物）/ AUR 包 `bbdown-go-git`（VCS 包，随 tag 自动更新）。
 
 规格来源有四个，冲突时**以实测为准**：上游 C#（本地 git 对象库即可查）、`LOVAHE/BBDownT`（C# 2.x，风控情报价值最高）、
 `bilibili-API-collect`、探针实测。
@@ -64,7 +64,9 @@ go test ./... -count=1             # 判据是**退出码**，不是「数 ok �
 `docs/ROADMAP.md` 第 98 行起是「下一批（未完成）」。要点：
 
 1. ~~**订阅调度**~~ **已完成（2.13.0）**：`sub check` 支持 `--since`（Go duration 语法，按 Page.PubTime 增量过滤）与 `--concurrency`（并行检查、下载串行），可 cron；详见 CHANGELOG 与 UPSTREAM_ALIGNMENT §4.64；
-2. ~~**Web UI 增强**~~ **已完成（2.13.0）**：`ProgressEvent` 加**文件身份**，`/get-tasks` 的 `TotalDownloadedBytes` 与 SSE 真实字节同口径
+2. ~~**Web UI 增强**~~ **已完成（2.13.0 + 2.14.0）**：2.13.0 统一字节口径（`ProgressEvent` 文件身份、`/get-tasks` 与 SSE 同口径）；
+   2.14.0 整页重设计（任务列表+详情卡+15 字段表单+localStorage 预设，单文件 34KB 无外链）；
+   字节口径细节
    （单产物=最近一帧、多产物=Σ各身份最近一帧不回跳、aria2c 无观察者保持边界语义）；`Progress` 仍是边界语义（0/成功 1.0，上游兼容契约，有意不改）。
    勘误：原计划写「同步改 3 处既有用例」，实测钉旧口径的只有 1 处（progress_test.go 产物帧断言），另加 download 侧 3 处身份断言；
 3. **`--progress-json` 首窗速率**在续传时仍含 `base`（既有行为，未修）；聚合帧在「分片计数瞬时越过总长」时可能短暂显示 `4.0/3.0 MB`（pct 已夹 100%）；
@@ -74,7 +76,11 @@ go test ./... -count=1             # 判据是**退出码**，不是「数 ok �
 7. **`internal/util/testsupport` 抽包**：`cli` 与 `server` 两份工作目录守卫语义相同、实现各一份（各有用例，已互标注镜像关系）；
 8. **风格化（若要做）**：见 §3.3——必须加开关、默认上游风格；
 9. **偶发 15/16 的观察项**：全仓测试在**高负载**（并行跑测试/多代理同时作业）时出现过单包失败，空载连跑 8 次 0 失败；
-   已知的同类根因（pacer 撤 timer、`-race` 墙钟敏感、平台判据）**均已修**，剩余部分尚未抓到失败用例名。
+   已知同类根因均已修；2.14.0 再修一个真根因（202 用例未 join 异步 goroutine → TempDir 清理撞车）；剩余未抓到名字的仍观察。
+10. **/add-task 白名单边界**（2.14.0）：work_dir 无根目录约束 + os.Chdir 进程级副作用（有意设计风险：非回环必须带 token）；select_page 1000 上限在展开后判定（优化候选：先按表达式计数）。
+11. **Web UI renderList 每帧重建 DOM**：几百任务看板需增量更新。
+12. **CLI 观感候选**（设计图 docs/，已被 .gitignore 忽略）：用户倾向「分层进度」，落地须 `--ui` 开关（默认观感契约不动），属三期。
+   历史根因（pacer 撤 timer、`-race` 墙钟敏感、平台判据）均已修，剩余未抓到失败用例名的部分继续观察。
 
 ---
 

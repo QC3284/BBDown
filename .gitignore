@@ -43,3 +43,8 @@ debug_*.json
 # Agent session state
 .agent-teams/
 docs/aegis/
+
+# UI 概念图（会话评审素材，不进版本库）
+docs/bbdown-ui-*.png
+docs/cli-concept*.png
+docs/bbdown-cli-concepts.png

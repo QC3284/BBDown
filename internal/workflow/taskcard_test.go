@@ -99,10 +99,19 @@ func TestPrintTaskCardFinishesProgressLineFirst(t *testing.T) {
 
 // ---- 接线：真实下载路径打，解析/机读模式不打 ----
 
+// TestTaskCardReplacedByV3ConfirmationLine：v3 定稿后，真实下载路径不再打「任务卡」，
+// 改打「预计总大小 ≈ … · 输出: …」（v3 ⑥）。
+//
+// 为什么改（有意偏离 2.13.0 的观感）：v3 把卡片的信息拆给了元信息行（标题/BV/UP/分P，见
+// infolines.go 的 renderMetaLine）与这行确认行（大小/输出路径）；两套并存会在同一屏里重复三行。
+// renderTaskCard 的排版用例仍在 taskcard_test.go 上半部分（纯函数与它的单测都保留，没删），
+// 这里只改接线断言——每一段旧断言的**意图**都保留（真实下载路径要打、-I/--print-urls/--info-json
+// 一个都不打），只是换成了 v3 的载体。
+//
 // 变异验证：
-//   - 删掉 downloadOnePage 里的 printTaskCard 调用 → 第 1 段「真实下载路径」断言变红；
+//   - 删掉 downloadOnePage 里的确认行 → 第 1 段「真实下载路径」断言变红；
 //   - 把它挪到 PrintURLs/OnlyShowInfo/InfoJSON 的提前 return 之前 → 对应那段的断言变红。
-func TestTaskCardWiring(t *testing.T) {
+func TestTaskCardReplacedByV3ConfirmationLine(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	cdn, noRewrite := newFakeCDN(t)
@@ -130,49 +139,56 @@ func TestTaskCardWiring(t *testing.T) {
 		})
 	}
 
-	// 1) 真实下载路径：卡片出现在「已选择的流」之后、开始下载之前。
+	// 1) 真实下载路径：确认行出现在「已选择的流」之后、开始下载之前；任务卡不再出现，
+	//    但它的信息仍在（元信息行给了 UP/BV/分P，确认行给了输出路径）。
 	cfgDL := config.DefaultMyOption()
 	cfgDL.SkipMux = true // 不需要 ffmpeg
 	out := run(cfgDL)
-	if !strings.Contains(out, taskCardHeader) {
-		t.Fatalf("真实下载路径没有任务卡：%q", out)
+	if strings.Contains(out, taskCardHeader) {
+		t.Errorf("v3 不再打任务卡（信息已由元信息行与确认行承载）：%q", out)
 	}
-	for _, want := range []string{"标题", "BV", page.Bvid(), "UP", "某某UP", "视频流", "音频流", "输出路径", "out.m4a.mp4"} {
+	if !strings.Contains(out, "预计总大小 ≈ ") || !strings.Contains(out, "输出: ") {
+		t.Fatalf("真实下载路径没有 v3 确认行（预计大小 + 输出路径）：%q", out)
+	}
+	for _, want := range []string{"某某UP", page.Bvid(), "out.m4a.mp4"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("任务卡缺少 %q：%q", want, out)
+			t.Errorf("v3 信息块缺少 %q：%q", want, out)
 		}
 	}
 	selected := strings.Index(out, "已选择的流")
-	card := strings.Index(out, taskCardHeader)
+	confirmed := strings.Index(out, "预计总大小 ≈ ")
 	started := strings.Index(out, "开始下载P1视频")
-	if selected < 0 || card < 0 || started < 0 {
-		t.Fatalf("用例没走完预期路径（已选择的流=%d 任务卡=%d 开始下载=%d）：%q", selected, card, started, out)
+	if selected < 0 || confirmed < 0 || started < 0 {
+		t.Fatalf("用例没走完预期路径（已选择的流=%d 确认行=%d 开始下载=%d）：%q", selected, confirmed, started, out)
 	}
-	if card < selected {
-		t.Errorf("任务卡应打在「已选择的流」之后：卡片 %d < 已选择 %d", card, selected)
+	if confirmed < selected {
+		t.Errorf("确认行应打在「已选择的流」之后：确认行 %d < 已选择 %d", confirmed, selected)
 	}
-	if started < card {
-		t.Errorf("任务卡应打在开始下载之前：开始下载 %d < 卡片 %d", started, card)
+	if started < confirmed {
+		t.Errorf("确认行应打在开始下载之前：开始下载 %d < 确认行 %d", started, confirmed)
 	}
 
-	// 2) --hide-streams 的契约是「不打印流清单」：卡片里两条流也省略，其余行照打。
+	// 2) --hide-streams 的契约是「不打印流清单」：确认行与元信息行不是流清单，照打。
 	cfgHide := config.DefaultMyOption()
 	cfgHide.SkipMux = true
 	cfgHide.HideStreams = true
 	outHide := run(cfgHide)
-	if !strings.Contains(outHide, taskCardHeader) {
-		t.Errorf("--hide-streams 不该把整张卡片也去掉：%q", outHide)
+	if !strings.Contains(outHide, "预计总大小 ≈ ") {
+		t.Errorf("--hide-streams 不该把确认行也去掉：%q", outHide)
 	}
-	if strings.Contains(outHide, "视频流") || strings.Contains(outHide, "音频流") {
-		t.Errorf("--hide-streams 下卡片仍打了流信息：%q", outHide)
+	if strings.Contains(outHide, "共计1条视频流") || strings.Contains(outHide, "共计1条音频流") {
+		t.Errorf("--hide-streams 下仍打了流清单：%q", outHide)
 	}
 
 	// 3) 三种「只解析/只输出数据」的模式各有输出契约，都不能混进任务卡。
 	cfgInfo := config.DefaultMyOption()
 	cfgInfo.OnlyShowInfo = true
 	outInfo := run(cfgInfo)
-	if strings.Contains(outInfo, taskCardHeader) {
-		t.Errorf("-I 不该打任务卡：%q", outInfo)
+	if strings.Contains(outInfo, taskCardHeader) || strings.Contains(outInfo, "预计总大小 ≈ ") {
+		t.Errorf("-I 不该打任务卡/v3 确认行：%q", outInfo)
+	}
+	if strings.Contains(outInfo, "UP主: ") {
+		t.Errorf("-I 不该打 v3 元信息行：%q", outInfo)
 	}
 	if !strings.Contains(outInfo, "共计1条视频流") {
 		t.Errorf("-I 的流清单没出现（用例没走到那条路径）：%q", outInfo)
@@ -181,8 +197,8 @@ func TestTaskCardWiring(t *testing.T) {
 	cfgURLs := config.DefaultMyOption()
 	cfgURLs.PrintURLs = true
 	outURLs := run(cfgURLs)
-	if strings.Contains(outURLs, taskCardHeader) {
-		t.Errorf("--print-urls 不该打任务卡：%q", outURLs)
+	if strings.Contains(outURLs, taskCardHeader) || strings.Contains(outURLs, "预计总大小 ≈ ") {
+		t.Errorf("--print-urls 不该打任务卡/v3 确认行：%q", outURLs)
 	}
 	if !strings.Contains(outURLs, cdn.URL+"/v.m4s") {
 		t.Errorf("--print-urls 没有输出直链：%q", outURLs)
@@ -191,8 +207,8 @@ func TestTaskCardWiring(t *testing.T) {
 	cfgJSON := config.DefaultMyOption()
 	cfgJSON.InfoJSON = true
 	outJSON := run(cfgJSON)
-	if strings.Contains(outJSON, taskCardHeader) {
-		t.Errorf("--info-json 不该打任务卡：%q", outJSON)
+	if strings.Contains(outJSON, taskCardHeader) || strings.Contains(outJSON, "预计总大小 ≈ ") {
+		t.Errorf("--info-json 不该打任务卡/v3 确认行：%q", outJSON)
 	}
 	if !strings.Contains(outJSON, "\"video\"") {
 		t.Errorf("--info-json 没有输出元数据：%q", outJSON)

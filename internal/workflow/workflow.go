@@ -54,6 +54,14 @@ type Workflow struct {
 	// m3u 累积本次运行的播放列表（--write-m3u）。由 Run 开头重置：同一个 Workflow 连着跑
 	// 两个地址时，不能让上一个稿件的产物混进这一个的列表。
 	m3u *m3uPlaylist
+
+	// subsCache 缓存「每页字幕清单」（key = cid）：v3 的字幕清单行在**显示阶段**就要打，
+	// 而字幕实际下载在后面——两处共用同一次接口调用，多打一行绝不多打一次请求。
+	subsCache map[string][]entity.Subtitle
+
+	// sidecar 是本次下载的侧车状态（字幕/弹幕/封面，见 internal/download/sidecar.go）：
+	// 每页开始时按 enabledSidecars 重建，产物落地时 MarkDone，最后打成一行。
+	sidecar *download.SidecarStatus
 }
 
 // New creates a new Workflow.
@@ -198,19 +206,9 @@ func (w *Workflow) Run(ctx context.Context) error {
 		pagesInfo = filtered
 	}
 
-	showPages := vInfo.PagesInfo
-	if !w.Cfg.ShowAll && len(showPages) > 6 {
-		for _, p := range showPages[:5] {
-			util.Log("  P%d: [%s] [%s] [%s]", p.Index, p.Cid, p.Title, util.FormatTime(p.Dur, true))
-		}
-		util.Log("  ......")
-		last := showPages[len(showPages)-1]
-		util.Log("  P%d: [%s] [%s] [%s]", last.Index, last.Cid, last.Title, util.FormatTime(last.Dur, true))
-	} else {
-		for _, p := range showPages {
-			util.Log("  P%d: [%s] [%s] [%s]", p.Index, p.Cid, p.Title, util.FormatTime(p.Dur, true))
-		}
-	}
+	// 分P 清单不再在这里按上游格式逐条列（那是「P%d: [cid] [标题] [时长]」的旧观感）：
+	// v3 定稿把它收成每个分P 一行紧凑清单（分P: P1 标题 时长 · …共 N 个分P），
+	// 由 printInfoLines 在下载路径上打印（见 infolines.go）。
 
 	// Save path format
 	pagesCount := len(pagesInfo)
@@ -331,6 +329,13 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 	if strings.HasPrefix(title, ".") {
 		title = "_" + title
 	}
+
+	// 进度行行首的分P游标（t15 的 DownloadConfig.ProgressCursor 口径）：多P 才有，单P 留空。
+	dlCfg.ProgressCursor = progressCursorFor(page.Index, pagesCount)
+	// 侧车状态行（字幕/弹幕/封面，见 internal/download/sidecar.go）：本页开始时按配置重建，
+	// 各产物落地时 MarkDone，媒体下载前打成一行。
+	w.sidecar = download.NewSidecarStatus(enabledSidecars(w.Cfg)...)
+	w.subsCache = make(map[string][]entity.Subtitle)
 
 	// The product lock is taken once for the whole page and released when this
 	// function returns. Acquiring it per attempt deadlocked the retry path: the
@@ -486,12 +491,56 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			return true
 		}
 
+		// v3 的信息块只在**真实下载路径**打印：-I / --print-urls / --info-json 各有自己的输出
+		// 契约（脚本按行取数据），新行混进去就破坏机器契约。
+		humanInfo := !w.Cfg.OnlyShowInfo && !w.Cfg.InfoJSON && !w.Cfg.PrintURLs
+
+		// -i 的渐进式选择（v3 ①）：先列档位菜单（★ 标推荐档），选中档后**只显示该档的流表**
+		// 再选流。全量解析数据已经在手，这里只做内存过滤，不重新解析（零额外请求）。
+		var tierVideoIdx []int
+		if humanInfo {
+			printInfoLines(pageInfoOf(page, vInfo, pagesCount))
+			if w.Cfg.Interactive && !selectionAsked && !w.Cfg.HideStreams {
+				if tiers := qualityTiers(result.VideoTracks); len(tiers) > 1 {
+					picked, ok := w.chooseTierInteractive(ctx, tiers, result.VideoTracks)
+					if !ok {
+						// Ctrl+C 中断：直接取消，不把取消当成「选了推荐档」继续下载。
+						return false
+					}
+					tierVideoIdx = picked
+				}
+			}
+		}
+
 		if !w.Cfg.HideStreams {
-			download.PrintAllTracks(result, page.Dur, w.Cfg.OnlyShowInfo)
+			if tierVideoIdx != nil {
+				// 只列该档的视频流（音频流照列）：用户眼前的序号就是提示里要输入的序号。
+				download.PrintAllTracks(tierResult(result, tierVideoIdx), page.Dur, false)
+			} else {
+				download.PrintAllTracks(result, page.Dur, w.Cfg.OnlyShowInfo)
+			}
 		}
 
 		if w.Cfg.OnlyShowInfo {
 			return true
+		}
+
+		// 流表之后：⚠ 兼容性标记（v3 ⑤）与字幕清单（v3 ④，取一次字幕接口，下载阶段复用）。
+		//
+		// ⚠ 的编号空间必须与**屏幕上真正打印的那张表**同源：-i 分层显示时用户只看到选中档
+		// 的几行流，「3 号流有风险」这种指向全表下标的提示会对不上他看到的那张表（他找不到
+		// 3 号，也看不到被建议替换的档）。所以风险流的输入跟着表格一起切换。
+		if humanInfo {
+			warnTracks := result.VideoTracks
+			if tierVideoIdx != nil {
+				warnTracks = tierResult(result, tierVideoIdx).VideoTracks
+			}
+			for _, line := range renderDoviWarnings(warnTracks, w.Cfg.Compat) {
+				util.Log("%s", line)
+			}
+			if line := renderSubtitleLine(w.subtitlesFor(ctx, page)); line != "" {
+				util.Log("%s", line)
+			}
 		}
 
 		// Select tracks (interactive or default)
@@ -509,7 +558,13 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					// Ctrl+C 中断：直接取消，不把取消当作"选择 0"继续下载。
 					return false
 				}
-				if vIndex < 0 || vIndex >= len(result.VideoTracks) {
+				switch {
+				case tierVideoIdx != nil && (vIndex < 0 || vIndex >= len(tierVideoIdx)):
+					// -i 的分层显示：刚打的那张表只有该档的视频流，序号是**档内**序号。
+					vIndex = tierVideoIdx[0]
+				case tierVideoIdx != nil:
+					vIndex = tierVideoIdx[vIndex]
+				case vIndex < 0 || vIndex >= len(result.VideoTracks):
 					vIndex = 0
 				}
 			}
@@ -585,11 +640,16 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		}
 		util.LogDebug("SavePath: %s", savePath)
 
-		// 任务卡：解析完成、开始下载前把这次要下的东西收成一块（标题/BV、来源 UP 与分P、
-		// 视频流一行、音频流一行、输出路径），列对齐、不带时间戳前缀。
-		// -I、--print-urls、--info-json 各有自己的输出契约，都在上面提前 return 了，
-		// 所以这个调用点就等于「只有真实下载路径会打」。
-		printTaskCard(w.buildTaskCard(page, pagesCount, title, selectedVideo, selectedAudio, savePath))
+		// v3 的选中确认行（⑥）：预计总大小与输出路径。
+		//
+		// 2.13.0 的「任务卡」不再在这里打印：v3 定稿把它的信息拆给了元信息行（标题/BV/UP/分P）
+		// 与这一行（大小/输出路径），两套都留下就是同一屏里三行重复。renderTaskCard 与其排版
+		// 用例保留（将来要恢复卡片，把 printTaskCard 加回这一处即可）。
+		if humanInfo {
+			if line := renderSelectionSummary(selectedVideo, selectedAudio, page.Dur, savePath); line != "" {
+				util.Log("%s", line)
+			}
+		}
 
 		// Hold the product lock across the existence check, the download and the mux
 		// (acquired once for the page; see the declaration above).
@@ -616,11 +676,15 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if coverURL == "" {
 				coverURL = page.Cover
 			}
-			if coverURL != "" {
+			if coverURL == "" {
+				w.markSidecar("封面") // 没有封面可下：阶段完成（不是失败）
+			} else {
 				coverPath := filepath.Join(page.Aid, page.Aid+".jpg")
 				os.MkdirAll(page.Aid, 0755)
 				if err := download.DownloadFile(ctx, coverURL, coverPath, dlCfg); err != nil {
 					util.LogWarn("封面下载失败（已跳过）: %v", err)
+				} else {
+					w.markSidecar("封面") // 真的落盘才算完成（失败保持 …，那是有用的失败信号）
 				}
 			}
 		}
@@ -669,6 +733,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			if err := download.DownloadFile(ctx, danmakuURL, xmlPath, dlCfg); err != nil {
 				util.LogWarn("弹幕下载失败: %v", err)
 			} else {
+				// 弹幕阶段跑完就算完成（视频没有弹幕时下面会删掉 Xml，那是「没有可下的」，
+				// 不是「没下成」——侧车行报的是这一步做完了没有，不是产物一定存在）。
+				w.markSidecar("弹幕")
 				items, err := util.ParseDanmakuXML(xmlPath)
 				if err != nil || len(items) == 0 {
 					util.Log("当前视频没有弹幕, 删除Xml...")
@@ -693,7 +760,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 		var backgroundMaterial []entity.AudioMaterial
 		if !w.Cfg.SkipSubtitle && !w.Cfg.DanmakuOnly && !w.Cfg.CoverOnly && !w.Cfg.OnlyShowInfo {
 			util.LogDebug("获取字幕...")
-			subs, _ := util.GetSubtitles(ctx, w.HTTPClient, page.Aid, page.Cid, page.Epid, page.Index, w.Cfg.UseIntlAPI, w.Cfg.Cookie)
+			// 字幕清单在显示阶段（v3 的「字幕: …」行）已经取过一次：这里复用同一份缓存，
+			// 多打一行绝不多打一次接口。
+			subs := w.subtitlesFor(ctx, page)
 			// 显式要字幕却一个字幕都没有时，必须说清楚——否则用户只看到「任务完成」却没有任何产物，
 			// 分不清「该视频没有字幕」「没登录」和「下载失败」（真机实测踩到，见 §4.43）。
 			if len(subs) == 0 && w.Cfg.SubOnly {
@@ -718,6 +787,10 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				if _, err := os.Stat(s.Path); err == nil {
 					downloadedSubs = append(downloadedSubs, s)
 				}
+			}
+			// 侧车：没有字幕可下（阶段完成）或至少下到一条 → ✔；有字幕但一条都没下成 → 保持 …。
+			if len(subs) == 0 || len(downloadedSubs) > 0 {
+				w.markSidecar("字幕")
 			}
 			if w.Cfg.SubOnly {
 				for _, s := range subs {
@@ -762,6 +835,10 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 				}
 			}
 		}
+
+		// 侧车状态行（v3 的「侧车: 字幕 ✔ · 弹幕 ✔ · 封面 ✔」）：本页的侧车阶段（封面/弹幕/字幕）
+		// 都跑完了，这里打一次。未启用的项不出现、一项都没启用时整行不打（见 download.SidecarStatus）。
+		w.printSidecarLine()
 
 		// Media output paths (dash downloads or FLV merge fill these).
 		videoPath := ""
@@ -1631,26 +1708,18 @@ func (w *Workflow) validateNumericOptions() error {
 	return nil
 }
 
-// printVideoHeader 打印稿件头部信息，标签与时区格式对齐上游 Workflow.cs：
-// 「视频标题: 」「发布时间: 」「视频URL: 」「UP主页: 」。此前标题与 URL 都是裸值，
-// 用户分不清哪一行是什么，脚本也无法按标签取值。
+// printVideoHeader 打印稿件标题（青色）。
+//
+// v3 定稿（docs/cli-concept-bbdt-v3.png）把上游 Workflow.cs 的四行头部（视频标题 / 发布时间 /
+// 视频URL / UP主页）收成「标题一行 + 每个分P 一条元信息行」：发布时间、UP、BV/av、时长、分P 数
+// 全部由 renderMetaLine 承载（见 infolines.go）。这是**有意偏离上游 v1.6.20** 的一处观感变更，
+// 旧形态的断言在 display_test.go 里同步更新并写明了理由。
+//
+// useIntlAPI 保留在签名里：国际版不打印 bilibili.com 的 URL 这条规则如今由元信息行体现
+// （元信息行只用 BV/av，不带站点 URL），调用点不必再分叉。
 func printVideoHeader(vInfo *entity.VInfo, useIntlAPI bool) {
+	_ = useIntlAPI
 	util.LogColor("视频标题: %s", vInfo.Title)
-	if vInfo.PubTime > 0 {
-		// 上游 FormatTimeStamp(pubTime, "yyyy-MM-dd HH:mm:ss zzz")：带本地时区偏移。
-		util.Log("发布时间: %s", time.Unix(vInfo.PubTime, 0).Format("2006-01-02 15:04:05 -07:00"))
-	}
-	if len(vInfo.PagesInfo) > 0 {
-		if bvid := vInfo.PagesInfo[0].Bvid(); bvid != "" && !useIntlAPI {
-			util.Log("视频URL: https://www.bilibili.com/video/%s/", bvid)
-		}
-	}
-	for _, p := range vInfo.PagesInfo {
-		if p.OwnerMid != "" {
-			util.Log("UP主页: https://space.bilibili.com/%s", p.OwnerMid)
-			break
-		}
-	}
 }
 
 // applySteinGateFallback 处理「互动视频不支持 TV 端下载」（上游 Workflow.cs:156-160）：
@@ -1731,6 +1800,13 @@ func expandPageAliases(selectPage string, pageCount int) string {
 	}
 	return strings.Join(segments, ",")
 }
+
+// ParsePageSelection 解析分P选择表达式（"1,3,5"、 "1-10"、 "1-3,7,9-11"）为分P序号列表；
+// 非法输入返回错误，展开后受 MaxExpandedPages 累计上限约束（上游 RF-81）。
+//
+// 导出是为了让 serve 的 /add-task（select_page 字段）复用**同一份**实现：分P表达式的规则很碎
+// （负号只算单段、连字符两侧允许空白、单段上限与累计上限两套报错），在 server 里另写一份迟早漂移。
+func ParsePageSelection(expr string) ([]string, error) { return parsePageSelection(expr) }
 
 // parsePageSelection parses expressions like "1,3,5", "1-10", "1-3,7,9-11".
 // Invalid input is an error (upstream throws; never falls back to ALL).

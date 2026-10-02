@@ -57,6 +57,9 @@ type progressReader struct {
 	// runner 上的「10 MiB / 2s」会被算成 4.9 MB/s，让只断言格式的用例随机变红
 	// （见 progress_test.go 的 fakeClock）。
 	now func() time.Time
+	// cursor 是进度行行首的分P游标（如 "P1/8"），来自 DownloadConfig.ProgressCursor；
+	// 空串 = 单P任务，行首不显示游标段。只由构造方写入，渲染协程只读。
+	cursor string
 	// observer 是上层（serve 的 SSE）挂进来的逐字节进度观察者，nil 表示没挂。
 	//
 	// 与终端进度帧 / JSON 事件走同一个渲染循环，所以回调天然在既有节流之后
@@ -142,8 +145,13 @@ func (pr *progressReader) renderLoop() {
 
 		// 动画字符紧跟在进度条后面，其后的百分比/速率/ETA/总量各占固定列宽，
 		// 数字位数变化时后面的列不会左右抖动（进度行在终端里是原地重绘的）。
-		line.draw(renderProgressFrame(downloaded, pr.wholeTotal(), speedBps,
-			progressChars[animIdx%len(progressChars)]))
+		line.draw(renderProgressFrameWith(progressFrame{
+			speedBps:   speedBps,
+			downloaded: downloaded,
+			total:      pr.wholeTotal(),
+			cursor:     pr.cursor,
+			resumeBase: pr.base,
+		}, progressChars[animIdx%len(progressChars)]))
 		animIdx++
 		// 观察者在同一帧里、画完之后被调用（不持锁：帧数字已复制成值）。
 		pr.notifyObserver(downloaded, speedBps)
@@ -247,6 +255,21 @@ type progressFrame struct {
 	speedBps   float64 // 速率（字节/秒）；<= 0 表示还没结算出速率
 	downloaded int64   // 整份文件已完成的字节
 	total      int64   // 整份文件总字节；<= 0 表示总量未知
+	// cursor 是行首的分P游标（如 "P1/8"）；空串 = 单P任务，整段不显示。
+	// 由编排层通过 DownloadConfig.ProgressCursor 填入（下载层只渲染，不知道第几P）。
+	cursor string
+	// resumeBase 是本次传输之前已就位的字节数（断点续传）；> 0 时信息段末尾提示
+	// 「已续传 X」。它同时是 wholeTotal 的组成部分（见 progressReader.base）。
+	resumeBase int64
+}
+
+// prefixWidth 是行首游标占的显示列数（游标文本 + 一个空格；无游标时 0）。
+// 宽度预算必须把它算进去，否则带游标的那一档会把整行撑出终端。
+func (f progressFrame) prefixWidth() int {
+	if f.cursor == "" {
+		return 0
+	}
+	return DisplayWidth(f.cursor) + 1
 }
 
 // progressPercent 是百分比 / x/y / ETA 三者共用的比例：已完成 / 总量。
@@ -268,11 +291,13 @@ func progressPercent(downloaded, total int64) float64 {
 // 宽度取当前终端（每次渲染取一次，见 util.TerminalWidth）：非 TTY 恒为 80 列，与改前一致；
 // --progress-json 不画帧，完全不受影响。
 func renderProgressFrame(downloaded, total int64, speedBps float64, anim byte) string {
-	return renderProgressFrameAt(util.TerminalWidth(), progressFrame{
-		speedBps:   speedBps,
-		downloaded: downloaded,
-		total:      total,
-	}, anim)
+	return renderProgressFrameWith(progressFrame{speedBps: speedBps, downloaded: downloaded, total: total}, anim)
+}
+
+// renderProgressFrameWith 渲染一帧完整的进度行（含分P游标与续传提示）——生产路径用它；
+// renderProgressFrame 保留给只关心数字与条形的既有调用点（行为逐字不变）。
+func renderProgressFrameWith(f progressFrame, anim byte) string {
+	return renderProgressFrameAt(util.TerminalWidth(), f, anim)
 }
 
 // renderProgressFrameAt 在 width 列的终端里渲染一帧：整帧（含行首缩进）不超过 width。
@@ -300,28 +325,28 @@ func progressFrameText(width int, f progressFrame, anim byte) string {
 	variants := progressInfoVariants(f)
 	// 第一轮：保住 28 列缩进（与日志前缀对齐），按优先级裁统计区。
 	for _, info := range variants {
-		if bar := width - util.LogIndentWidth - progressOverhead - DisplayWidth(info); bar >= progressMinBlocks {
+		if bar := width - util.LogIndentWidth - f.prefixWidth() - progressOverhead - DisplayWidth(info); bar >= progressMinBlocks {
 			return formatProgressFrame(util.LogIndentWidth, min(bar, progressBlocks), f, info, anim)
 		}
 	}
 	// 第二轮：缩进是装饰、信息不是——把缩进让出去再走一遍同样的优先级，
 	// 能保住多少统计区就保住多少（40 列终端上就是靠这一轮留住速率）。
 	for _, info := range variants {
-		indent := width - progressOverhead - progressMinBlocks - DisplayWidth(info)
+		indent := width - f.prefixWidth() - progressOverhead - progressMinBlocks - DisplayWidth(info)
 		if indent < 0 {
 			continue
 		}
 		if indent > util.LogIndentWidth {
 			indent = util.LogIndentWidth
 		}
-		bar := min(width-indent-progressOverhead-DisplayWidth(info), progressBlocks)
+		bar := min(width-indent-f.prefixWidth()-progressOverhead-DisplayWidth(info), progressBlocks)
 		return formatProgressFrame(indent, bar, f, info, anim)
 	}
 	// 第三轮：连「统计区 + 10 格进度条 + 缩进 0」都放不下（宽度 < 20 的极端终端）：
 	// 条压到下限、统计区截断到放得下为止——「整帧 ≤ 终端宽度」是硬约束。
 	info := variants[len(variants)-1]
-	bar := max(1, min(width-progressOverhead-DisplayWidth(info), progressMinBlocks))
-	if room := width - progressOverhead - bar; room < DisplayWidth(info) {
+	bar := max(1, min(width-f.prefixWidth()-progressOverhead-DisplayWidth(info), progressMinBlocks))
+	if room := width - f.prefixWidth() - progressOverhead - bar; room < DisplayWidth(info) {
 		info = ellipsizeDisplay(info, room)
 	}
 	return formatProgressFrame(0, bar, f, info, anim)
@@ -337,15 +362,21 @@ func formatProgressFrame(indent, bar int, f progressFrame, info string, anim byt
 		filled = bar
 	}
 	barText := strings.Repeat("#", filled) + strings.Repeat("-", bar-filled)
-	return fmt.Sprintf("%s[%s] %c%s", strings.Repeat(" ", indent), barText, anim, info)
+	cursor := ""
+	if f.cursor != "" {
+		// 分P游标顶在最前面（BBDownT 口径："P1/8 [####] ..."），单P任务整段不出现。
+		cursor = f.cursor + " "
+	}
+	return fmt.Sprintf("%s%s[%s] %c%s", strings.Repeat(" ", indent), cursor, barText, anim, info)
 }
 
 // progressInfoOrder 是信息段里各字段的渲染顺序（也是阅读顺序）。
-var progressInfoOrder = []string{"percent", "speed", "eta", "amounts"}
+var progressInfoOrder = []string{"percent", "speed", "eta", "amounts", "resumed"}
 
 // progressInfoDropOrder 是宽度不足时统计区的裁剪顺序（见 renderProgressFrameAt）：
-// ETA → 总量 x/y → 速率。百分比永不裁（没有它这一行就不叫进度条了）。
-var progressInfoDropOrder = []string{"eta", "amounts", "speed"}
+// 续传提示 → ETA → 总量 x/y → 速率。百分比永不裁（没有它这一行就不叫进度条了）；
+// 续传提示最先裁：它是「从哪继续」的一次性信息，宽度紧张时最不重要。
+var progressInfoDropOrder = []string{"resumed", "eta", "amounts", "speed"}
 
 // progressInfoParts 把一帧的统计区拆成「字段名 → 文本」，只含这一帧真正有的字段。
 //
@@ -368,6 +399,10 @@ func progressInfoParts(f progressFrame) map[string]string {
 	}
 	if f.total > 0 {
 		parts["amounts"] = " " + formatTransferAmounts(f.downloaded, f.total)
+	}
+	if f.resumeBase > 0 {
+		// 断点续传：告诉用户这一份不是从头下的（否则 40% 起步会显得莫名其妙）。
+		parts["resumed"] = " 已续传 " + util.FormatFileSize(float64(f.resumeBase))
 	}
 	return parts
 }

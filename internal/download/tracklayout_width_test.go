@@ -143,13 +143,14 @@ func TestTrackListFitsTerminalWidthAcrossWidths(t *testing.T) {
 	}
 }
 
-// TestTrackHeaderMatchesDataColumns 表头与数据行必须共用同一套列宽（单一来源）：
-// 左对齐列（清晰度/分辨率）、右对齐列（帧率/码率/体积）的列位置都要严格对上，
-// 否则表头就是在误导用户。
+// TestTrackHeaderAndDataShareTheColumnSet 取代旧的「表头与数据列位严格对齐」判据（有意偏离）：
+// 新口径下单元格自带方括号且不补空格（见 TestTrackCellsAreBracketedWithoutPadding），
+// 不同行的同名列宽度本来就不同，因此**没有**可对齐的列位。这条用例改钉「单一来源」的
+// 另一半：表头与数据行取同一套列——同一档宽度下两者的格数相同，表头标签原样出现、
+// 括号内侧没有补出来的空格。
 //
-// 变异验证：把 headerLines 改成自己拼一套宽度（例如 fmt.Sprintf("%-12s")）→ 中文标签的
-// 显示宽度差 2 列，本用例的列位置断言变红。
-func TestTrackHeaderMatchesDataColumns(t *testing.T) {
+// 变异验证：让 headerLines 自己拼一套列（少一列或多一列）→ 格数断言红。
+func TestTrackHeaderAndDataShareTheColumnSet(t *testing.T) {
 	for _, width := range []int{60, 80, 120, 200} {
 		t.Run(fmt.Sprintf("%d列", width), func(t *testing.T) {
 			withTerminalWidth(t, width)
@@ -158,20 +159,12 @@ func TestTrackHeaderMatchesDataColumns(t *testing.T) {
 			header := sectionHeader(t, lines, "清晰度")
 			row := dataRow(t, lines, "1920x1080")
 
-			// 左对齐列：标签与值的起始显示列相同。
-			for _, pair := range [][2]string{{"清晰度", "1080P 高清"}, {"分辨率", "1920x1080"}} {
-				if strings.Contains(header, pair[0]) && strings.Contains(row, pair[1]) {
-					if c1, c2 := displayColumn(t, header, pair[0]), displayColumn(t, row, pair[1]); c1 != c2 {
-						t.Errorf("%d 列：%q 在第 %d 列、%q 在第 %d 列：\n%s\n%s", width, pair[0], c1, pair[1], c2, header, row)
-					}
-				}
+			if a, b := strings.Count(header, "["), strings.Count(row, "["); a != b {
+				t.Errorf("%d 列：表头 %d 格、数据行 %d 格——两者必须取同一套列：\n%s\n%s", width, a, b, header, row)
 			}
-			// 右对齐列：标签与值的右边缘显示列相同。
-			for _, pair := range [][2]string{{"帧率", "30.000"}, {"码率", "3000 kbps"}, {"体积", "~36.62 MB"}} {
-				if strings.Contains(header, pair[0]) && strings.Contains(row, pair[1]) {
-					if c1, c2 := displayColumnEnd(t, header, pair[0]), displayColumnEnd(t, row, pair[1]); c1 != c2 {
-						t.Errorf("%d 列：%q 右边缘在第 %d 列、%q 在第 %d 列：\n%s\n%s", width, pair[0], c1, pair[1], c2, header, row)
-					}
+			for _, line := range []string{header, row} {
+				if strings.Contains(line, "[ ") || strings.Contains(line, " ]") {
+					t.Errorf("%d 列：括号内侧有补出来的空格（新口径不补空格）：%q", width, line)
 				}
 			}
 		})

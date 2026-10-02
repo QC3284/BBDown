@@ -41,6 +41,9 @@ type DownloadConfig struct {
 	// backup_url。首个 404 或连接失败就换下一个候选，而不是对同一个死地址重试满 retryCount
 	// 次（本仓有意差异，见 §4.33）。地址来源全部数据驱动，没有新增 CLI 开关。
 	FallbackURLs []string
+	// ProgressCursor 是进度行行首的分P游标（如 "P1/8"）：编排层知道「第几P/共几P」，
+	// 下载层只负责渲染；空串 = 单P任务，行首不显示游标段（默认值，行为与改前一致）。
+	ProgressCursor string
 }
 
 // httpStatusError 携带 HTTP 状态码：回退原地址只针对 404，字符串匹配既脆又会被脱敏后的
@@ -598,6 +601,7 @@ func singleDownload(ctx context.Context, url, destPath string, pr probeResult, c
 			}
 			pr2 := newProgressReader(guard, remaining, observer)
 			pr2.base = offset
+			pr2.cursor = cfg.ProgressCursor
 			defer pr2.Close()
 			_, err = io.Copy(out, pr2)
 			return err
@@ -735,7 +739,8 @@ func multiThreadDownload(ctx context.Context, url, destPath string, size int64, 
 
 	progressDone := make(chan struct{})
 	progressStopped := make(chan struct{})
-	go renderProgressBar(&totalBytes, size, pacer, progressDone, progressStopped, observer)
+	// 分P游标由编排层经 DownloadConfig 传入；聚合路径与单线程路径同一口径。
+	go renderProgressBar(&totalBytes, size, cfg.ProgressCursor, pacer, progressDone, progressStopped, observer)
 
 	sem := make(chan struct{}, maxConcurrentClips())
 	var wg sync.WaitGroup
@@ -964,7 +969,8 @@ func downloadRange(ctx context.Context, url, destPath string, clip clipRange, ex
 }
 
 // renderProgressBar 是给测试留的接缝：替换它即可在不依赖真实终端的前提下断言
-// 「进度行收尾之后才允许打日志」的时序。observer 为 nil 表示没装进度观察者。
+// 「进度行收尾之后才允许打日志」的时序。observer 为 nil 表示没装进度观察者；
+// cursor 是分P游标（空串 = 单P），见 DownloadConfig.ProgressCursor。
 var renderProgressBar = renderAggregateProgress
 
 // renderAggregateProgress 画多线程下载的聚合进度行，并把帧交给观察者。
@@ -979,7 +985,7 @@ var renderProgressBar = renderAggregateProgress
 //
 // 返回前关闭 stopped：调用方据此保证「进度行已擦干净」先于后续日志（上游用 using
 // 作用域表达同一件事——ProgressBar 的 Dispose 必须在合并日志之前完成）。
-func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressPacer, done <-chan struct{}, stopped chan<- struct{}, observer func(ProgressEvent)) {
+func renderAggregateProgress(counter *atomic.Int64, total int64, cursor string, pacer progressPacer, done <-chan struct{}, stopped chan<- struct{}, observer func(ProgressEvent)) {
 	defer close(stopped)
 
 	// notify 把一帧交给观察者；nil 时立刻返回（未装观察者 = 不进回调路径）。
@@ -1025,7 +1031,12 @@ func renderAggregateProgress(counter *atomic.Int64, total int64, pacer progressP
 			lastBytes = cur
 			lastTime = now
 		}
-		line.draw(renderProgressFrame(cur, total, speedBps, progressChars[animIdx%len(progressChars)]))
+		line.draw(renderProgressFrameWith(progressFrame{
+			speedBps:   speedBps,
+			downloaded: cur,
+			total:      total,
+			cursor:     cursor,
+		}, progressChars[animIdx%len(progressChars)]))
 		animIdx++
 		// 同一帧、画完之后回调（数字已复制成值，不持任何锁）。
 		notify(cur, speedBps)

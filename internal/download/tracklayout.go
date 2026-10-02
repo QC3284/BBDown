@@ -2,6 +2,7 @@ package download
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/QC3284/BBDown/internal/entity"
@@ -29,6 +30,8 @@ import (
 //  3. 最后才折行，续行悬挂缩进对齐到第一列数据（见 layoutCells）。
 
 const (
+	// 方括号（BBDownT 口径：每个字段一格 [值]）不单列宽度预算——由 layoutCells 的行级预算兜底
+	// （20..300 列全宽度扫描 0 超宽，五档列集合用例钉住）。
 	trackPrefixWidth = 7  // 行首：序号 "0."，或选中轨道的标签 "[视频]"/"[音频]"（6 列 + 1 空格）
 	trackNameWidth   = 12 // 清晰度（视频）/ 编码名（音频）；QualityMap 里最长是 "1080P 高帧率"（12 列）
 	trackResWidth    = 10 // 分辨率
@@ -44,12 +47,15 @@ const (
 	trackSizeWidth   = 11 // 体积，右对齐
 )
 
-// trackColumnSep 是列间分隔（两个空格）。所有行共用同一个分隔，右对齐列才有稳定的右边缘。
-const trackColumnSep = "  "
+// trackColumnSep 是列间分隔（**一个**空格；BBDownT 口径：[a] [b] [c]）。
+//
+// 为什么从 2 个空格改成 1 个：单元格自带方括号，方括号本身就是视觉分隔；两个空格会把
+// 清单撑得过宽（六列多出 5 列），而 BBDownT 的形态就是一个空格。
+const trackColumnSep = " "
 
 // trackColumnSepWidth 是列间距的显示宽度（= DisplayWidth(trackColumnSep)）：
 // 宽度预算里每列都要算上它，写成常量免得每行再算一次。
-const trackColumnSepWidth = 2
+const trackColumnSepWidth = 1
 
 // 列标识：行与表头按它取单元格。
 const (
@@ -76,12 +82,15 @@ type trackColumn struct {
 	// 依据是「这一列没了还能不能选流」：体积只是参考值；帧率/编码影响播放兼容性；
 	// 分辨率与清晰度重复度高；清晰度与码率是选流的主判据，永不丢。
 	drop int
+	// bare 表示这一列**不加方括号**：只有行首列用它。BBDownT 口径里序号是 "0."（裸的），
+	// 而选中行的行首是调用方已经写好的 "[视频]"/"[音频]"——再包一层会变成 "[[视频]]"。
+	bare bool
 }
 
 // videoTrackColumns 是清单的列集合（音频段共用同一套几何：分辨率/编码/帧率三列留空占位，
 // 码率与体积因此仍落在视频段的同一列上）。
 var videoTrackColumns = []trackColumn{
-	{key: colPrefix, width: trackPrefixWidth, maxWidth: trackPrefixWidth, minWidth: 6},
+	{key: colPrefix, width: trackPrefixWidth, maxWidth: trackPrefixWidth, minWidth: 6, bare: true},
 	{key: colName, width: trackNameWidth, maxWidth: trackNameWidth, minWidth: 6},
 	{key: colRes, width: trackResWidth, maxWidth: trackResWidth, minWidth: 6, drop: 4},
 	{key: colCodecs, width: trackCodecsWidth, maxWidth: trackCodecsWidth, minWidth: 4, drop: 3},
@@ -137,6 +146,10 @@ func newTrackPlan(width int) trackPlan {
 // minTrackContent 是缩进之后至少要留给数据的显示列数：正好够
 // 「清晰度 + 分辨率 + 编码 + 码率」四列（体积与帧率是优先级最高、最先被省掉的两列）。
 // 见 tracklayout_width_test.go 里钉住这个配对关系的用例。
+//
+// 数值 54 = 「清晰度 + 分辨率 + 编码 + 码率」四列的宽预算（7+12+10+7+10 列 + 4 个列间距）。
+// 本次把单元格改成 [值] 形态、间距收到 1 列，但这个阈值**保持不动**：它决定的是缩进回收的
+// 时机，与单元格外观无关；跟着观感一起漂移会让 40/60/80 三档的省列结果无故变化。
 const minTrackContent = 54
 
 // trackIndentFor 计算清单行的行首缩进。
@@ -218,34 +231,83 @@ type trackCell struct {
 	sep  int
 }
 
-// videoCells 把一条视频流摊成单元格。
+// videoCells 把一条视频流摊成单元格（BBDownT 口径：每个字段一格，见 tracklayout.go 顶部）。
+//
+// 码率**不是**接口声明的 bandwidth，而是由显示体积反推的平均码率（带 ~）：同一行的体积与
+// 码率因此永远自洽——声明值与实际内容不符时（B 站的 bandwidth 是档位标称值），用户看到的是
+// 这一份文件真正要下多少。体积**不带 ~**（对齐 BBDownT：估算值也照显）。
 func videoCells(prefix string, v entity.Video, pageDur int) trackCells {
 	dur := trackDur(pageDur, v.Dur)
-	size := v.Size
-	if size <= 0 {
-		// 播放接口不给 size 时按 时长 × 码率 估算（码率是 kbps，这里沿用上游的 1024）。
-		size = float64(dur) * float64(v.Bandwidth) * 1024 / 8
-	}
+	size := videoTrackSize(v, dur)
 	return trackCells{
 		colPrefix: prefix,
 		colName:   v.Dfn,
 		colRes:    v.Res,
 		colCodecs: v.Codecs,
 		colFPS:    v.FPS,
-		colKbps:   fmt.Sprintf("%d kbps", v.Bandwidth),
-		colSize:   "~" + util.FormatFileSize(size),
+		colKbps:   trackKbpsCell(size, dur, v.Bandwidth),
+		colSize:   trackSizeCell(size),
 	}
+}
+
+// videoTrackSize 是视频轨的显示体积：接口给了 size 就用它，否则按时长 × 声明码率估算。
+//
+// 估算用 **1000** 换算（kbps → 字节 = dur × kbps × 1000 / 8），与 trackKbps 互为逆运算：
+// 估算行上反推出来的码率恰好等于声明值（132 kbps 的行就显示 ~132 kbps）。此前沿用上游的
+// 1024，会让同一行自相矛盾（声明 132、反推 135）——这是本次有意偏离上游 Display.cs 的一处。
+func videoTrackSize(v entity.Video, dur int) float64 {
+	if v.Size > 0 {
+		return v.Size
+	}
+	return trackSizeEstimate(dur, v.Bandwidth)
+}
+
+// trackSizeEstimate 是「接口没给 size」时的体积估算：时长 × 码率(kbps) × 1000 / 8。
+func trackSizeEstimate(dur int, bandwidth int64) float64 {
+	if dur <= 0 || bandwidth <= 0 {
+		return 0
+	}
+	return float64(dur) * float64(bandwidth) * 1000 / 8
+}
+
+// trackKbps 由显示体积反推平均码率（kbps，四舍五入到整数）。dur<=0（拿不到时长）时无法
+// 反推，退回接口声明的 bandwidth——这是唯一一处使用声明值的分支，且只在信息不全时生效。
+func trackKbps(sizeBytes float64, dur int, declared int64) int64 {
+	if dur <= 0 || sizeBytes <= 0 {
+		return declared
+	}
+	return int64(math.Round(sizeBytes * 8 / float64(dur) / 1000))
+}
+
+// trackKbpsCell / trackSizeCell 把数值渲染成单元格；拿不到（<=0）就整格省略，
+// 免得打出 [~0 kbps] / [0 B] 这种噪声。
+func trackKbpsCell(sizeBytes float64, dur int, declared int64) string {
+	kbps := trackKbps(sizeBytes, dur, declared)
+	if kbps <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("~%d kbps", kbps)
+}
+
+func trackSizeCell(sizeBytes float64) string {
+	if sizeBytes <= 0 {
+		return ""
+	}
+	return util.FormatFileSize(sizeBytes)
 }
 
 // audioCells 把一条音频流摊成单元格。音频没有分辨率/编码/帧率三列，
 // 编码名（mp4a.40.2 等）落在「清晰度」列；其余列留空以便与视频行对齐。
 func audioCells(prefix string, a entity.Audio, pageDur int) trackCells {
 	dur := trackDur(pageDur, a.Dur)
+	// 音频没有真实 size（entity.Audio 不带该字段），一律估算；估算与反推互为逆运算，
+	// 所以音频行显示的码率恰好是接口声明的档位值。
+	size := trackSizeEstimate(dur, a.Bandwidth)
 	return trackCells{
 		colPrefix: prefix,
 		colName:   a.Codecs,
-		colKbps:   fmt.Sprintf("%d kbps", a.Bandwidth),
-		colSize:   "~" + util.FormatFileSize(float64(dur)*float64(a.Bandwidth)*1024/8),
+		colKbps:   trackKbpsCell(size, dur, a.Bandwidth),
+		colSize:   trackSizeCell(size),
 	}
 }
 
@@ -336,6 +398,9 @@ func (p trackPlan) layoutCells(cells []trackCell) []planLine {
 	col := indent
 	first := true
 	for _, c := range cells {
+		if c.text == "" {
+			continue // 空单元格（该列这条轨道没有值）整格省略，分隔符也不占
+		}
 		sep := 0
 		if !first {
 			sep = c.sep
@@ -372,22 +437,22 @@ func (p trackPlan) layoutCells(cells []trackCell) []planLine {
 // 让它溢出（整行跟着变宽），保留这个行为比截成 "30000…" 有用得多；宽度预算按 maxWidth 算，
 // 溢出因此仍在终端宽度之内。
 func fitTrackCell(s string, col trackColumn) string {
-	w := DisplayWidth(s)
+	if s == "" {
+		return "" // 空单元格整格省略：不占位、不写 []（音频行因此不再有空白占位列）
+	}
+	// 截断上限取列的 maxWidth（内容宽度；方括号另计）。单元格不再补空格：BBDownT 口径里
+	// 每个字段自带方括号，窄的列不该被空格撑开（对齐不再由填充提供，见 layoutCells）。
 	limit := col.maxWidth
 	if limit < col.width {
 		limit = col.width
 	}
-	if w > limit {
+	if DisplayWidth(s) > limit {
 		s = ellipsizeDisplay(s, limit)
-		w = DisplayWidth(s)
 	}
-	if w >= col.width {
+	if col.bare {
 		return s
 	}
-	if col.right {
-		return strings.Repeat(" ", col.width-w) + s
-	}
-	return s + strings.Repeat(" ", col.width-w)
+	return "[" + s + "]"
 }
 
 // truncateDisplay 按显示宽度截断字符串（不追加省略号），截断点不会切开多字节字符。

@@ -99,7 +99,7 @@ var serveCmd = &cobra.Command{
 		ctx := commandContext(cmd)
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.13.0")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.15.0")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {

@@ -7,35 +7,85 @@
 <title>BBDown serve</title>
 <link rel="icon" href="data:,">
 <style>
+/* 单文件、无外链、深色优先（t8 重设计）：不引 CDN / 框架 / 远程字体 / 图片，离线可用。 */
 :root{
-  color-scheme:light dark;
-  --fg:#1f2328;--muted:#6b7280;--bg:#fff;--card:#fff;--line:#e5e7eb;
-  --accent:#2563eb;--ok:#16a34a;--bad:#dc2626;--track:#eef1f4;
+  color-scheme:dark;
+  --bg:#0e1014;--card:#161a22;--card2:#1c2230;--line:#262d3b;--fg:#e6e9ef;
+  --muted:#8a93a5;--accent:#3b82f6;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
+  --track:#232a37;--chip:#202737;
 }
-@media (prefers-color-scheme:dark){
-  :root{--fg:#e6e6e6;--muted:#9aa0a6;--bg:#0f1115;--card:#151922;--line:#2a2f3a;
-        --accent:#60a5fa;--ok:#4ade80;--bad:#f87171;--track:#232833}
+@media (prefers-color-scheme:light){
+  :root{
+    color-scheme:light;
+    --bg:#f4f6f9;--card:#ffffff;--card2:#f7f9fc;--line:#e3e8ef;--fg:#1b2230;
+    --muted:#5b6472;--accent:#2563eb;--ok:#16a34a;--bad:#dc2626;
+    --warn:#b45309;--track:#e8edf4;--chip:#eef2f8;
+  }
 }
 *{box-sizing:border-box}
-body{margin:0;padding:24px 16px;background:var(--bg);color:var(--fg);
-     font:14px/1.55 system-ui,-apple-system,"Segoe UI","Noto Sans CJK SC",sans-serif}
-main{max-width:720px;margin:0 auto}
-header{display:flex;align-items:baseline;justify-content:space-between;margin:0 0 16px}
-h1{margin:0;font-size:15px;font-weight:600}
-#conn{font-size:12px;color:var(--muted)}
-#conn.live{color:var(--ok)}
-#conn.down{color:var(--bad)}
-section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
-#empty{color:var(--muted)}
-#task-title{font-weight:600;word-break:break-all}
-#task-meta{margin-top:4px;font-size:12px;color:var(--muted);word-break:break-all}
-#track{height:8px;margin:14px 0 10px;background:var(--track);border-radius:5px;overflow:hidden}
-#progress{display:block;height:100%;width:0;background:var(--accent)}
-#track.unknown #progress{width:100%;opacity:.25}
-#stats{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:12px;color:var(--muted);
-       font-variant-numeric:tabular-nums}
-#stats b{color:var(--fg);font-weight:600}
-ul#events{list-style:none;margin:0;padding:0;max-height:300px;overflow-y:auto;font-size:12px}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);
+  font:14px/1.55 system-ui,-apple-system,"Segoe UI","Noto Sans CJK SC",sans-serif}
+#app{display:grid;grid-template-columns:320px minmax(0,1fr);gap:16px;
+  max-width:1240px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+h1{font-size:15px;margin:0}
+h2{font-size:15px;margin:0 0 10px}
+h3{font-size:13px;margin:14px 0 6px;color:var(--muted);font-weight:600}
+
+/* ---- 左栏：任务列表 ---- */
+#sidebar{display:flex;flex-direction:column;gap:10px;min-width:0}
+.side-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.conn{font-size:12px;color:var(--muted)}
+.conn.live{color:var(--ok)}
+.conn.down{color:var(--bad)}
+.task-list{display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:62vh}
+.task{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:10px;color:inherit;font:inherit;cursor:pointer}
+.task:hover{border-color:var(--accent)}
+.task.selected{border-color:var(--accent);background:var(--card2)}
+.task-top{display:flex;align-items:center;gap:8px}
+.task-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.task-sub{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted);margin-top:4px}
+.mini{height:4px;background:var(--track);border-radius:3px;margin-top:8px;overflow:hidden}
+.mini i{display:block;height:100%;width:0;background:var(--accent)}
+.dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:var(--muted);display:inline-block}
+.dot.queued{background:#6b7280}
+.dot.running{background:var(--accent)}
+.dot.ok{background:var(--ok)}
+.dot.bad{background:var(--bad)}
+.empty{color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;color:var(--muted);
+  border-top:1px solid var(--line);padding-top:10px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+
+/* ---- 右栏：详情卡 ---- */
+#main{display:flex;flex-direction:column;gap:16px;min-width:0}
+.detail-head{display:flex;align-items:center;gap:8px}
+.detail-head h2{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin:0}
+.status{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
+.meta{font-size:12px;color:var(--muted);margin-top:6px;word-break:break-all}
+.track{height:10px;background:var(--track);border-radius:6px;margin:14px 0 4px;overflow:hidden}
+.track i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+.track.unknown i{width:100%;opacity:.22}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:10px;margin:14px 0 0}
+.stats div{background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:8px 10px}
+.stats span{display:block;font-size:11px;color:var(--muted)}
+.stats b{font-size:15px;font-variant-numeric:tabular-nums}
+.spark{margin-top:14px}
+.spark-head{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+.spark svg{width:100%;height:56px;display:block;background:var(--card2);
+  border:1px solid var(--line);border-radius:9px;margin-top:6px}
+#spark-line{fill:none;stroke:var(--accent);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.spark-grid{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+.actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:14px}
+button{background:var(--chip);color:var(--fg);border:1px solid var(--line);border-radius:8px;
+  padding:6px 12px;font:inherit;cursor:pointer}
+button:hover:not(:disabled){border-color:var(--accent)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{border-color:var(--bad);color:var(--bad)}
+.note{font-size:12px;color:var(--muted)}
+ul#events{list-style:none;margin:0;padding:0;max-height:220px;overflow-y:auto;font-size:12px}
 ul#events li{display:flex;gap:10px;padding:5px 0;border-top:1px solid var(--line)}
 ul#events li:first-child{border-top:0}
 ul#events time{color:var(--muted);font-variant-numeric:tabular-nums}
@@ -43,51 +93,224 @@ ul#events .what{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis
 ul#events .num{color:var(--muted);font-variant-numeric:tabular-nums}
 .done{color:var(--ok)}
 .failed{color:var(--bad)}
-#events-empty{font-size:12px;color:var(--muted)}
-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+
+/* ---- 表单 ---- */
+fieldset{border:1px solid var(--line);border-radius:10px;margin:12px 0;padding:10px 12px}
+legend{font-size:12px;color:var(--muted);padding:0 6px}
+label{font-size:12px;color:var(--muted)}
+input[type=text],input[type=url],select,textarea{width:100%;background:var(--card2);color:var(--fg);
+  border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:inherit}
+input:focus,select:focus{outline:1px solid var(--accent)}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:10px}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.toggles{display:flex;flex-wrap:wrap;gap:10px 18px}
+.toggle{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--fg);cursor:pointer}
+.form-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
+.form-msg{font-size:12px;margin:10px 0 0;color:var(--muted);word-break:break-all}
+.form-msg.bad{color:var(--bad)}
+.form-msg.ok{color:var(--ok)}
+.hint{font-size:12px;color:var(--muted);margin:8px 0 0}
+noscript{display:block;padding:12px;color:var(--warn)}
+
+/* ---- 响应式：窄屏降级为单列 ---- */
+@media (max-width:900px){
+  #app{grid-template-columns:minmax(0,1fr)}
+  .task-list{max-height:38vh}
+}
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>BBDown serve</h1>
-    <span id="conn">连接中…</span>
-  </header>
-
-  <section>
-    <div id="empty">当前没有任务。用 <code>POST /add-task</code> 添加一个下载任务。</div>
-    <div id="task" hidden>
-      <div id="task-title">—</div>
-      <div id="task-meta">—</div>
-      <div id="track"><i id="progress"></i></div>
-      <div id="stats">
-        <span>进度 <b id="percent">—</b></span>
-        <span>已下载 <b id="downloaded">—</b></span>
-        <span>总量 <b id="total">—</b></span>
-        <span>速率 <b id="speed">—</b></span>
-        <span>剩余 <b id="eta">—</b></span>
-      </div>
+<div id="app">
+  <aside id="sidebar">
+    <div class="side-head">
+      <h1>BBDown serve</h1>
+      <span id="conn" class="conn">连接中…</span>
     </div>
-  </section>
+    <div id="task-list" class="task-list"></div>
+    <div id="empty" class="empty">当前没有任务。用右侧表单添加一个下载任务。</div>
+    <div class="legend">
+      <span><i class="dot queued"></i>排队</span>
+      <span><i class="dot running"></i>运行</span>
+      <span><i class="dot ok"></i>完成</span>
+      <span><i class="dot bad"></i>失败</span>
+      <span>并发上限由 --max-concurrent 决定</span>
+    </div>
+  </aside>
 
-  <section>
-    <ul id="events"></ul>
-    <div id="events-empty">暂无事件</div>
-  </section>
-</main>
+  <main id="main">
+    <noscript>这个页面需要 JavaScript 才能订阅 /events 进度流。</noscript>
+
+    <section id="detail" class="card" hidden>
+      <div class="detail-head">
+        <i id="detail-dot" class="dot"></i>
+        <h2 id="task-title">—</h2>
+        <span id="detail-status" class="status">—</span>
+      </div>
+      <div id="task-meta" class="meta">—</div>
+      <div id="track" class="track"><i id="progress"></i></div>
+      <div class="stats">
+        <div><span>进度</span><b id="percent">—</b></div>
+        <div><span>已下载</span><b id="downloaded">—</b></div>
+        <div><span>总量</span><b id="total">—</b></div>
+        <div><span>速率</span><b id="speed">—</b></div>
+        <div><span>剩余</span><b id="eta">—</b></div>
+      </div>
+
+      <div class="spark">
+        <div class="spark-head"><span>速率曲线（MB/s）</span><b id="spark-max">—</b></div>
+        <svg id="spark" viewBox="0 0 240 48" preserveAspectRatio="none" role="img" aria-label="速率曲线">
+          <line class="spark-grid" x1="0" y1="12" x2="240" y2="12"></line>
+          <line class="spark-grid" x1="0" y1="24" x2="240" y2="24"></line>
+          <line class="spark-grid" x1="0" y1="36" x2="240" y2="36"></line>
+          <polyline id="spark-line" points=""></polyline>
+        </svg>
+      </div>
+
+      <div class="actions">
+        <button id="btn-cancel" type="button">取消</button>
+        <button id="btn-retry" type="button">重试</button>
+        <button id="btn-remove" type="button" class="danger">移除</button>
+        <button id="btn-pause" type="button" disabled title="API 暂不支持">暂停（API 暂不支持）</button>
+        <span id="action-note" class="note"></span>
+      </div>
+
+      <h3>事件流</h3>
+      <ul id="events"></ul>
+      <div id="events-empty" class="empty">暂无事件</div>
+    </section>
+
+    <section id="detail-empty" class="card empty">左侧选择一个任务查看详情。</section>
+
+    <section class="card" id="add-card">
+      <h2>新增任务</h2>
+      <form id="add-form" autocomplete="off">
+        <div class="field">
+          <label for="f-url">视频 / 番剧 / 课程 / 直播 URL</label>
+          <input id="f-url" type="text" data-field="url" placeholder="https://www.bilibili.com/video/BV1xx411c7mD">
+        </div>
+        <p class="hint">提交到 POST /add-task。字段名与 serve 的 /add-task 白名单逐字一致；
+          与服务端默认值相同的开关**不发送**（未传 = 用服务端默认，后端用指针字段区分「未传」与 false）。</p>
+
+        <fieldset>
+          <legend>下载选项</legend>
+          <div class="toggles" id="toggle-group">
+            <label class="toggle"><input type="checkbox" data-field="multi_thread" data-default="true">多线程下载</label>
+            <label class="toggle"><input type="checkbox" data-field="overwrite" data-default="false">覆盖已存在文件</label>
+            <label class="toggle"><input type="checkbox" data-field="skip_mux" data-default="false">跳过混流</label>
+            <label class="toggle"><input type="checkbox" data-field="skip_ai" data-default="true">跳过 AI 字幕</label>
+            <label class="toggle"><input type="checkbox" data-field="write_nfo" data-default="false">写 NFO</label>
+            <label class="toggle"><input type="checkbox" data-field="compat" data-default="false">兼容模式</label>
+          </div>
+        </fieldset>
+
+        <div class="row">
+          <div class="field">
+            <label for="f-select-page">分P选择 select_page</label>
+            <input id="f-select-page" type="text" data-field="select_page" placeholder="留空 = 全部分P（支持 1-3,5）">
+          </div>
+          <div class="field">
+            <label for="f-dfn">画质优先级 dfn_priority</label>
+            <input id="f-dfn" type="text" data-field="dfn_priority" placeholder="留空 = 默认（如 8K 4K 1080P 高码率）">
+          </div>
+          <div class="field">
+            <label for="f-encoding">编码优先级 encoding_priority</label>
+            <input id="f-encoding" type="text" data-field="encoding_priority" placeholder="留空 = 默认（如 av1 hevc avc）">
+          </div>
+          <div class="field">
+            <label for="f-language">音频语言 language</label>
+            <select id="f-language" data-field="language">
+              <option value="">默认（不传）</option>
+              <option value="zh-CN">zh-CN</option>
+              <option value="ai-zh">ai-zh</option>
+              <option value="jpn">jpn</option>
+              <option value="eng">eng</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-workdir">工作目录 work_dir</label>
+            <input id="f-workdir" type="text" data-field="work_dir" placeholder="留空 = 服务端工作目录">
+          </div>
+        </div>
+
+        <fieldset>
+          <legend>解析接口（默认 = 不传该字段）</legend>
+          <div class="row">
+            <div class="field">
+              <label for="f-app">use_app_api</label>
+              <select id="f-app" data-field="use_app_api">
+                <option value="">默认（不传）</option>
+                <option value="true">开启</option>
+                <option value="false">关闭</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="f-tv">use_tv_api</label>
+              <select id="f-tv" data-field="use_tv_api">
+                <option value="">默认（不传）</option>
+                <option value="true">开启</option>
+                <option value="false">关闭</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="f-intl">use_intl_api</label>
+              <select id="f-intl" data-field="use_intl_api">
+                <option value="">默认（不传）</option>
+                <option value="true">开启</option>
+                <option value="false">关闭</option>
+              </select>
+            </div>
+          </div>
+          <p class="hint">三个解析接口互斥，同一时刻只应开启一个。</p>
+        </fieldset>
+
+        <div class="form-actions">
+          <button id="add-submit" type="submit" class="primary">提交任务</button>
+          <button id="btn-save-preset" type="button">保存预设</button>
+          <button id="btn-reset-preset" type="button">重置默认</button>
+        </div>
+        <p id="form-msg" class="form-msg"></p>
+      </form>
+    </section>
+  </main>
+</div>
+
 <script>
 (function () {
   "use strict";
-  // 同一页面上的 EventSource 指向 /events；EventSource 不能自定义请求头，
-  // 所以配了 --serve-token 的部署从本页 URL 透传 ?token=。
-  var token = new URLSearchParams(location.search).get("token");
-  var url = "/events" + (token ? "?token=" + encodeURIComponent(token) : "");
-  var es = new EventSource(url);
+
+  // ------------------------------------------------------------------
+  // 安全纪律（XSS）：任务标题 / URL / aid / 错误文本都是**不可信**数据（由 B 站页面与
+  // 本地错误拼出）。全页面唯一的文本写入点是 setText()（textContent = 文本节点，不解析
+  // HTML），并且**不使用** innerHTML / outerHTML / insertAdjacentHTML / document.write /
+  // eval / new Function。列表项、详情、事件流、表单提示都必须经 setText 落字；需要写
+  // 属性的地方走 setAttr（属性值不会被当 HTML 解析）。
+  // webui_test.go 的 XSS 用例机械钉住这条纪律（改回 innerHTML 即变红）。
+  // ------------------------------------------------------------------
+  function setText(el, value) {
+    if (!el) { return; }
+    el.textContent = (value === null || value === undefined) ? "—" : String(value);
+  }
+  function setAttr(el, name, value) {
+    if (el) { el.setAttribute(name, String(value)); }
+  }
+  function clamp(n, lo, hi) {
+    n = Number(n);
+    if (!isFinite(n)) { return lo; }
+    return n < lo ? lo : (n > hi ? hi : n);
+  }
+
+  // token 透传：EventSource 不能自定义请求头，所以 /events 走 ?token=；
+  // fetch（/get-tasks、/add-task、/cancel、/remove-finished）走 X-Serve-Token 头。
+  var TOKEN = new URLSearchParams(location.search).get("token") || "";
 
   var conn = document.getElementById("conn");
+  var listBox = document.getElementById("task-list");
   var emptyBox = document.getElementById("empty");
-  var taskBox = document.getElementById("task");
+  var detail = document.getElementById("detail");
+  var detailEmpty = document.getElementById("detail-empty");
+  var detailDot = document.getElementById("detail-dot");
   var title = document.getElementById("task-title");
+  var statusChip = document.getElementById("detail-status");
   var meta = document.getElementById("task-meta");
   var track = document.getElementById("track");
   var bar = document.getElementById("progress");
@@ -96,16 +319,42 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
   var total = document.getElementById("total");
   var speed = document.getElementById("speed");
   var eta = document.getElementById("eta");
-  var list = document.getElementById("events");
-  var listEmpty = document.getElementById("events-empty");
+  var sparkMax = document.getElementById("spark-max");
+  var sparkLine = document.getElementById("spark-line");
+  var events = document.getElementById("events");
+  var eventsEmpty = document.getElementById("events-empty");
+  var actionNote = document.getElementById("action-note");
+  var btnCancel = document.getElementById("btn-cancel");
+  var btnRetry = document.getElementById("btn-retry");
+  var btnRemove = document.getElementById("btn-remove");
+  var form = document.getElementById("add-form");
+  var formMsg = document.getElementById("form-msg");
 
-  var tasks = new Map();  // job_id -> 最近一条事件
-  var lastSeq = 0;        // 重连时服务端会回放历史，按 seq 去重
-  var MAX_ROWS = 12;
+  // 状态 → 文案 + 色点 class（排队灰 / 运行蓝 / 完成绿 / 失败红；取消归灰）。
+  var STATUS = {
+    Queued: { label: "排队中", cls: "queued" },
+    Running: { label: "下载中", cls: "running" },
+    Succeeded: { label: "已完成", cls: "ok" },
+    Failed: { label: "失败", cls: "bad" },
+    Cancelled: { label: "已取消", cls: "queued" }
+  };
+  function statusMeta(status) { return STATUS[status] || { label: status || "未知", cls: "queued" }; }
+  function isLive(status) { return status === "Queued" || status === "Running"; }
+
   var LABEL = { task_start: "开始", task_progress: "进度", task_done: "完成", task_failed: "失败" };
+  var MAX_ROWS = 12;          // 事件流保留行数
+  var SPARK_SAMPLES = 60;     // 速率曲线采样点
+  var FALLBACK_MS = 15000;    // /get-tasks 兜底刷新间隔（SSE 是主数据源）
+
+  var tasks = new Map();     // job_id -> 视图对象（最新一条事件 / 兜底快照）
+  var speeds = new Map();    // job_id -> [字节/秒 采样]
+  var submitted = new Map(); // job_id -> 本会话提交过的请求体（重试用它原样重发）
+  var lastSeq = 0;           // 重连回放去重
+  var selected = null;       // 当前选中的 job_id
 
   function fmtBytes(n) {
-    if (!n || n < 0) { return "—"; }
+    n = Number(n);
+    if (!isFinite(n) || n <= 0) { return "—"; }
     var units = ["B", "KB", "MB", "GB", "TB"], i = 0;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
     return (i === 0 ? n : n.toFixed(1)) + " " + units[i];
@@ -120,64 +369,361 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
   }
   function clock(ms) {
     var d = new Date(ms || Date.now());
-    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) +
-           ":" + ("0" + d.getSeconds()).slice(-2);
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2);
   }
-  function label(ev) { return ev.title || ev.url || ev.job_id || "—"; }
+  function label(ev) { return ev.title || ev.url || ev.aid || ev.job_id || "—"; }
 
-  function renderCurrent() {
-    var cur = null;
-    tasks.forEach(function (ev) {
-      if (ev.status !== "Queued" && ev.status !== "Running") { return; }
-      if (!cur || ev.seq > cur.seq) { cur = ev; }
+  function pushSpeed(jobId, bps) {
+    var arr = speeds.get(jobId) || [];
+    arr.push(bps);
+    while (arr.length > SPARK_SAMPLES) { arr.shift(); }
+    speeds.set(jobId, arr);
+  }
+
+  // ---- 数据合并：SSE 为主，/get-tasks 兜底 ----
+  function mergeEvent(ev) {
+    if (ev.seq && ev.seq <= lastSeq) { return false; }
+    if (ev.seq) { lastSeq = ev.seq; }
+    var cur = tasks.get(ev.job_id) || { job_id: ev.job_id };
+    for (var k in ev) { if (k === "__proto__") { continue; } if (ev[k] !== undefined && ev[k] !== "") { cur[k] = ev[k]; } }
+    tasks.set(ev.job_id, cur);
+    if (ev.speed > 0) { pushSpeed(ev.job_id, ev.speed); }
+    return true;
+  }
+
+  // 兜底快照（/get-tasks）：只补 SSE 没覆盖到的任务（断线期间新加的）与终态；实时字节仍以
+  // SSE 的逐文件帧为准（2.13.0 起 /get-tasks 与 SSE 同口径）。
+  function mergeSnapshot(t) {
+    if (!t || !t.JobId) { return false; }
+    var cur = tasks.get(t.JobId);
+    if (!cur) {
+      tasks.set(t.JobId, {
+        job_id: t.JobId, aid: t.Aid, url: t.Url, title: t.Title, error: t.ErrorMessage,
+        status: t.Status, percent: (t.Progress || 0) * 100, downloaded: t.TotalDownloadedBytes || 0,
+        total: 0, speed: 0, state: "", seq: 0, time: Date.now(), snapshot: true
+      });
+      return true;
+    }
+    if (isLive(cur.status) && !isLive(t.Status)) {   // 终态一定以快照为准
+      cur.status = t.Status;
+      cur.error = t.ErrorMessage || cur.error;
+      return true;
+    }
+    if (!cur.title && t.Title) { cur.title = t.Title; return true; }
+    return false;
+  }
+
+  // ---- 渲染：左栏任务列表 ----
+  function renderList() {
+    var ids = Array.from(tasks.keys());
+    emptyBox.hidden = ids.length > 0;
+    listBox.replaceChildren();
+    ids.sort(function (a, b) {
+      var ta = tasks.get(a), tb = tasks.get(b);
+      var live = (isLive(tb.status) ? 1 : 0) - (isLive(ta.status) ? 1 : 0);
+      if (live !== 0) { return live; }
+      return (tb.time || 0) - (ta.time || 0);
     });
-    if (!cur) { emptyBox.hidden = false; taskBox.hidden = true; return; }
-    emptyBox.hidden = true;
-    taskBox.hidden = false;
-    title.textContent = label(cur);
-    meta.textContent = (cur.status === "Queued" ? "排队中" : "下载中") + " · " + (cur.job_id || "");
-    var known = cur.total > 0;
-    track.className = known ? "" : "unknown";
-    bar.style.width = known ? Math.max(0, Math.min(100, cur.percent)) + "%" : "100%";
-    percent.textContent = known ? cur.percent.toFixed(1) + "%" : "未知";
-    downloaded.textContent = fmtBytes(cur.downloaded);
-    total.textContent = known ? fmtBytes(cur.total) : "未知";
-    speed.textContent = fmtSpeed(cur.speed);
-    eta.textContent = known && cur.speed > 0 ? fmtETA((cur.total - cur.downloaded) / cur.speed) : "—";
+    ids.forEach(function (id) {
+      var t = tasks.get(id), m = statusMeta(t.status), known = t.total > 0;
+      var item = document.createElement("button");
+      item.type = "button";
+      item.className = "task" + (id === selected ? " selected" : "");
+      setAttr(item, "data-job", id);
+
+      var top = document.createElement("div");
+      top.className = "task-top";
+      var dot = document.createElement("i");
+      dot.className = "dot " + m.cls;
+      var name = document.createElement("span");
+      name.className = "task-title";
+      setText(name, label(t));
+      top.appendChild(dot);
+      top.appendChild(name);
+
+      var sub = document.createElement("div");
+      sub.className = "task-sub";
+      var left = document.createElement("span");
+      setText(left, m.label);
+      var right = document.createElement("span");
+      setText(right, isLive(t.status)
+        ? (t.speed > 0 ? fmtSpeed(t.speed) : (known ? clamp(t.percent, 0, 100).toFixed(1) + "%" : "等待数据…"))
+        : (t.error ? "查看详情" : fmtBytes(t.downloaded)));
+      sub.appendChild(left);
+      sub.appendChild(right);
+
+      var mini = document.createElement("div");
+      mini.className = "mini";
+      var fill = document.createElement("i");
+      setAttr(fill, "style", "width:" + (known ? clamp(t.percent, 0, 100) : (isLive(t.status) ? 25 : 0)) + "%");
+      mini.appendChild(fill);
+
+      item.appendChild(top);
+      item.appendChild(sub);
+      item.appendChild(mini);
+      listBox.appendChild(item);
+    });
   }
 
+  // ---- 渲染：速率曲线（SVG 折线，自绘不引库）----
+  function renderSpark(t) {
+    var samples = speeds.get(t.job_id) || [];
+    if (samples.length < 2) { setAttr(sparkLine, "points", ""); setText(sparkMax, "—"); return; }
+    var max = 0;
+    samples.forEach(function (v) { if (v > max) { max = v; } });
+    if (max <= 0) { setAttr(sparkLine, "points", ""); setText(sparkMax, "—"); return; }
+    var n = samples.length, pts = [];
+    for (var i = 0; i < n; i++) {
+      var x = (i / (n - 1)) * 240;
+      var y = 46 - (samples[i] / max) * 42;
+      pts.push(x.toFixed(1) + "," + clamp(y, 2, 46).toFixed(1));
+    }
+    setAttr(sparkLine, "points", pts.join(" "));
+    setText(sparkMax, (max / 1048576).toFixed(1) + " MB/s");
+  }
+
+  // ---- 渲染：详情卡 ----
+  function renderDetail() {
+    var t = selected ? tasks.get(selected) : null;
+    if (!t) { detail.hidden = true; detailEmpty.hidden = false; return; }
+    detail.hidden = false;
+    detailEmpty.hidden = true;
+    var m = statusMeta(t.status), known = t.total > 0;
+
+    detailDot.className = "dot " + m.cls;
+    setText(title, label(t));
+    setText(statusChip, m.label);
+    setText(meta, [t.aid, t.job_id, t.error].filter(function (x) { return !!x; }).join(" · "));
+
+    track.className = "track" + (known ? "" : " unknown");
+    setAttr(bar, "style", "width:" + (known ? clamp(t.percent, 0, 100) : 100) + "%");
+    setText(percent, known ? clamp(t.percent, 0, 100).toFixed(1) + "%" : "未知");
+    setText(downloaded, fmtBytes(t.downloaded));
+    setText(total, known ? fmtBytes(t.total) : "未知");
+    setText(speed, fmtSpeed(t.speed));
+    setText(eta, known && t.speed > 0 ? fmtETA((t.total - t.downloaded) / t.speed) : "—");
+    renderSpark(t);
+
+    btnCancel.disabled = !isLive(t.status);
+    btnRetry.disabled = isLive(t.status) || !(t.url || submitted.has(t.job_id));
+    btnRemove.disabled = isLive(t.status);
+    setText(actionNote, isLive(t.status) ? "取消会中断当前下载" : "重试 = 用同一组参数重新提交");
+  }
+
+  // ---- 渲染：事件流 ----
   function addRow(ev) {
     var row = document.createElement("li");
-    var cls = ev.type === "task_done" ? "done" : (ev.type === "task_failed" ? "failed" : "");
     var when = document.createElement("time");
-    when.textContent = clock(ev.time);
+    setText(when, clock(ev.time));
     var what = document.createElement("span");
-    what.className = "what " + cls;
-    what.textContent = (LABEL[ev.type] || ev.type) + " " + label(ev) + (ev.error ? " · " + ev.error : "");
+    what.className = "what" + (ev.type === "task_done" ? " done" : (ev.type === "task_failed" ? " failed" : ""));
+    setText(what, (LABEL[ev.type] || ev.type) + " " + label(ev) + (ev.error ? " · " + ev.error : ""));
     var num = document.createElement("span");
     num.className = "num";
-    num.textContent = ev.percent > 0 ? ev.percent.toFixed(1) + "%" : "";
+    setText(num, ev.percent > 0 ? Number(ev.percent).toFixed(1) + "%" : "");
     row.appendChild(when);
     row.appendChild(what);
     row.appendChild(num);
-    list.insertBefore(row, list.firstChild);
-    while (list.childNodes.length > MAX_ROWS) { list.removeChild(list.lastChild); }
-    listEmpty.hidden = true;
+    events.insertBefore(row, events.firstChild);
+    while (events.childNodes.length > MAX_ROWS) { events.removeChild(events.lastChild); }
+    eventsEmpty.hidden = true;
   }
 
-  // EventSource 默认就会自动重连（服务端用 retry 帧之外无需额外协议）。
-  es.onopen = function () { conn.textContent = "已连接"; conn.className = "live"; };
-  es.onerror = function () { conn.textContent = "已断开 · 自动重连中"; conn.className = "down"; };
+  function render() { renderList(); renderDetail(); }
+
+  // ---- 数据源 1：SSE（主）----
+  var es = new EventSource("/events" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : ""));
+  es.onopen = function () { setText(conn, "已连接"); conn.className = "conn live"; refreshTasks(); };
+  // 断线：只改状态并拉一次 /get-tasks 兜底，**不**手动 close / 不重建 —— EventSource 自己
+  // 会按 retry 间隔自动重连（服务端不发 retry 帧时用浏览器默认 3s）。
+  es.onerror = function () { setText(conn, "已断开 · 自动重连中"); conn.className = "conn down"; refreshTasks(); };
   es.onmessage = function (msg) {
     var ev;
     try { ev = JSON.parse(msg.data); } catch (e) { return; }
-    if (ev.seq && ev.seq <= lastSeq) { return; }
-    if (ev.seq) { lastSeq = ev.seq; }
-    if (ev.type === "hello") { conn.textContent = "已连接"; conn.className = "live"; return; }
-    if (ev.job_id) { tasks.set(ev.job_id, ev); }
-    addRow(ev);
-    renderCurrent();
+    if (ev.type === "hello") { setText(conn, "已连接"); conn.className = "conn live"; return; }
+    if (mergeEvent(ev)) {
+      addRow(ev);
+      if (!selected && ev.job_id) { selected = ev.job_id; }
+      render();
+    }
   };
+
+  // ---- 数据源 2：/get-tasks 兜底（断线、晚连接、低频轮询）----
+  function refreshTasks() {
+    return fetch("/get-tasks", TOKEN ? { headers: { "X-Serve-Token": TOKEN } } : {})
+      .then(function (r) { if (!r.ok) { throw new Error("HTTP " + r.status); } return r.json(); })
+      .then(function (data) {
+        var changed = false;
+        (data.Running || []).concat(data.Finished || []).forEach(function (t) {
+          if (mergeSnapshot(t)) { changed = true; }
+        });
+        if (!selected && tasks.size > 0) { selected = Array.from(tasks.keys())[0]; changed = true; }
+        if (changed) { render(); }
+      })
+      .catch(function () { /* 兜底失败不打扰用户：SSE 仍是主数据源 */ });
+  }
+  setInterval(refreshTasks, FALLBACK_MS);
+
+  // ---- 列表点击：切换详情 ----
+  listBox.addEventListener("click", function (e) {
+    var node = e.target;
+    while (node && node !== listBox && !node.getAttribute("data-job")) { node = node.parentNode; }
+    if (!node || node === listBox) { return; }
+    selected = node.getAttribute("data-job");
+    render();
+  });
+
+  // ---- 操作：取消 / 重试 / 移除 ----
+  function authHeaders(extra) {
+    var h = extra || {};
+    if (TOKEN) { h["X-Serve-Token"] = TOKEN; }
+    return h;
+  }
+  function action(path, opts, note) {
+    setText(actionNote, note);
+    return fetch(path, opts).then(function (r) {
+      if (!r.ok) { throw new Error("HTTP " + r.status); }
+      return refreshTasks();
+    }).catch(function (err) { setText(actionNote, "操作失败：" + err.message); });
+  }
+  // 写操作的两个硬要求（见 server.go 的 guardMiddleware）：Content-Type 必须是
+  // application/json —— 这是防跨站「简单请求」的 CSRF 闸门，不带就是 415；Origin 不能
+  // 跨源。取消与移除都必须经这里发出（t8 的真机冒烟就是在这里抓到 415 的）。
+  function writeOptions(method) {
+    return {
+      method: method,
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: "{}"
+    };
+  }
+  btnCancel.addEventListener("click", function () {
+    if (!selected) { return; }
+    action("/cancel/" + encodeURIComponent(selected), writeOptions("POST"), "正在取消…");
+  });
+  btnRemove.addEventListener("click", function () {
+    if (!selected) { return; }
+    action("/remove-finished/" + encodeURIComponent(selected), writeOptions("DELETE"), "正在移除…");
+  });
+  btnRetry.addEventListener("click", function () {
+    var t = selected ? tasks.get(selected) : null;
+    if (!t) { return; }
+    var body = submitted.get(t.job_id) || { url: t.url };
+    if (!body.url) { setText(actionNote, "这个任务没有可用的 URL，无法重试"); return; }
+    submitBody(body, "正在重新提交…");
+  });
+
+  // ---- 表单 → POST /add-task ----
+  // 请求体字段名**直接取自** data-field 属性：页面声明了什么字段，请求体就是什么键，
+  // 没有第二份手写映射可以漂移。与 t7 白名单（internal/server/server.go 的
+  // addTaskAllowedFields）逐字一致，由 webui_test.go 机械核对。
+  function fieldValue(el) {
+    var def = el.getAttribute("data-default");
+    if (el.type === "checkbox") {
+      // 勾选状态 == 服务端默认 → 不传（后端用 *bool 区分「未传」与 false；「未传」= 用
+      // 服务端默认）。与默认不同才发送布尔值：默认 false 的开关勾上发 true，默认 true 的
+      // multi_thread / skip_ai 取消勾选发 false（否则用户永远关不掉它们）。
+      var want = el.checked;
+      var isDefault = def === null ? !want : (def === "true") === want;
+      return isDefault ? null : want;
+    }
+    var v = (el.value || "").trim();
+    if (v === "") { return null; }   // 空值 = 不传（select_page 留空表示「全部」）
+    if (el.tagName === "SELECT" && (v === "true" || v === "false")) { return v === "true"; }
+    return v;
+  }
+  function buildBody() {
+    var body = {};
+    var fields = form.querySelectorAll("[data-field]");
+    for (var i = 0; i < fields.length; i++) {
+      var el = fields[i];
+      var key = el.getAttribute("data-field");
+      var value = fieldValue(el);
+      if (value === null) { continue; }
+      body[key] = value;
+    }
+    return body;
+  }
+  function setFormMsg(text, kind) {
+    formMsg.className = "form-msg" + (kind ? " " + kind : "");
+    setText(formMsg, text);
+  }
+  function submitBody(body, note) {
+    if (!body.url) { setFormMsg("请先填写 URL", "bad"); return Promise.resolve(); }
+    setFormMsg(note || "正在提交…");
+    return fetch("/add-task", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.text().then(function (text) {
+        if (!r.ok) { throw new Error(text || ("HTTP " + r.status)); }
+        var id = "";
+        try { id = JSON.parse(text).TaskId || ""; } catch (e) { id = ""; }
+        if (id) { submitted.set(id, body); }   // 重试 = 原样重发同一组参数
+        setFormMsg("已提交：" + (id || "任务已入队"), "ok");
+        return refreshTasks();
+      });
+    }).catch(function (err) { setFormMsg("提交失败：" + err.message, "bad"); });
+  }
+
+  // ---- localStorage 预设：加载恢复 + 保存 + 重置默认 ----
+  var PRESET_KEY = "bbdown.serve.addTask.preset";
+  function setFieldValue(el, value) {
+    if (el.type === "checkbox") {
+      el.checked = (typeof value === "boolean") ? value : (el.getAttribute("data-default") === "true");
+      return;
+    }
+    if (typeof value === "boolean") { el.value = value ? "true" : "false"; return; }
+    el.value = (value === null || value === undefined) ? "" : String(value);
+  }
+  function applyPreset(preset) {
+    var fields = form.querySelectorAll("[data-field]");
+    for (var i = 0; i < fields.length; i++) {
+      var el = fields[i], key = el.getAttribute("data-field");
+      if (Object.prototype.hasOwnProperty.call(preset, key)) { setFieldValue(el, preset[key]); }
+    }
+  }
+  function loadPreset() {
+    var raw = null;
+    try { raw = localStorage.getItem(PRESET_KEY); } catch (e) { raw = null; }
+    if (!raw) { return false; }
+    var preset = null;
+    try { preset = JSON.parse(raw); } catch (e) { preset = null; }
+    if (!preset || typeof preset !== "object") { return false; }
+    applyPreset(preset);
+    return true;
+  }
+  function savePreset() {
+    var body = buildBody();
+    try { localStorage.setItem(PRESET_KEY, JSON.stringify(body)); } catch (e) { /* 隐私模式：忽略 */ }
+  }
+  function resetPreset() {
+    try { localStorage.removeItem(PRESET_KEY); } catch (e) { /* 忽略 */ }
+    var fields = form.querySelectorAll("[data-field]");
+    for (var i = 0; i < fields.length; i++) {
+      var el = fields[i];
+      if (el.type === "checkbox") { el.checked = el.getAttribute("data-default") === "true"; }
+      else { el.value = ""; }
+    }
+    setFormMsg("已恢复默认值", "");
+  }
+  document.getElementById("btn-save-preset").addEventListener("click", function () {
+    savePreset(); setFormMsg("预设已保存（下次打开自动恢复）", "ok");
+  });
+  document.getElementById("btn-reset-preset").addEventListener("click", resetPreset);
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var body = buildBody();
+    if (!body.url) { setFormMsg("请先填写 URL", "bad"); return; }
+    savePreset();                        // 提交即保存预设：下次打开表单回到上次的参数
+    submitBody(body, "正在提交…");
+  });
+
+  // 初始化：恢复预设（默认值由 HTML 的 checked / value 承载）→ 先渲染空态 → 拉一次兜底。
+  loadPreset();
+  render();
+  refreshTasks();
 })();
 </script>
 </body>

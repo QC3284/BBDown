@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QC3284/BBDown/internal/entity"
+	"github.com/QC3284/BBDown/internal/util"
 )
 
 // stripANSI 去掉日志上的颜色码：LogColorNoTime 给每行套了 AnsiCyan/AnsiReset。
@@ -139,40 +140,121 @@ func TestPadDisplay(t *testing.T) {
 	}
 }
 
-// TestTrackLinesAlignByDisplayWidth 是这次排版的核心判据：标签显示宽度不同的两行，
-// 整行显示宽度必须一致，且清晰度列、右对齐的码率列都落在同一显示列。
+// TestTrackLinesUseBBDownTStyle 钉住 BBDownT 口径的**逐字**形态（本次改动的核心判据）：
 //
-// 两个夹具的标签 rune 数相同（"高清" / "AB"）而显示宽度差 2 列，码率与体积的位数也不同——
-// 只要补空格不是按 DisplayWidth 算（len/rune 数），下面任意一条断言都会红。
-// 变异验证：PadDisplay 改成直接返回原串 → 变红。
-func TestTrackLinesAlignByDisplayWidth(t *testing.T) {
-	narrow := entity.Video{Dfn: "高清", Res: "1920x1080", Codecs: "AVC", FPS: "30", Bandwidth: 1, Dur: 100}
-	wide := entity.Video{Dfn: "AB", Res: "854x480", Codecs: "HEVC", FPS: "60", Bandwidth: 20000, Dur: 100}
+//  0. [1080P 高码率] [1920x1080] [HEVC] [60] [~4194 kbps] [200.00 MB]
+//     [视频] [1080P 高码率] [1920x1080] [HEVC] [60] [~4194 kbps] [200.00 MB]
+//     [音频] [mp4a.40.2] [~132 kbps] [6.29 MB]
+//
+// 三条硬口径（都与上游 Display.cs 的形态不同，属有意偏离，收尾登记台账）：
+//  1. 每个字段一格方括号，序号 "0." 与选中标签 [视频]/[音频] 裸写（序号不该再包一层）；
+//  2. 码率是**由体积反推**的平均码率（~4194 而非接口声明的 5000）——同一行的体积与码率
+//     因此永远自洽；估算行上（体积也是估的）反推值等于声明值（音频行 ~132 kbps）；
+//  3. **体积不带 ~**（对齐 BBDownT：估算值也照显，不额外标注）。
+//
+// 变异验证：trackKbps 改回返回声明的 bandwidth → 第一/二行的 ~4194、~3104 变红；
+// trackSizeCell 加回 \"~\" 前缀 → 体积断言变红；fitTrackCell 补空格（回旧排版）→ 逐字断言变红。
+func TestTrackLinesUseBBDownTStyle(t *testing.T) {
+	withTerminalWidth(t, 200)
+	indent := strings.Repeat(" ", util.LogIndentWidth)
+
+	// 接口给了 size（playurl 的真实形态）：码率由它反推，与声明的 5000 kbps 不同。
+	video := entity.Video{Dfn: "1080P 高码率", Res: "1920x1080", Codecs: "HEVC", FPS: "60",
+		Bandwidth: 5000, Dur: 400, Size: 209715200} // 200.00 MB；200MiB×8/400s = 4194 kbps
+	wantVideo := indent + "0. [1080P 高码率] [1920x1080] [HEVC] [60] [~4194 kbps] [200.00 MB]"
+	if got := formatVideoTrackLine(0, video, 400); got != wantVideo {
+		t.Errorf("视频行逐字不符：\n got %q\nwant %q", got, wantVideo)
+	}
+	if strings.Contains(formatVideoTrackLine(0, video, 400), "5000 kbps") {
+		t.Error("码率没有被体积反推：仍是接口声明的 bandwidth")
+	}
+
+	// 音频：没有真实 size，体积与码率互为逆运算，反推值 == 声明值。
+	audio := entity.Audio{Codecs: "mp4a.40.2", Bandwidth: 132, Dur: 400} // 400×132kbps×1000/8 = 6.29 MB
+	wantAudio := indent + "0. [mp4a.40.2] [~132 kbps] [6.29 MB]"
+	if got := formatAudioTrackLine(0, audio, 400); got != wantAudio {
+		t.Errorf("音频行逐字不符：\n got %q\nwant %q", got, wantAudio)
+	}
+
+	// 选中行：行首是 [视频]/[音频] 标签（调用方给的），后面与清单行同口径。
+	sel := stripANSI(captureStdout(t, func() { PrintSelectedTrack(&video, &audio, 400) }))
+	wantSel := []string{
+		indent + "[视频] [1080P 高码率] [1920x1080] [HEVC] [60] [~4194 kbps] [200.00 MB]",
+		indent + "[音频] [mp4a.40.2] [~132 kbps] [6.29 MB]",
+	}
+	for _, want := range wantSel {
+		if !strings.Contains(sel, want+"\n") {
+			t.Errorf("选中行缺少逐字形态 %q：\n%s", want, sel)
+		}
+	}
+
+	// 体积一律不带 ~（估算行也不例外）：估算体积的轨道也要照显。
+	estimated := entity.Video{Dfn: "360P 流畅", Bandwidth: 100, Dur: 60}
+	if line := formatVideoTrackLine(0, estimated, 60); !strings.Contains(line, "[732.42 KB]") {
+		t.Errorf("估算体积没有照显（或仍带 ~）：%q", line)
+	}
+	// 全行只有码率那一格带 ~（体积格不许有）：
+	if n := strings.Count(formatVideoTrackLine(0, estimated, 60), "~"); n != 1 {
+		t.Errorf("整行出现 %d 个 ~（应当只有码率格一个，体积格不带）：%q", n, formatVideoTrackLine(0, estimated, 60))
+	}
+	if strings.Contains(formatVideoTrackLine(0, estimated, 60), "[~732.42") {
+		t.Errorf("体积格带回了 ~ 前缀：%q", formatVideoTrackLine(0, estimated, 60))
+	}
+}
+
+// TestTrackCellsAreBracketedWithoutPadding 取代旧的「补空格把列对齐」判据（有意偏离，理由在
+// tracklayout.go 顶部）：新口径是 BBDownT 的 [值] [值]，**括号内不补空格**，空列整格省略。
+//
+// 三条反转（旧用例曾经断言的是它们的反面）：
+//  1. 方括号必须出现（旧：清单行不该再有方括号）；
+//  2. 括号内不补空格（[60] 而不是 [    60]）；
+//  3. 缺列的行比全列的行**短**（旧：空列不塌陷、各行等宽）。
+//
+// 为什么放弃对齐：单元格自带定界符后，视觉分组由方括号提供；再按列宽补空格会把每行多撑
+// 2 列/字段（六列多 12 列），窄终端上反而更早触发省列。宽度硬约束仍由 layoutCells 保证
+// （每行 ≤ 终端列数，见 tracklayout_width_test.go）。
+//
+// 变异验证：fitTrackCell 加回按列宽补空格 → 本用例红。
+func TestTrackCellsAreBracketedWithoutPadding(t *testing.T) {
+	withTerminalWidth(t, 200)
+	narrow := entity.Video{Dfn: "高清", Res: "1920x1080", Codecs: "AVC", FPS: "30", Bandwidth: 3000, Dur: 100}
+	wide := entity.Video{Dfn: "AB", Res: "854x480", Codecs: "HEVC", FPS: "60", Bandwidth: 3000, Dur: 100}
 	lineA := formatVideoTrackLine(0, narrow, 100)
 	lineB := formatVideoTrackLine(1, wide, 100)
 	t.Logf("A（%d 列）%s", DisplayWidth(lineA), lineA)
 	t.Logf("B（%d 列）%s", DisplayWidth(lineB), lineB)
 
-	if wA, wB := DisplayWidth(lineA), DisplayWidth(lineB); wA != wB {
-		t.Errorf("两行显示宽度不一致（%d vs %d），列没对齐：\n%s\n%s", wA, wB, lineA, lineB)
+	for _, line := range []string{lineA, lineB} {
+		if !strings.Contains(line, "[") || !strings.Contains(line, "]") {
+			t.Errorf("清单行必须用方括号分格：%q", line)
+		}
+		if strings.Contains(line, "[ ") || strings.Contains(line, " ]") {
+			t.Errorf("方括号内侧不该有补出来的空格（不补空格是新口径）：%q", line)
+		}
 	}
-	if cA, cB := displayColumn(t, lineA, "高清"), displayColumn(t, lineB, "AB"); cA != cB {
-		t.Errorf("清晰度列不在同一显示列：%d vs %d\n%s\n%s", cA, cB, lineA, lineB)
-	}
-	if cA, cB := displayColumnEnd(t, lineA, "kbps"), displayColumnEnd(t, lineB, "kbps"); cA != cB {
-		t.Errorf("码率列右边缘不在同一显示列：%d vs %d\n%s\n%s", cA, cB, lineA, lineB)
+	if !strings.Contains(lineB, "[60]") {
+		t.Errorf("帧率格应当是 [60]（无补空格）：%q", lineB)
 	}
 
-	// 空列（没有分辨率/帧率的轨道）同样不塌陷、不甩出方括号兜底
+	// 缺列（没有分辨率/帧率）的行整格省略，因此比全列行短——旧口径要求等宽，本次反转。
 	bare := formatVideoTrackLine(2, entity.Video{Dfn: "1080P 高清", Codecs: "AVC", Bandwidth: 3000, Dur: 100}, 100)
-	if wBare, wA := DisplayWidth(bare), DisplayWidth(lineA); wBare != wA {
-		t.Errorf("空列行宽度 %d 与其它行 %d 不一致：%q", wBare, wA, bare)
+	if wBare, wA := DisplayWidth(bare), DisplayWidth(lineA); wBare >= wA {
+		t.Errorf("缺列行 %d 列，不该不短于全列行 %d 列：%q", wBare, wA, bare)
+	}
+	if strings.Contains(bare, "[]") {
+		t.Errorf("空列被写成了空方括号（应当整格省略）：%q", bare)
 	}
 }
 
-// TestAudioAndSelectedLinesShareVideoLayout 音频行与 PrintSelectedTrack 的两行共用同一套列宽：
-// 编码落在「清晰度」列，码率/体积列与视频行对齐（音频行留空的分辨率/编码/帧率三列就是占位）。
-func TestAudioAndSelectedLinesShareVideoLayout(t *testing.T) {
+// TestTrackSectionsShareTheSameColumnSet 取代旧的「音频行与选中行共用视频列宽」判据（有意偏离）：
+// 新口径下单元格自带方括号、不补空格，各段的同名列宽度本来就不同，没有可共用的列宽。
+// 这条用例改钉真正要保证的性质：同一份清单里各段/各行的**列集合**来自同一个 plan——
+//   - 音频段只有 [编码] [码率] [体积] 三格（空列整格省略，不占位、不写 []）；
+//   - 选中行与清单行的数据格数相同（行首的 [视频]/[音频] 标签不算数据格）。
+//
+// 变异验证：让 audioCells 也输出分辨率/帧率等空占位列（写 [] 或补空格）→ 格数断言红。
+func TestTrackSectionsShareTheSameColumnSet(t *testing.T) {
+	withTerminalWidth(t, 200) // 全列档位：体积列不会被省掉，才能谈「音频段三格」
 	video := entity.Video{ID: "80", Dfn: "1080P 高清", Res: "1920x1080", Codecs: "AVC", FPS: "30", Bandwidth: 3000, Dur: 100, BaseURL: "https://cdn/v.m4s"}
 	audio := entity.Audio{ID: "30280", Codecs: "mp4a.40.2", Bandwidth: 132, Dur: 100, BaseURL: "https://cdn/a.m4s"}
 
@@ -183,76 +265,92 @@ func TestAudioAndSelectedLinesShareVideoLayout(t *testing.T) {
 	listLines := layoutLines(listOut)
 	selLines := layoutLines(selOut)
 
-	lines := []struct {
-		name string
-		line string
-	}{
-		{"清单·视频", findLayoutLine(t, listLines, "1920x1080")},
-		{"清单·音频", findLayoutLine(t, listLines, "mp4a.40.2")},
-		{"选中·视频", findLayoutLine(t, selLines, "[视频]")},
-		{"选中·音频", findLayoutLine(t, selLines, "[音频]")},
-	}
-	wantWidth := DisplayWidth(lines[0].line)
-	wantKbpsEnd := displayColumnEnd(t, lines[0].line, "kbps")
-	for _, l := range lines {
-		if got := DisplayWidth(l.line); got != wantWidth {
-			t.Errorf("%s 行显示宽度 %d，与清单·视频行 %d 不一致：%q", l.name, got, wantWidth, l.line)
+	listVideo := findLayoutLine(t, listLines, "1920x1080")
+	listAudio := findLayoutLine(t, listLines, "mp4a.40.2")
+	selVideo := findLayoutLine(t, selLines, "[视频]")
+	selAudio := findLayoutLine(t, selLines, "[音频]")
+
+	// dataCells 数一行里的**数据格**：行首的 [视频]/[音频] 标签不算。
+	dataCells := func(line string) int {
+		n := strings.Count(line, "[")
+		if strings.HasPrefix(line, "[视频]") || strings.HasPrefix(line, "[音频]") {
+			n--
 		}
-		if got := displayColumnEnd(t, l.line, "kbps"); got != wantKbpsEnd {
-			t.Errorf("%s 行码率列右边缘在第 %d 列，与清单·视频行第 %d 列不一致：%q", l.name, got, wantKbpsEnd, l.line)
+		return n
+	}
+	if a, b := dataCells(listVideo), dataCells(selVideo); a != b {
+		t.Errorf("清单视频行 %d 格、选中视频行 %d 格：两处必须用同一套列：\n%s\n%s", a, b, listVideo, selVideo)
+	}
+	if a, b := dataCells(listAudio), dataCells(selAudio); a != b {
+		t.Errorf("清单音频行 %d 格、选中音频行 %d 格：两处必须用同一套列：\n%s\n%s", a, b, listAudio, selAudio)
+	}
+	if n := dataCells(listAudio); n != 3 {
+		t.Errorf("音频行应只有 3 格（编码/码率/体积），实际 %d：%q", n, listAudio)
+	}
+	for _, line := range []string{listAudio, selAudio, listVideo, selVideo} {
+		if strings.Contains(line, "[]") {
+			t.Errorf("出现空方括号（空列应当整格省略）：%q", line)
 		}
 	}
 }
 
 // TestTrackLinesCarryEveryField 信息一条不减：清晰度/分辨率/编码/帧率/码率/体积仍在行里，
-// 只是方括号换成了列间距（清单行不再出现 [ ]）。
+// 且每个字段都是 [值] 形态——**反转**旧用例的「清单行不该再有方括号」（本次口径就是要方括号）。
 //
-// 200 列：只有宽到放得下全部六列时才谈得上"一条不减"；窄终端按宽度自适应省列
+// 200 列：只有宽到放得下全部六列时才谈得上「一条不减」；窄终端按宽度自适应省列
 // （见 tracklayout_width_test.go 的宽度表）。
+//
+// 变异验证：把 colSize 的方括号去掉（或把序号也包进方括号）→ 本用例红。
 func TestTrackLinesCarryEveryField(t *testing.T) {
 	withTerminalWidth(t, 200)
 	video := entity.Video{Dfn: "1080P 高清", Res: "1920x1080", Codecs: "AVC", FPS: "30", Bandwidth: 3000, Dur: 100}
 	line := formatVideoTrackLine(2, video, 100)
-	for _, want := range []string{"2.", "1080P 高清", "1920x1080", "AVC", "30", "3000 kbps", "~36.62 MB"} {
+	for _, want := range []string{"2.", "[1080P 高清]", "[1920x1080]", "[AVC]", "[30]", "[~3000 kbps]", "[35.76 MB]"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("视频行缺少 %q：%q", want, line)
 		}
 	}
-	if strings.ContainsAny(line, "[]") {
-		t.Errorf("视频清单行不该再有方括号：%q", line)
+	// 序号裸写（不是 [2.]）：BBDownT 口径里行首序号没有方括号。
+	if strings.Contains(line, "[2.]") {
+		t.Errorf("行首序号不该带方括号：%q", line)
 	}
 
 	audio := entity.Audio{Codecs: "M4A", Bandwidth: 192, Dur: 100}
 	aline := formatAudioTrackLine(0, audio, 100)
-	for _, want := range []string{"0.", "M4A", "192 kbps", "~2.34 MB"} {
+	for _, want := range []string{"0.", "[M4A]", "[~192 kbps]", "[2.29 MB]"} {
 		if !strings.Contains(aline, want) {
 			t.Errorf("音频行缺少 %q：%q", want, aline)
 		}
 	}
-	if strings.ContainsAny(aline, "[]") {
-		t.Errorf("音频清单行不该再有方括号：%q", aline)
-	}
 }
 
-// TestTrackLineDurationFallback 体积的取值规则与改前一致：分P时长优先、缺失时用轨道时长；
-// 接口给了 size 就不再估算。
+// TestTrackLineDurationFallback 体积/码率的取值规则：分P时长优先、缺失时退回轨道时长；
+// 接口给了 size 就用它（不再估算）；码率一律由显示体积反推（1000 换算，与估算互为逆运算），
+// 体积不带 ~。
 //
 // 200 列：体积列是宽度不足时**第一个**被省掉的列，窄终端上它根本不显示。
+//
+// 变异验证：体积估算改回上游的 1024 换算 → [732.42 KB] / [1.43 MB] 两处变红。
 func TestTrackLineDurationFallback(t *testing.T) {
 	withTerminalWidth(t, 200)
 	v := entity.Video{Dfn: "360P 流畅", Bandwidth: 100, Dur: 60}
-	if line := formatVideoTrackLine(0, v, 0); !strings.Contains(line, "~750.00 KB") { // 60×100kbps×1024/8 = 768000
+	if line := formatVideoTrackLine(0, v, 0); !strings.Contains(line, "[732.42 KB]") { // 60×100kbps×1000/8 = 750000
 		t.Errorf("分P时长缺失时应按轨道时长估算体积：%q", line)
 	}
-	if line := formatVideoTrackLine(0, v, 120); !strings.Contains(line, "~1.46 MB") { // 120×100×1024/8 = 1536000
+	if line := formatVideoTrackLine(0, v, 120); !strings.Contains(line, "[1.43 MB]") { // 120×100×1000/8 = 1500000
 		t.Errorf("分P时长存在时应优先使用：%q", line)
 	}
-	withSize := entity.Video{Dfn: "360P 流畅", Bandwidth: 100, Dur: 60, Size: 2048}
-	if line := formatVideoTrackLine(0, withSize, 0); !strings.Contains(line, "~2.00 KB") {
+	// 接口给出 size 时不再估算：体积照它显示，码率由它反推。
+	withSize := entity.Video{Dfn: "360P 流畅", Bandwidth: 100, Dur: 60, Size: 10485760}
+	line := formatVideoTrackLine(0, withSize, 0)
+	if !strings.Contains(line, "[10.00 MB]") {
 		t.Errorf("接口给出 size 时不该再估算：%q", line)
 	}
+	if !strings.Contains(line, "[~1398 kbps]") { // 10485760×8/60/1000 = 1398.1
+		t.Errorf("码率应由给出的 size 反推（不是声明值）：%q", line)
+	}
 	a := entity.Audio{Codecs: "M4A", Bandwidth: 192, Dur: 100}
-	if line := formatAudioTrackLine(0, a, 0); !strings.Contains(line, "~2.34 MB") {
+	if line := formatAudioTrackLine(0, a, 0); !strings.Contains(line, "[2.29 MB]") {
 		t.Errorf("音频分P时长缺失时应按轨道时长估算体积：%q", line)
 	}
 }

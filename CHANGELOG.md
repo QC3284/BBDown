@@ -10,6 +10,49 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.15.0] - 2026-10-01
+
+**功能批次**（AgentTeams 二期+三期：serve /add-task 白名单 + Web UI 重设计 + CLI 观感对齐 BBDownT 微调）。
+
+### 新功能
+
+- **/add-task 15 字段显式白名单**：url/select_page/dfn_priority/encoding_priority/multi_thread/overwrite/skip_mux/skip_ai/write_nfo/compat/use_app_api/use_tv_api/use_intl_api/work_dir/language（snake_case）。
+  - **严格模式**：未知字段 400 点名、非法值 400 说明原因；危险字段（interactive/file_pattern/cookie/access_token/user_agent/danmaku_filter/notify_webhook/drm_*/insecure/decrypt_drm）一律 400；
+  - select_page 复用 CLI 解析器（workflow.ParsePageSelection）+ serve 侧 1000 项上限（防 1-100000 放大）；非法值文案附「留空表示全部」；
+  - bool 用指针字段区分「未传」与 false（multi_thread/skip_ai 默认 true，UI 取消勾选会显式发 false 才能关掉）；
+  - 老客户端（仅发 url）行为与 2.13.0 逐字不变。
+  - **兼容性变化**：{"URL":"x"}/{"Url":"x"}（解码器大小写不敏感）与 body 尾随内容原先被静默接受，现在严格 400（契约字段为小写 url）。
+- **serve Web UI 重设计**（参照 gnattu/bbdown-webui 与 AriaNg 的功能面，设计图 docs/bbdown-ui-redesign.png）：
+  左栏任务列表（四色状态点/迷你进度条）+ 右侧详情卡（大进度条/统计网格/SVG 速率曲线/事件流/取消/重试/移除，暂停置灰标注「API 暂不支持」）+ 15 字段新增任务表单（[data-field] 遍历生成、与白名单逐字一致）+ localStorage 预设（恢复/保存/重置）；
+  单文件 go:embed 34100 字节（≤64KiB）、无框架无 CDN 无外链、响应式、深色优先；XSS 全 textContent 单一出口（黑名单新增 createContextualFragment/setAttribute("on)；mergeEvent 跳过 __proto__ 纵深）。
+
+- **CLI 观感对齐 BBDownT（用户定稿 v3，有意偏离上游 v1.6.20，登记 §4.66）**：
+  - 流表改 BBDownT 口径：`0. [1080P 高码率] [1920x1080] [HEVC] [60] [~4999 kbps] [246.90 MB]`——kbps 由「体积/时长×8」反推（真实 size 行显示真平均码率），体积不带 ~；体积估算除数 1024→1000（消除「声明 kbps ≠ 反推 kbps」的自相矛盾）；
+  - 「视频标题:」青色；发布时间/视频URL/UP主页 并入标题下的元信息行（UP主 · BV/av · 发布 · 时长 · 分P）；
+  - `-i` 交互模式改**渐进式分层选择**（先列档位菜单 → 选中后仅显示该档流表；★标推荐档、--compat 时避开 HDR Vivid/杜比视界；**零二次 fetch**——全量解析分层显示，BBDownT 的 ProgressiveStreamSelection 类在其 v2 里未接线、默认全自动，我们默认同样非交互）；
+  - 新增信息行：分P清单（≤3 条+省略）、字幕清单（语言+别名）、杜比视界/HDR 流 ⚠ 标记（编号与屏幕上那张表一致）、选中确认行补「预计总大小 ≈ · 输出:」；
+  - 进度区：分P游标 `P1/8`（多P）、续传提示 `已续传 X`、侧车状态行 `侧车: 字幕 ✔ · 弹幕 ✔ · 封面 ✔`；收尾汇总行加平均速率；
+  - 任务卡退役（字段并入元信息行与确认行，renderTaskCard 保留可回退）；
+  - 机器契约逐字节不动：-I 直链 / --print-urls / --info-json / --progress-json / 管道。
+
+### 修复
+
+- **Web UI 取消/移除 415**：页面原先只带 token 不带 Content-Type，撞 guardMiddleware 的 JSON 闸门（CSRF 门禁）→ 实机 415；现在请求封装带正确 Content-Type（TestWebUIActionRequestsSatisfyGuardMiddleware 钉住，变异验证）。
+- **异步 join 竞态**：/add-task 202 用例未 join 异步任务 goroutine，t.TempDir 清理与任务写盘撞车（高负载下 directory not empty）——疑为「偶发 15/16」观察项的真根因之一，已加 waitAddTaskDone（轮询 + 10s 上限）。
+- **-i 分层显示下 ⚠ 编号不同源**（t18 审查抓出）：⚠ 曾用全表下标、屏幕表是档内下标 →「2 号流/换 0 号」指向屏幕外、甚至恰好指向风险流；现 ⚠ 编号空间=屏幕上那张表（非交互=全表、-i=档内表），并断言「⚠ 编号 ⊆ 屏上表行号」。
+- **汇总字节按路径去重**：CLI 收尾汇总的 OnSaved 累计照 serve 语义加 map 去重（分片重试/断点续传重复上报只计一次，byteAccumulator + 回归用例 + 变异验证）；顺手清理 tracklayout 的死常量。
+
+### 验证
+
+- 四条实现/修复线审查门全 PASS（t14/t10/t17/t18→t19/t20）：老客户端逐字实证、攻击面零副作用、XSS 三载荷三路径 81 次 textContent 落地、窄终端 20..300 列零超宽、零额外 fetch 独立复算、变异全红、无删断言。
+- 全仓 gofmt/build/vet/go test ./... -count=1 全绿。
+
+### 说明
+
+- 版本位：新功能批次 → **minor**（2.13.0 → 2.15.0，跳过 2.14.0——该号未发布，内容并入本批）。
+- 有意偏离（登记 §4.66）：CLI 观感对齐 BBDownT（偏离上游 v1.6.20 Display.cs）；体积估算 1024→1000。
+- 遗留登记：work_dir 无根目录约束 + applyConfig 的 os.Chdir 是进程级副作用（有意设计风险：非回环监听必须带 token）；select_page 1000 上限在展开后判定（优化候选：先按表达式计数）；renderList 每帧重建列表 DOM（几百任务需增量更新）。
+
 ## [2.13.0] - 2026-09-28
 
 **新功能批次**（AgentTeams 首期两线：订阅调度 + serve 进度口径统一），另有两条修复。

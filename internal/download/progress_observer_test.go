@@ -241,7 +241,7 @@ func TestProgressObserverDoesNotDisturbTerminalFrames(t *testing.T) {
 		done := make(chan struct{})
 		stopped := make(chan struct{})
 		return captureStdout(t, func() {
-			go renderAggregateProgress(&counter, 100, newProgressPacer(), done, stopped, observer)
+			go renderAggregateProgress(&counter, 100, "P1/8", newProgressPacer(), done, stopped, observer)
 			// done 立即关闭：runProgressLoop 先画首帧再收尾，输出与调度时机无关。
 			close(done)
 			<-stopped

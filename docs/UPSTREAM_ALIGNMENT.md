@@ -134,7 +134,7 @@ git diff v1.6.11 v1.6.19 -- BBDown/
 | 1 | **混流输出选项位置错**（B#15，上游 v1.6.16 已修） | 封面+章节 / ≥2 字幕 / 字幕+章节 / 任何背景音轨 → **混流必败** | `internal/muxer/muxer.go:68-110`、`:126-132` | **已双向复现**：审计员 + 本会话独立复现，ffmpeg n9.0.1 `exit=234`；选项移到全部 `-i` 之后即 `exit=0` |
 | 2 | **mp4box 分支无 `audioMaterial`**（B#22） | 杜比视界自动切 mp4box 时配音/背景轨静默丢弃，随后被删除 → **永久丢失** | `internal/muxer/muxer.go:24-38`、`:227`；`internal/workflow/workflow.go:807-809` | 代码级确认 |
 | 3 | **占位符与 id 路径穿越**（B#30/#31 + E） | `<aid>/<cid>`、`<dfn>/<res>/<fps>/<videoCodecs>/<audioCodecs>`、`lan/audio_id` 裸替换；镜像站 / `--insecure` 中间人可写出 `--work-dir` 之外 | `internal/download/downloader.go:846-861`；`internal/entity/entity.go:9-23`；`internal/util/subtitle.go:72` | 上游 RF-48/58/63/73；**两片独立命中** |
-| 4 | **serve 读/写门禁整片缺失**（A#1） | 未配 token 时 `tokenMiddleware` **根本不挂** → 无 Host 校验（rebinding 可读 `/get-tasks` 的 `SavePaths` 绝对路径）+ 无 Origin/Content-Type 校验（CSRF 简单请求可驱动 `/add-task`、`/cancel`） | `internal/server/server.go:156-158`、`:218-231` | **本会话抽验确认**，并发现"无 token 时中间件不安装"这一放大器 |
+| 4 | ~~**serve 读/写门禁整片缺失**（A#1）~~ **已修复（2.0.0）** | 未配 token 时 `tokenMiddleware` 曾根本不挂 → 无 Host 校验 + 无 Origin/Content-Type 校验；现 guardMiddleware 无条件安装三门禁（qa 2.14.0 实测：text/plain→415、跨源→403、坏 Host→403，先于白名单解析） | internal/server/server.go 的 guardMiddleware；t8 补了页面请求的 Content-Type（TestWebUIActionRequestsSatisfyGuardMiddleware） | 关闭（A-serve 第 15/17 行已同步修订） |
 | 5 | **携凭据请求可被 3xx 引走**（C#2 + D#1） | WEB 轮询 / TV `auth_code`+轮询 / gRPC POST 均未拦 3xx，SESSDATA 与轮询下发的 `access_token` 可被引向任意主机 | `internal/login/login.go:69`、`:149`、`:191`；`internal/util/http.go:193` | D 用本机探针实测：跨主机名标准库剥 Cookie、**同主机名不同端口不剥** → 定 ⚠️ 而非 ❌（RF-13/RF-37 未落地） |
 | 6 | **直播录制删除已录内容**（C#1） | `defer os.RemoveAll(segRoot)` 在所有返回路径删掉含历次保留分段的整棵 `.segs`，三处日志却称"已保留"；读中断先删段再判取消 → Ctrl+C 丢整段 | `internal/live/live.go:124`、`:158-161`、`:140/:164/:237` | **本会话抽验确认**；另发现已写字节数 `n` 在该路径被直接丢弃 |
 | 7 | **畸形响应直接 panic 崩进程**（E#1） | 零字节 `device.wvd`、截断 wvd、垃圾 protobuf（`int(length)` 溢出绕过判界）、DRM 许可证解析无边界检查；**全仓 `recover()` 0 命中** | `internal/drm/device.go:43`、`:62`、`:66`；`internal/appapi/appapi.go:321-326`；`internal/drm/widevine.go:434/467/507` | **本会话抽验确认**：`device.go:43` 对零字节直接取 `data[0]`；`:62/:66` 用文件内 uint16 长度切片且无判界 |
@@ -691,7 +691,7 @@ HTTPClient → 下载器」的**传递链**：参数解析对了、HTTPClient �
 | `Parser.cs` 110 行 | **N/A** | 纯 C# 资源管理：`JsonDocument`/ArrayPool 的 dispose 改 try/finally、免二压重发的文档所有权转移；Go 由 GC 管 |
 | fetcher 六处 + 新增 `FetcherJson.cs` | **一处窄边界已对齐** | 上游 v1.6.19 那六处写成「if (code != 0) { var msg = …; }」——**只算不抛**，诊断永远不可达（上游自己的 bug）。本仓一直是 `return err`，所以这一半是上游补齐；但上游新增的 `ThrowIfApiError` 在 **data 存在时也查 code**，本仓此前只在 data 缺失时报错 → 本轮补齐四处（系列首屏/分页、合集首屏/分页），消息格式 `<文案> (code=N): <message>` 与上游逐字一致 |
 | 5 个测试文件的「新表」 | **无新规格可搬** | 逐行过滤掉 async/命名空间改动后，剩余差异全是机械重命名（`Program.ArchiveTracker` → 独立类、`MergeWithConfig` → `MergeWithConfigAsync`、`CanResumeFrom(..., out var)` → 元组返回、`Program.ClampRoleAudioIndex` → `DownloadPageExecutor.…`），**断言一条未改** |
-| `RetryPolicy.cs`（新）+ serve 的 `NormalizeForServe` | **N/A：面不存在** | 钳制针对 serve 请求体里的每任务选项；本仓 `/add-task` 只接受 `url`（README 同此），执行字段与数值根本进不来 |
+| `RetryPolicy.cs`（新）+ serve 的 `NormalizeForServe` | **部分 N/A → 2.14.0 起有面** | 钳制针对 serve 请求体里的每任务选项；本仓 2.0.0~2.13.0 `/add-task` 只接受 `url`（攻击面不存在），**2.14.0 起扩展为 15 字段显式白名单**（严格模式：未知/危险字段 400 点名、select_page 复用 ParsePageSelection + 1000 项上限），等价于自带 SanitizeUntrustedOptions 语义 |
 | `Archive.cs`/`SubscriptionStore.cs`/`AppSettings.cs`/构建 | **N/A** | async I/O 迁移、`IsServeMode` 与时钟偏移字段搬家、NuGet 锁文件、Dockerfile、CI 缓存 |
 
 **用例**：`internal/fetcher/upstream_apierror_test.go`（code=0/缺 code 不报错、字符串形态的 code、缺 message 仍带 code、
@@ -1027,5 +1027,29 @@ SubtitleItem{lan=3,lanDoc=4,subtitleUrl=5}）。只手解三个字段（手写 v
 - **修复手改清单重复 Target 去重**：并发路径丢失「前一条下载写进该 Target 历史」的跨订阅交互 → `--concurrency 2` 重复下载；
   `Load` 后按 Target 去重（保留先出现条目 + 日志点名），无重复清单行为逐字不变。
 - 审查门双 PASS：无删断言（回退测试文件实证）、变异全红、真实 CLI 非法参数组、并发 barrier 真重叠、0 处 time.Sleep。
+
+### 4.65 第六十轮：serve /add-task 白名单 + Web UI 重设计（**新功能**）
+
+- **/add-task 15 字段显式白名单**（对齐「上游 SanitizeUntrustedOptions 的钳制面」这一设计意图，形态自研）：允许 url/select_page/dfn_priority/encoding_priority/multi_thread/overwrite/skip_mux/skip_ai/write_nfo/compat/use_app_api/use_tv_api/use_intl_api/work_dir/language（snake_case，与 MyOption json tag 一致）；
+  **严格模式**：未知字段 400 点名、非法值 400 说明原因、危险字段（interactive/file_pattern/cookie/access_token/user_agent/danmaku_filter/notify_webhook/drm_*/insecure/decrypt_drm）一律 400；
+  select_page 复用 workflow.ParsePageSelection（3 行纯包装导出，不复制实现）+ serve 侧 1000 项上限；bool 用指针字段区分「未传」与 false（multi_thread/skip_ai 默认 true）；
+  老客户端（仅发 url）行为与 2.13.0 逐字不变。
+  **兼容性变化（如实登记）**：HEAD 曾接受 {"URL":"x"}/{"Url":"x"}（解码器大小写不敏感）与 body 尾随内容（Decoder 只读一个值），2.14.0 起一律 400——从「静默忽略」变「显式拒绝」，契约字段为小写 url。
+- **serve Web UI 重设计**（自研差异化能力，参照 gnattu/bbdown-webui 与 AriaNg 的功能面，见 docs/bbdown-ui-redesign.png）：任务列表（四色状态点/迷你进度）+ 详情卡（大进度条/统计网格/SVG 速率曲线/事件流/取消重试移除、暂停置灰）+ 15 字段表单（与白名单逐字一致、[data-field] 遍历生成）+ localStorage 预设；单文件 go:embed 34100 字节（≤64KiB）、无框架无 CDN 无外链；XSS 全 textContent 单一出口（黑名单含 createContextualFragment/setAttribute("on)；mergeEvent 跳过 __proto__ 纵深）。
+- **真机冒烟修复**：页面取消/移除原先只带 token 不带 Content-Type，撞 guardMiddleware 的 JSON 闸门 → 实机 415；已修 + TestWebUIActionRequestsSatisfyGuardMiddleware 钉住（t8 交付期间抓到，证明中间件契约与页面形态必须同测）。
+- 审查门双 PASS（t14/t10）：老客户端逐字实证、攻击面零副作用（9 组拒绝请求后零任务零状态文件）、XSS 三载荷三路径 81 次 textContent 落地、变异全红。
+
+### 4.66 第六十一轮：CLI 观感对齐 BBDownT + Web UI/白名单同批（**有意偏离 + 新功能**）
+
+- **有意偏离 1：CLI 观感对齐 BBDownT 2.x 接手线（用户定稿 v3）**。上游 v1.6.20 的流表是「声明 kbps + 带 ~ 的体积」，BBDownT 是「体积反推的 ~kbps + 不带 ~ 的体积」；
+  本批起默认观感随 BBDownT（标题青字、发布时间/URL/UP主页并入元信息行、-i 渐进式分层选择、分P清单/字幕清单/⚠ 杜比标记/预计大小/分P游标/侧车行）。
+  与上游的差异点：① 流表口径（见下条）；② 「视频标题:」青色（上游无色）；③ 头部信息行合并（上游三行分立）；④ 任务卡退役；⑤ 机器契约面（-I/--print-urls/--info-json/--progress-json/管道）不受影响。
+  依据：BBDownT 源码 /tmp/BBDownT（Logger.cs/Program.Methods.cs/ProgressiveStreamSelection.cs——该类在其 v2 **未接线**，默认全自动选流；我们默认同样非交互，渐进式只挂 -i）。
+- **有意偏离 2：体积估算除数 1024 → 1000**。上游 Display.cs 按「时长×bandwidth×1024/8」估算体积；1024 会与声明 kbps 反推值自相矛盾（声明 132 kbps → 反推 ~135）。
+  改用 1000 后估算行反推值 == 声明值；真实 size 行显示真正的平均码率（声明 5000 → ~4194）。用户价值：流表数字自洽、不误导。
+- 同批（§4.65 之后落地的增量）：⚠ 编号空间修复（-i 分层下曾用全表下标，现与屏幕表一致）；汇总字节按路径去重（对齐 serve 语义）；tracklayout 死常量清理。
+- 审查门：t14/t10/t17/t18→t19/t20 全 PASS（含窄终端 20..300 零超宽、零额外 fetch 复算、⚠ 编号 ⊆ 屏上表行号断言）。
+
+
 
 

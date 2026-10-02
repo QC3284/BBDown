@@ -143,6 +143,15 @@
   4. ROADMAP「进度条两处回退」（续传 x/y 不含 base、聚合旧格式）经核实已被 2.11.2/2.12.4 口径统一覆盖，本条关闭；
   5. 交接 §5.5「`~` 估算标记」经核实过时（2.12.8 已全带 `~`、与上游一致），关闭；「精确值不带 `~`」如需实现属有意偏离，需开关+登记。
 
+### 2.14.0 批次（2026-10-01）闭环
+
+- 完成：/add-task 15 字段白名单（t13/t14）、serve Web UI 重设计（t8/t10）、页面 415 修复、202 用例异步 join 竞态修复（疑为 15/16 真根因之一）。
+- 新增遗留（随本批发现）：
+  1. **select_page 1000 上限在展开后判定**：单请求可先让解析器展开 10 万项（受 MaxExpandedPages 约束、约几 MB 瞬时分配）才被拒——优化候选：先按表达式计数再展开；
+  2. **renderList 每帧重建列表 DOM**：几十任务无感，几百任务看板需增量更新；
+  3. **work_dir 无根目录约束** + applyConfig 的 os.Chdir 进程级副作用（有意设计风险，非回环监听必须带 token，已在 CHANGELOG/A-serve 登记）；
+  4. **CLI 观感候选**（docs/bbdown-cli-concepts.png / cli-concept-*.png）：用户选定「分层进度」方向后进三期，须以 --ui 开关形态落地（默认观感契约不动）。
+
 ### 待办（代理披露的未覆盖点，如实记录）
 
 - F5：三处 CLI 调用点（runDownload/runWatchLater/runSubCheck 的 applyProgressJSON）删掉不会变红——需要真实网络

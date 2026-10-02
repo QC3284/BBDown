@@ -6,13 +6,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"crypto/subtle"
 	"errors"
@@ -677,16 +682,295 @@ func snapshotList(tasks []*DownloadTask) []DownloadTask {
 	return out
 }
 
+// addTaskAllowedFields 是 /add-task 的白名单字段（顺序 = 报错与文档里列出的顺序）。
+//
+// /add-task 原本只解出 url 一个字段，把 configFile/area/interactive/filePattern 等一整族注入面
+// 在构造上关死了（A-serve 第 10-14 条）。Web UI 要开表单就必须**显式**放开一批字段，于是改成
+// 白名单：只认下面这 15 个（snake_case，与 config.MyOption 的 json tag 一致），其余字段 400
+// 并点名——字段拼错却拿到 202 是最难查的一类问题（客户以为生效了）。
+//
+// 明确不开放（各自有理由，用例逐条断言 400）：
+//   - interactive：任务会阻塞在 Console.ReadLine 上，不可取消地占死执行槽（A-serve 第 12 条）；
+//   - file_pattern / multi_file_pattern：文件名模板 = 路径拼接面；
+//   - cookie / access_token / user_agent：凭据与请求头由部署侧配置，不该由请求注入；
+//   - danmaku_filter / notify_webhook：一个进日志与过滤逻辑，一个是出网回调（SSRF 面）；
+//   - drm_* / mp4decrypt_path / wvd_path / insecure / decrypt_drm：本机工具路径与 TLS 降级。
+var addTaskAllowedFields = []string{
+	"url", "select_page", "dfn_priority", "encoding_priority", "multi_thread",
+	"overwrite", "skip_mux", "skip_ai", "write_nfo", "compat",
+	"use_app_api", "use_tv_api", "use_intl_api", "work_dir", "language",
+}
+
+var addTaskAllowedSet = func() map[string]bool {
+	m := make(map[string]bool, len(addTaskAllowedFields))
+	for _, f := range addTaskAllowedFields {
+		m[f] = true
+	}
+	return m
+}()
+
+// 白名单字段的值域上限（各用例逐条钉住）。
+const (
+	// maxSelectPageItems 是 select_page 展开后的条目上限。
+	//
+	// 比 internal/workflow 的 MaxExpandedPages(100000) 严得多：那个上限是给「在终端里自己敲 -p」
+	// 的用户定的，而 select_page 是任何能打到 serve 的客户端可控输入——一次请求让服务端展开
+	// 10 万个分P（再把它们写进任务日志与状态文件）就是内存/CPU 放大面（A-serve 第 28 条）。
+	// 1000 远超任何真实稿件的分P数（B 站单个稿件上限是几百），也足够表达「第 1..N 集」。
+	maxSelectPageItems = 1000
+	// maxPriorityLen 是 dfn_priority / encoding_priority 的长度上限，按**字符数**：
+	// 白名单允许中文，按字节算会让「长度 200」对中文实际只有 66 个字。
+	maxPriorityLen = 200
+	// maxWorkDirLen 是 work_dir 原始输入的长度上限，按字节（它是一条路径）。
+	maxWorkDirLen = 512
+	// maxLanguageLen 是 language 的长度上限，按字符数（语言代码形如 zh-CN / ai-zh / jpn）。
+	maxLanguageLen = 20
+)
+
+// addTaskRequest 是 /add-task 的白名单字段集。
+//
+// 指针表示「客户端**显式给了**这个字段」：DefaultMyOption() 里 multi_thread / skip_ai /
+// force_replace_host 默认是 true，而 bool 的零值是 false——直接解码会把「没传」当成
+// 「传了 false」，只发 url 的老客户端拿到的配置就不再与 2.13.0 逐字一致。
+type addTaskRequest struct {
+	URL              string  `json:"url"`
+	SelectPage       *string `json:"select_page"`
+	DfnPriority      *string `json:"dfn_priority"`
+	EncodingPriority *string `json:"encoding_priority"`
+	MultiThread      *bool   `json:"multi_thread"`
+	Overwrite        *bool   `json:"overwrite"`
+	SkipMux          *bool   `json:"skip_mux"`
+	SkipAI           *bool   `json:"skip_ai"`
+	WriteNFO         *bool   `json:"write_nfo"`
+	Compat           *bool   `json:"compat"`
+	UseAppAPI        *bool   `json:"use_app_api"`
+	UseTvAPI         *bool   `json:"use_tv_api"`
+	UseIntlAPI       *bool   `json:"use_intl_api"`
+	WorkDir          *string `json:"work_dir"`
+	Language         *string `json:"language"`
+}
+
+// addTaskOptionObserver 是 /add-task 的用例观察点：serve 用例不联网、任务也跑不起来，从任务结果
+// 反推不出「请求字段 → 任务 cfg」的映射。生产路径恒为 nil（非测试代码不读它）。
+var addTaskOptionObserver func(config.MyOption)
+
+// parseAddTaskRequest 解析并校验 /add-task 的请求体（纯函数：bytes 进、结构出，离线可测）。
+//
+// 规则：
+//  1. 未知字段 → 报错并点名（宁可报错，不让字段静默丢弃）；
+//  2. url 必须非空，文案与 2.13.0 逐字一致；
+//  3. 白名单字段值域逐个校验，报错说清「哪个字段、为什么」。
+func parseAddTaskRequest(body []byte) (addTaskRequest, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return addTaskRequest{}, fmt.Errorf("invalid request body, 'url' required")
+	}
+	if unknown := unknownAddTaskFields(raw); len(unknown) > 0 {
+		noun := "field"
+		if len(unknown) > 1 {
+			noun = "fields"
+		}
+		return addTaskRequest{}, fmt.Errorf("unknown %s %s in request body (allowed: %s)",
+			noun, quotedJoin(unknown), strings.Join(addTaskAllowedFields, ", "))
+	}
+
+	var req addTaskRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return addTaskRequest{}, fmt.Errorf("field %q 的类型不对：%v", typeErr.Field, err)
+		}
+		return addTaskRequest{}, fmt.Errorf("invalid request body, 'url' required")
+	}
+	if req.URL == "" {
+		return addTaskRequest{}, fmt.Errorf("invalid request body, 'url' required")
+	}
+	if err := validateAddTaskFields(&req); err != nil {
+		return addTaskRequest{}, err
+	}
+	return req, nil
+}
+
+// unknownAddTaskFields 返回请求体里的未知字段（排序后返回，保证多处拼错时报错稳定）。
+func unknownAddTaskFields(raw map[string]json.RawMessage) []string {
+	var unknown []string
+	for name := range raw {
+		if !addTaskAllowedSet[name] {
+			unknown = append(unknown, name)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+// quotedJoin 把字段名拼成 "a", "b" 这样的清单（点名字段时带引号更好读）。
+func quotedJoin(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = strconv.Quote(n)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// validateAddTaskFields 校验并规范化白名单字段的值（纯函数）。
+func validateAddTaskFields(req *addTaskRequest) error {
+	// select_page 复用 CLI 的解析器（workflow.ParsePageSelection），不复制一份实现：
+	// 分P表达式的规则（负号只算单段、连字符两侧允许空白、单段与累计两套上限）只有那一份。
+	if req.SelectPage != nil {
+		sel := strings.TrimSpace(*req.SelectPage)
+		if sel != "" {
+			pages, err := workflow.ParsePageSelection(sel)
+			if err != nil {
+				return fmt.Errorf("select_page %q 无效：%v（留空表示全部）", sel, err)
+			}
+			if len(pages) > maxSelectPageItems {
+				return fmt.Errorf("select_page %q 展开后有 %d 个分P，超过服务端上限 %d", sel, len(pages), maxSelectPageItems)
+			}
+		}
+		req.SelectPage = &sel
+	}
+	if req.DfnPriority != nil {
+		v, err := validatePriorityList("dfn_priority", *req.DfnPriority)
+		if err != nil {
+			return err
+		}
+		req.DfnPriority = &v
+	}
+	if req.EncodingPriority != nil {
+		v, err := validatePriorityList("encoding_priority", *req.EncodingPriority)
+		if err != nil {
+			return err
+		}
+		req.EncodingPriority = &v
+	}
+	if req.WorkDir != nil {
+		v, err := validateWorkDir(*req.WorkDir)
+		if err != nil {
+			return err
+		}
+		req.WorkDir = &v
+	}
+	if req.Language != nil {
+		v, err := validateLanguage(*req.Language)
+		if err != nil {
+			return err
+		}
+		req.Language = &v
+	}
+	return nil
+}
+
+// validatePriorityList 校验「编码/画质优先级」这类逗号列表：长度按字符数上限，字符只允许
+// 字母、数字、中文（IsLetter 覆盖 CJK）、逗号与空格——分档名就是这些（如 "8K 4K 1080P 高码率"）。
+// 其余字符（引号、换行、分号、斜杠……）一律拒绝：它们没有合法用途，却能把值带进日志与后续参数。
+func validatePriorityList(field, value string) (string, error) {
+	v := strings.TrimSpace(value)
+	if n := utf8.RuneCountInString(v); n > maxPriorityLen {
+		return "", fmt.Errorf("%s 过长（%d 字符，上限 %d）", field, n, maxPriorityLen)
+	}
+	for _, r := range v {
+		if r == ',' || r == ' ' || unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		return "", fmt.Errorf("%s 含非法字符 %q：只允许字母、数字、中文、逗号与空格", field, string(r))
+	}
+	return v, nil
+}
+
+// validateWorkDir 校验并绝对化 work_dir。
+//
+// 语义与 CLI 一致：值最终交给 workflow 的 applyConfig（os.MkdirAll + 切换工作目录），
+// 环境变量展开也由它完成，这里只做「绝对化 + 输入长度 + 控制字符」三件事。
+//
+// 注意：applyConfig 的切换工作目录是**进程级**副作用（CLI 下每次只跑一个任务，没问题；
+// serve 下并发任务共享进程 cwd）。本期按契约放开该字段，多任务并发时的隔离问题留在 workflow 侧。
+func validateWorkDir(value string) (string, error) {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return "", nil
+	}
+	if len(v) > maxWorkDirLen {
+		return "", fmt.Errorf("work_dir 过长（%d 字节，上限 %d）", len(v), maxWorkDirLen)
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("work_dir 含控制字符（0x%02x）：路径里不允许", r)
+		}
+	}
+	abs, err := filepath.Abs(v)
+	if err != nil {
+		return "", fmt.Errorf("work_dir %q 无法解析成绝对路径：%v", v, err)
+	}
+	return abs, nil
+}
+
+// validateLanguage 校验音频语言代码：长度 ≤ maxLanguageLen，字符只允许字母、数字、连字符与下划线
+// （zh-CN / ai-zh / jpn）。这个值会进 ffmpeg 的 -metadata language= 与 mp4box 的 lang= 参数，
+// 所以 ':'、'=' 这类会破坏参数结构的字符必须在门口拦掉。
+func validateLanguage(value string) (string, error) {
+	v := strings.TrimSpace(value)
+	if n := utf8.RuneCountInString(v); n > maxLanguageLen {
+		return "", fmt.Errorf("language 过长（%d 字符，上限 %d）", n, maxLanguageLen)
+	}
+	for _, r := range v {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			continue
+		}
+		return "", fmt.Errorf("language 含非法字符 %q：只允许字母、数字、连字符与下划线（如 zh-CN / jpn）", string(r))
+	}
+	return v, nil
+}
+
+// applyAddTaskOption 把白名单字段套到默认配置上：**只有客户端显式给了的字段**才覆盖默认值，
+// 因此只发 url 的老客户端拿到的 cfg 与改前逐字段相同（= DefaultMyOption() + URL）。
+func applyAddTaskOption(cfg *config.MyOption, req addTaskRequest) {
+	set := func(dst *string, src *string) {
+		if src != nil {
+			*dst = *src
+		}
+	}
+	setBool := func(dst *bool, src *bool) {
+		if src != nil {
+			*dst = *src
+		}
+	}
+	cfg.URL = req.URL
+	set(&cfg.SelectPage, req.SelectPage)
+	set(&cfg.DfnPriority, req.DfnPriority)
+	set(&cfg.EncodingPriority, req.EncodingPriority)
+	setBool(&cfg.MultiThread, req.MultiThread)
+	setBool(&cfg.Overwrite, req.Overwrite)
+	setBool(&cfg.SkipMux, req.SkipMux)
+	setBool(&cfg.SkipAi, req.SkipAI)
+	setBool(&cfg.WriteNFO, req.WriteNFO)
+	setBool(&cfg.Compat, req.Compat)
+	setBool(&cfg.UseAppAPI, req.UseAppAPI)
+	setBool(&cfg.UseTvAPI, req.UseTvAPI)
+	setBool(&cfg.UseIntlAPI, req.UseIntlAPI)
+	set(&cfg.WorkDir, req.WorkDir)
+	set(&cfg.Language, req.Language)
+}
+
+// writeAddTaskBadRequest 写 /add-task 的 400 错误体。消息先经 json.Marshal：字段级报错里带引号
+// （点名 "cookie" 这类字段），手拼字符串会拼出非法 JSON。
+func writeAddTaskBadRequest(w http.ResponseWriter, msg string) {
+	body, err := json.Marshal(struct {
+		Error string `json:"error"`
+	}{msg})
+	if err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	http.Error(w, string(body), http.StatusBadRequest)
+}
+
 func (s *APIServer) handleAddTask(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
-	var req struct {
-		URL string `json:"url"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBodySize))
+	if err != nil {
 		// An oversized body is a 413, not a generic 400: clients need to tell
 		// "too big" from "malformed" to decide whether to retry.
 		var tooLarge *http.MaxBytesError
@@ -694,12 +978,19 @@ func (s *APIServer) handleAddTask(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"request body too large"}`, http.StatusRequestEntityTooLarge)
 			return
 		}
-		http.Error(w, `{"error":"invalid request body, 'url' required"}`, http.StatusBadRequest)
+		writeAddTaskBadRequest(w, "invalid request body, 'url' required")
 		return
 	}
-	if req.URL == "" {
-		http.Error(w, `{"error":"invalid request body, 'url' required"}`, http.StatusBadRequest)
+	req, err := parseAddTaskRequest(body)
+	if err != nil {
+		writeAddTaskBadRequest(w, err.Error())
 		return
+	}
+
+	opt := config.DefaultMyOption()
+	applyAddTaskOption(&opt, req)
+	if addTaskOptionObserver != nil {
+		addTaskOptionObserver(opt)
 	}
 
 	// Accept-queue limit: 429 when the pending queue is full (upstream).
@@ -734,7 +1025,7 @@ func (s *APIServer) handleAddTask(w http.ResponseWriter, r *http.Request) {
 	s.publishTaskEvent(EventTaskStart, task, StateProgress)
 
 	s.taskWG.Add(1)
-	go s.processTask(ctx, task, req.URL)
+	go s.processTask(ctx, task, opt)
 
 	writeJSON(w, http.StatusAccepted, AddTaskResponse{TaskID: task.JobID})
 }
@@ -757,7 +1048,11 @@ func (s *APIServer) releaseSlot() { <-s.semaphore }
 
 // processTask runs a real download via the workflow (upstream
 // ProcessDownloadTaskAsync): parse URL → fetch metadata → download pages.
-func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url string) {
+//
+// opt 是 handleAddTask 按白名单构造好的任务配置（默认值 + 客户端显式给的字段），
+// opt.URL 就是要处理的地址。
+func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, opt config.MyOption) {
+	url := opt.URL
 	defer s.taskWG.Done()
 	defer func() { <-s.acceptLimiter }()
 	defer s.persistFinishedTasks()
@@ -798,8 +1093,7 @@ func (s *APIServer) processTask(ctx context.Context, task *DownloadTask, url str
 	task.Aid = resolved
 	task.mu.Unlock()
 
-	cfg := config.DefaultMyOption()
-	cfg.URL = url
+	cfg := opt
 	wf := workflow.New(cfg, client)
 	wf.MetaHandler = func(v *entity.VInfo) {
 		task.mu.Lock()

@@ -5,9 +5,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/entity"
+	"github.com/QC3284/BBDown/internal/util"
 )
 
 // captureStdout 把 os.Stdout 换成管道，收集 fn 期间的全部终端输出。
@@ -32,34 +34,58 @@ func captureStdout(t *testing.T, fn func()) string {
 	return out
 }
 
-// TestPrintVideoHeaderMatchesUpstream 钉住稿件头部四行的标签与格式
-// （上游 Workflow.cs:142-153：视频标题 / 发布时间(带时区) / 视频URL / UP主页）。
-// 此前标题与 URL 都是裸值、UP 主页干脆不打印，用户分不清每行是什么。
-func TestPrintVideoHeaderMatchesUpstream(t *testing.T) {
+// TestPrintVideoHeaderMatchesV3 钉住 v3 定稿的稿件头部：只剩「视频标题: …」（青色）一行。
+//
+// 上游 Workflow.cs:142-153 打四行（视频标题 / 发布时间(带时区) / 视频URL / UP主页）；v3
+// （BBDownT 口径，docs/cli-concept-bbdt-v3.png）把它们收成「标题一行 + 每个分P 一条元信息行」：
+// 发布时间、UP、BV/av、时长、分P 数由 renderMetaLine 承载（逐字断言见 infolines_test.go）。
+// 这是**有意偏离上游 v1.6.20** 的观感变更——同一屏里不该两处报同一件事。
+//
+// 旧断言（四行都在头部）按新口径反转：每一段信息的意图都保留，只是换了承载者——
+// 发布时间 → 元信息行的「发布 YYYY-MM-DD」；UP 主页 → 元信息行的「UP主: 名」；
+// 视频 URL → 元信息行的「BV… (avN)」（站点 URL 那行在 v3 里取消，故国际版也不再有差异）。
+func TestPrintVideoHeaderMatchesV3(t *testing.T) {
+	page := entity.Page{
+		Index: 1, Aid: "170001", Cid: "2",
+		OwnerMid: "12345", OwnerName: "某UP", Dur: 2055,
+	}
 	vInfo := &entity.VInfo{
-		Title:   "示例稿件",
-		PubTime: 1541500000,
-		PagesInfo: []entity.Page{{
-			Index: 1, Aid: "170001", Cid: "2",
-			OwnerMid: "12345",
-		}},
+		Title:     "示例稿件",
+		PubTime:   1541500000,
+		PagesInfo: []entity.Page{page},
 	}
 
 	out := captureStdout(t, func() { printVideoHeader(vInfo, false) })
-	for _, want := range []string{"视频标题: 示例稿件", "发布时间: ", "视频URL: https://www.bilibili.com/video/", "UP主页: https://space.bilibili.com/12345"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("头部缺少 %q，实际输出 %q", want, out)
+	if !strings.Contains(out, "视频标题: 示例稿件") {
+		t.Errorf("头部缺少标题行，实际输出 %q", out)
+	}
+	if !strings.Contains(out, util.AnsiCyan) {
+		t.Errorf("标题行应当是青色（v3 定稿的标题行），实际输出 %q", out)
+	}
+	for _, gone := range []string{"发布时间: ", "视频URL: ", "UP主页: "} {
+		if strings.Contains(out, gone) {
+			t.Errorf("v3 头部不该再有 %q（信息改由元信息行承载，避免同一屏报两遍），实际输出 %q", gone, out)
 		}
 	}
-	// 上游的时间戳带本地时区偏移（zzz），不带偏移的分支格式曾被用在这里。
-	if !strings.Contains(out, "+08:00") && !strings.Contains(out, "-0") && !strings.Contains(out, "+0") {
-		t.Errorf("发布时间应带时区偏移，实际输出 %q", out)
+	// v3 头部与解析模式无关：旧「国际版不打 URL」的差异随 URL 行一起消失。
+	// 不比较整段输出——日志行带时间戳，两次调用跨过毫秒边界就会误报（踩过一次）。
+	intl := captureStdout(t, func() { printVideoHeader(vInfo, true) })
+	if !strings.Contains(intl, "视频标题: 示例稿件") {
+		t.Errorf("国际版头部缺少标题行：%q", intl)
+	}
+	for _, gone := range []string{"发布时间: ", "视频URL: ", "UP主页: "} {
+		if strings.Contains(intl, gone) {
+			t.Errorf("国际版头部不该有 %q（v3 头部只剩标题行）：%q", gone, intl)
+		}
 	}
 
-	// 国际版不打印 bilibili.com 的 URL（上游 !myOption.UseIntlApi 条件）。
-	out = captureStdout(t, func() { printVideoHeader(vInfo, true) })
-	if strings.Contains(out, "视频URL: ") {
-		t.Errorf("国际版不应打印视频URL，实际输出 %q", out)
+	// 标题行丢掉的信息必须真的还在：元信息行逐条承载它们。
+	meta := renderMetaLine(pageInfoOf(page, vInfo, 1))
+	wantDate := "发布 " + time.Unix(vInfo.PubTime, 0).Format("2006-01-02")
+	for _, want := range []string{"UP主: 某UP", page.Bvid(), "(av170001)", wantDate, "34:15", "分P 1"} {
+		if !strings.Contains(meta, want) {
+			t.Errorf("元信息行缺少 %q，实际 %q", want, meta)
+		}
 	}
 }
 
