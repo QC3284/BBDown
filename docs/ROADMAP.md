@@ -146,6 +146,14 @@
 ### 2.14.0 批次（2026-10-01）闭环
 
 - 完成：/add-task 15 字段白名单（t13/t14）、serve Web UI 重设计（t8/t10）、页面 415 修复、202 用例异步 join 竞态修复（疑为 15/16 真根因之一）。
+
+### 2.15.2 批次（2026-10-06）闭环
+
+- 完成：字幕诚实回退（混淆令牌过滤 + 侧车四态）、Web 输入简化（短号/多行批量/文件导入）、CLI 信息行宽度治理第一步（三档 0 超宽）、emoji 宽度区间补全、cli-width-audit.md。
+- 遗留/观察：**AI 字幕（ai-zh）生态内无人可下**（B 站混淆令牌，上游与 BBDownT 均无解；若现公开解码方案则跟进）。
+- 已批准排队（下一工作周期，用户拍板）：① --audio-format 开关（FLAC 封装原生 .flac，溏心音乐封面兼容）；② Web 背景三套（品牌渐变/四预设/跟随系统，docs/bbdown-ui-bg-v1/v2/v3.png）；③ CLI 宽度第二步（标题行折行 + 事件行截断，实现时登记 UPSTREAM_ALIGNMENT 有意偏离）。
+- 候选：--ai-subtitle-policy（吸收 BBDownT SubtitleSelection）；sidecar 双常量统一；debugScreenMaxCols 改 TerminalWidth()；短号+?query 前端接纳。
+
 - 新增遗留（随本批发现）：
 
 ### 2.15.1 批次（2026-10-02）闭环（四期）

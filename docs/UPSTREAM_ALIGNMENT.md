@@ -1061,6 +1061,16 @@ SubtitleItem{lan=3,lanDoc=4,subtitleUrl=5}）。只手解三个字段（手写 v
 - **testsupport 抽包**：cli/server 两份工作目录守卫合并 `internal/util/testsupport`，判据逐条一致、不进生产二进制。
 - **下载并行评估文档**（docs/parallel-download-eval.md）：方案定案 B；发现 serve 多任务 TTY 下既有单行进度互踩（B 顺带修复）。
 
+### 4.68 第六十三轮：字幕 URL 混淆登记 + Web 输入简化 + CLI 信息行宽度治理（**修复 + 生态对照**）
+
+- **字幕「地址疑似失效」真相（2.15.2）**：新版字幕接口 x/v2/subtitle/web/view 返回的 subtitle_url 是服务端混淆令牌——宿主 subtitle.bilibili.com 公网 NXDOMAIN（AliDNS±中国 ECS + Cloudflare DoH 三方一致）、宿主与 ?auth_key 间为 7bit 密文块（三次抓取稳定）；字段号/长度无漂移（protowire 全量解码复核）。
+  处理：解析时过滤不可用条目 → 回退老三条接口；侧车字幕四态（✔/✗/—）不再谎报。**AI 字幕（ai-zh 等）生态内无人可下**（实测对照：上游 v1.6.20 不碰新接口；BBDownT v2 用同接口但只校验 URL 形态、会把坏地址当可用下载时 DNS 失败）——
+  本仓行为为三线最优（诚实回退），登记为**观察项**（若 B 站调整或出现公开解码方案则跟进）。
+- **可吸收候选（BBDownT）**：--ai-subtitle-policy（exclude/include/prefer-human/only + SkipAi，SubtitleSelection.cs）——记 ROADMAP，未实现。
+- **Web 输入简化（2.15.2）**：短号/多行批量/文件导入（与 CLI --urls-file 同语义），后端零改动（BV 短号本就可解析）。
+- **CLI 信息行宽度治理第一步（2.15.2）**：v3 信息行与 --debug 长行按显示宽度夹取；实测三档超宽 26/26/17 → 0/0/0。第二步（标题行/事件行）已获用户批准，下一工作周期实现（属**有意偏离上游事件行契约**，实现时在此登记）。
+
+
 
 
 

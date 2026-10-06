@@ -136,6 +136,112 @@ type HTTPClient struct {
 	retries int
 }
 
+// debugScreenMaxCols 是 --debug 单行在**屏幕**上的显示列上限（含 28 列时间戳前缀，
+// 即整行 ≤ 这个数；正文预算因此在 debugLine 里再减掉 LogIndentWidth）。
+//
+// 为什么要有：一次 playurl/player 响应动辄 500~700 列（t39 的 80/100/120 列 pty 实测：
+// Response 最长 716 列、GET 最长 248 列），终端会把它折成一片，排查时反而看不清。
+// 日志文件里保留全文（见 debugLine），屏幕只给摘要。
+const debugScreenMaxCols = 120
+
+// screenClamp 按显示宽度夹取一行纯文本：放不下时保留前 cols-1 列 + 「…」。
+//
+// 宽度口径与 internal/download.DisplayWidth 一致（ASCII 1 列、CJK/全角/emoji 2 列、
+// 控制字符与组合记号 0 列）——**不能复用那个函数**：util 是 download 的下游依赖
+// （download import util），反向引用会成环，所以这里按同一套区间表实现一份。
+func screenClamp(s string, cols int) string {
+	if cols <= 0 || s == "" {
+		return ""
+	}
+	width := func(r rune) int {
+		switch {
+		case r < 0x20 || (r >= 0x7F && r < 0xA0):
+			return 0
+		case r == 0x200B || r == 0x200C || r == 0x200D || r == 0xFEFF:
+			return 0
+		case r >= 0x0300 && r <= 0x036F:
+			return 0
+		case r >= 0x1100 && r <= 0x115F,
+			r >= 0x2E80 && r <= 0x303E,
+			r >= 0x3041 && r <= 0x33FF,
+			r >= 0x3400 && r <= 0x4DBF,
+			r >= 0x4E00 && r <= 0x9FFF,
+			r >= 0xA000 && r <= 0xA4CF,
+			r >= 0xAC00 && r <= 0xD7A3,
+			r >= 0xF900 && r <= 0xFAFF,
+			r >= 0xFE10 && r <= 0xFE19,
+			r >= 0xFE30 && r <= 0xFE6F,
+			r >= 0xFF00 && r <= 0xFF60,
+			r >= 0xFFE0 && r <= 0xFFE6,
+			r >= 0x1F300 && r <= 0x1F64F,
+			r >= 0x1F680 && r <= 0x1F6FF,
+			r >= 0x1F900 && r <= 0x1F9FF,
+			r >= 0x20000 && r <= 0x3FFFD:
+			return 2
+		}
+		return 1
+	}
+	total := 0
+	for _, r := range s {
+		total += width(r)
+	}
+	if total <= cols {
+		return s
+	}
+	if cols == 1 {
+		return "…"
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		rw := width(r)
+		if used+rw > cols-1 {
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	return b.String() + "…"
+}
+
+// debugLine 记录一行诊断信息：**屏幕**按宽度夹取，**日志文件**里始终是全文。
+//
+// 两个写入面的诉求不同：屏幕要短（不断行才能一眼扫过），文件要全（排查靠它）。
+// debugFn 那条通道（CLI 传入的包装 → util.LogDebug）会同时写屏幕与文件，所以这里：
+//  1. 把夹取后的短行交给 debugFn（屏幕可读；日志文件里因此也会有一条短行——它是屏幕副本，
+//     同时也是「这一行被夹过」的标记）；
+//  2. 再把**全文**追加进日志文件（defaultLogger.appendToFile 在未配置文件日志时是空操作，
+//     且自带写失败挂起逻辑，不需要在这里判断路径）。
+func (c *HTTPClient) debugLine(full string) {
+	if c.debugFn == nil {
+		return
+	}
+	// 屏幕那一行 = 28 列时间戳前缀 + 正文（前缀由 util.LogDebug 打）：正文按「上限 - 前缀」夹取。
+	budget := debugScreenMaxCols - LogIndentWidth
+	if budget < 16 {
+		budget = 16
+	}
+	c.debugFn("%s", screenClamp(full, budget))
+	defaultLogger.appendToFile(timestamp() + " - " + full)
+}
+
+// debugFileMaxChars 是写进日志文件的单行上限（防一次超大响应把日志刷爆）。
+// 屏幕上限（debugScreenMaxCols=120 列）远小于它，所以「屏幕上被夹掉的内容」在文件里是完整的；
+// 只有超过这个上限的**超大响应**才会在文件里也被截断，并带明确标记。
+const debugFileMaxChars = 64 << 10
+
+// debugResponseLine 记录一次响应：屏幕给夹取后的短行，日志文件给全文（超大时有标记）。
+func (c *HTTPClient) debugResponseLine(body string) {
+	if c.debugFn == nil {
+		return
+	}
+	full := body
+	if len(full) > debugFileMaxChars {
+		full = full[:debugFileMaxChars] + fmt.Sprintf("…[truncated, total %d chars]", len(body))
+	}
+	c.debugLine("Response: " + full)
+}
+
 // NewHTTPClient creates a new HTTPClient.
 func NewHTTPClient(skipSSL func() bool, cookieFn func() string, debugFn func(string, ...interface{})) *HTTPClient {
 	transport := &http.Transport{
@@ -291,9 +397,7 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 	}
 	req.Header.Set("Cache-Control", "no-cache")
 
-	if c.debugFn != nil {
-		c.debugFn("GET %s", MaskUrl(url))
-	}
+	c.debugLine("GET " + MaskUrl(url))
 
 	var resp *http.Response
 	retries := c.retries
@@ -381,13 +485,7 @@ func (c *HTTPClient) GetWebSourceWithSetCookies(ctx context.Context, url string)
 	}
 
 	result := string(body)
-	if c.debugFn != nil {
-		truncated := result
-		if len(truncated) > 1024 {
-			truncated = truncated[:1024] + fmt.Sprintf("…[truncated, total %d chars]", len(result))
-		}
-		c.debugFn("Response: %s", truncated)
-	}
+	c.debugResponseLine(result)
 	return result, resp.Header.Values("Set-Cookie"), nil
 }
 

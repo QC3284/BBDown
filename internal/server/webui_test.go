@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -826,5 +827,263 @@ func TestWebUIRedesignLayoutContract(t *testing.T) {
 	}
 	if !strings.Contains(tag, "disabled") {
 		t.Error("暂停按钮没有 disabled：API 暂不支持的操作不能看起来可用")
+	}
+}
+
+// ============================================================================
+// t37：任务输入面（短号 + 多行批量 + .txt 文件导入）
+// ============================================================================
+//
+// 静态结构由 TestWebUITaskInputWiring 钉住；**行为**由 TestWebUITaskInputBehaviour 驱动：
+// 它把内嵌页面里的内联脚本抽出来，在 Node 里用桩 DOM 跑一遍（Go 侧没有 JS 运行时，
+// 前端逻辑只能在真实 JS 引擎里执行才算验证过）。node 不在时 t.Skip 并写明原因——
+// CI 的三个平台 runner 都自带 node。
+
+// webuiTaskDriverJS 是驱动页面脚本的 Node 程序：argv[2] = 页面文件路径。
+//
+// 它做四件事：① 按页面里的 id/data-field 搭桩 DOM（含 textarea、file input、结果列表）；
+// ② 把内联脚本放进 vm 里执行（内联脚本里 innerHTML 等注入点被桩成抛异常，一旦被用到就记下来）；
+// ③ 依次驱动「短号 / 多行+注释 / 认不出来的行 / 服务端 400 / .txt 导入 / 拖拽 / 载荷行」七组场景，
+// 每组的 POST 请求体与结果列表都断言；④ 把 checks 打印成 JSON 供 Go 侧核对。
+const webuiTaskDriverJS = `// 页面脚本的行为驱动（在 Node 里跑真实 index.html 的内联脚本，DOM 用桩）。
+// 由 TestWebUITaskInputBehaviour 生成到临时目录后执行：argv[2] = 页面文件路径。
+const fs = require('fs');
+const vm = require('vm');
+const html = fs.readFileSync(process.argv[2], 'utf8');
+const code = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+
+const checks = [];
+function check(name, ok, detail) { checks.push({ name: name, ok: !!ok, detail: detail === undefined ? '' : String(detail) }); }
+function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+const sinks = [];
+class El {
+  constructor(tag) {
+    this.tagName = (tag || 'div').toUpperCase();
+    this.children = []; this.childNodes = this.children;
+    this.attributes = {}; this.className = ''; this.hidden = false; this.style = {};
+    this.value = ''; this.checked = false; this.type = ''; this.listeners = {}; this._text = null; this.files = null;
+  }
+  get textContent() { return this._text; }
+  set textContent(v) { this._text = String(v); }
+  set innerHTML(v) { sinks.push('innerHTML'); throw new Error('HTML sink used: innerHTML'); }
+  set outerHTML(v) { sinks.push('outerHTML'); throw new Error('HTML sink used: outerHTML'); }
+  insertAdjacentHTML() { sinks.push('insertAdjacentHTML'); }
+  setAttribute(n, v) { this.attributes[n] = String(v); }
+  getAttribute(n) { return Object.prototype.hasOwnProperty.call(this.attributes, n) ? this.attributes[n] : null; }
+  appendChild(c) { this.children.push(c); c.parentNode = this; return c; }
+  insertBefore(c) { this.children.unshift(c); c.parentNode = this; return c; }
+  removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) { this.children.splice(i, 1); } return c; }
+  replaceChildren() { this.children.length = 0; }
+  addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
+  querySelectorAll() { return []; }
+}
+const ids = {};
+for (const m of html.matchAll(/id="([A-Za-z0-9_-]+)"/g)) { ids[m[1]] = new El('div'); }
+const fields = [];
+for (const m of html.matchAll(/<(input|select|textarea)[^>]*data-field="([a-z0-9_]+)"[^>]*>/g)) {
+  const frag = m[0], el = new El(m[1]);
+  el.type = frag.indexOf('type="checkbox"') >= 0 ? 'checkbox' : (m[1] === 'select' ? 'select-one' : m[1]);
+  el.attributes['data-field'] = m[2];
+  const dm = frag.match(/data-default="(true|false)"/);
+  if (dm) { el.attributes['data-default'] = dm[1]; el.checked = dm[1] === 'true'; }
+  fields.push(el);
+}
+ids['add-form'].querySelectorAll = (sel) => (sel === '[data-field]' ? fields : []);
+
+const store = new Map();
+const posts = [];
+let rejections = {};
+const sandbox = {
+  document: {
+    getElementById: (id) => { if (!ids[id]) { ids[id] = new El('div'); } return ids[id]; },
+    createElement: (tag) => new El(tag),
+    addEventListener: () => {},
+  },
+  EventSource: class { constructor(url) { this.url = url; } onopen() {} onerror() {} },
+  fetch: (url, opts) => {
+    if (url !== '/add-task') {
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ Running: [], Finished: [] }), text: () => Promise.resolve('{}') });
+    }
+    const body = JSON.parse(opts.body);
+    posts.push(body);
+    const plan = rejections[body.url];
+    if (plan) { return Promise.resolve({ ok: false, status: plan.status, text: () => Promise.resolve(plan.body) }); }
+    return Promise.resolve({ ok: true, status: 202, text: () => Promise.resolve('{"TaskId":"job-' + posts.length + '"}') });
+  },
+  localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, String(v)); }, removeItem: (k) => { store.delete(k); } },
+  location: { search: '' },
+  FileReader: class { readAsText(file) { this.result = (file && file.__text) || ''; if (this.onload) { this.onload(); } } },
+  setInterval: () => 0,
+  console: console, URLSearchParams: URLSearchParams, Map: Map, JSON: JSON, Promise: Promise,
+};
+vm.createContext(sandbox);
+vm.runInContext(code, sandbox);
+
+const form = ids['add-form'];
+const tasksInput = ids['f-url'];
+const fileInput = ids['f-urlfile'];
+const resultsList = ids['form-results'];
+const msg = ids['form-msg'];
+
+async function flush() { for (let i = 0; i < 30; i++) { await new Promise((r) => setImmediate(r)); } }
+async function submit(text) {
+  posts.length = 0;
+  tasksInput.value = text;
+  form.listeners.submit[0]({ preventDefault() {} });
+  await flush();
+  return posts.slice();
+}
+function resultRows() {
+  return resultsList.children.map((li) => ({
+    state: li.className,
+    label: li.children[0] ? li.children[0].textContent : '',
+    text: li.children[1] ? li.children[1].textContent : '',
+  }));
+}
+
+(async function main() {
+  // ① 短号：BV / av / ep / ss 各一条 → 4 个请求，body.url 逐字等于输入行。
+  let bodies = await submit('BV1xx411c7mD\nav2\nEP123\nss456');
+  check('短号 BV/av/ep/ss 全部提交', bodies.length === 4, JSON.stringify(bodies.map((b) => b.url)));
+  check('短号逐字进请求体', eq(bodies.map((b) => b.url), ['BV1xx411c7mD', 'av2', 'EP123', 'ss456']), JSON.stringify(bodies.map((b) => b.url)));
+  check('短号请求体只带 url（选项与默认一致不发送）', bodies.every((b) => eq(Object.keys(b), ['url'])), JSON.stringify(bodies[0]));
+  check('短号提交汇总', msg.textContent.indexOf('成功 4') >= 0, msg.textContent);
+
+  // ② 多行批量：空行与 # 注释跳过，混合短号与完整链接，行内空白 trim。
+  bodies = await submit('# 注释行\n\nBV1xx411c7mD\n  https://www.bilibili.com/video/BV1ZH4y167mH  \n# 又一条注释\n');
+  check('空行/注释不提交（恰好 2 个请求）', bodies.length === 2, JSON.stringify(bodies.map((b) => b.url)));
+  check('混合短号与链接、行内空白被 trim', eq(bodies.map((b) => b.url), ['BV1xx411c7mD', 'https://www.bilibili.com/video/BV1ZH4y167mH']), JSON.stringify(bodies.map((b) => b.url)));
+  const rows0 = resultRows();
+  check('空行与 # 注释行既不提交、也不进结果列表（不是错误，只是跳过）', rows0.length === 2 && rows0.every((r) => r.state === 'ok'), JSON.stringify(rows0));
+
+  // ③ 认不出来的一行：不提交、但在结果里点名（含 <script> 载荷：只会作为文本出现）。
+  bodies = await submit('BV1xx411c7mD\nnot-a-task\n<script>alert(1)</script>');
+  check('无法识别的行不提交（恰好 1 个请求）', bodies.length === 1, JSON.stringify(bodies.map((b) => b.url)));
+  const rows = resultRows();
+  check('结果列表先列跳过的行、再列提交结果', eq(rows.map((r) => r.state), ['skipped', 'skipped', 'ok']), JSON.stringify(rows));
+  check('跳过项点名原始文本（<script> 原样）', rows[1].text.indexOf('<script>alert(1)</script>') === 0, JSON.stringify(rows.map((r) => r.text)));
+  check('提交过程没有使用任何 HTML 注入点', sinks.length === 0, JSON.stringify(sinks));
+
+  // ④ 服务端拒绝（400）：解析 JSON error 并点名显示。
+  rejections = { 'av2': { status: 400, body: '{"error":"unknown field \\"interactive\\" in request body (allowed: url, select_page, ...)"}' } };
+  bodies = await submit('BV1xx411c7mD\nav2');
+  check('被拒项仍逐个提交（2 个请求）', bodies.length === 2, JSON.stringify(bodies.map((b) => b.url)));
+  const rows2 = resultRows();
+  check('被拒项在结果里标为 rejected 并带服务端原文', rows2[1].state === 'rejected' && rows2[1].text.indexOf('unknown field') >= 0, JSON.stringify(rows2));
+  check('汇总显示成功 1 / 被拒 1', msg.textContent.indexOf('成功 1') >= 0 && msg.textContent.indexOf('被拒') >= 0, msg.textContent);
+  rejections = {};
+
+  // ⑤ 文件导入（FileReader → 同一条解析路径）
+  tasksInput.value = '';
+  fileInput.files = [{ name: 'list.txt', __text: '# 注释\nBV1xx411c7mD\n\nav2\n' }];
+  fileInput.listeners.change[0]();
+  await flush();
+  check('文件内容追加进输入框', tasksInput.value.indexOf('BV1xx411c7mD') >= 0 && tasksInput.value.indexOf('av2') >= 0, JSON.stringify(tasksInput.value));
+  check('导入提示含文件名与可提交行数', msg.textContent.indexOf('list.txt') >= 0 && msg.textContent.indexOf('2') >= 0, msg.textContent);
+  bodies = await submit(tasksInput.value);
+  check('文件导入后提交 2 个任务', bodies.length === 2, JSON.stringify(bodies.map((b) => b.url)));
+
+  // ⑥ 拖拽 .txt（dataTransfer）
+  tasksInput.value = '';
+  form.listeners.drop[0]({ preventDefault() {}, dataTransfer: { files: [{ name: 'drop.txt', __text: 'https://www.bilibili.com/video/BV1xx411c7mD\n' }] } });
+  await flush();
+  check('拖拽文件同样走 FileReader 路径', tasksInput.value.indexOf('BV1xx411c7mD') >= 0, JSON.stringify(tasksInput.value));
+  bodies = await submit(tasksInput.value);
+  check('拖拽导入后提交 1 个任务', bodies.length === 1 && bodies[0].url === 'https://www.bilibili.com/video/BV1xx411c7mD', JSON.stringify(bodies.map((b) => b.url)));
+
+  // ⑦ XSS：文件内容里的 <img onerror> 只会作为文本进结果列表
+  tasksInput.value = '';
+  fileInput.files = [{ name: 'evil.txt', __text: '<img src=x onerror=alert(1)>\nhttps://www.bilibili.com/video/BV1xx411c7mD\n' }];
+  fileInput.listeners.change[0]();
+  await flush();
+  bodies = await submit(tasksInput.value);
+  const rows3 = resultRows();
+  check('文件里的载荷行被跳过并按文本显示', rows3[0] && rows3[0].state === 'skipped' && rows3[0].text.indexOf('<img src=x onerror=alert(1)>') === 0, JSON.stringify(rows3[0]));
+  check('整轮驱动没有使用任何 HTML 注入点', sinks.length === 0, JSON.stringify(sinks));
+
+  const failures = checks.filter((c) => !c.ok);
+  console.log(JSON.stringify({ checks: checks, failures: failures.map((c) => c.name), total: checks.length }, null, 1));
+  process.exit(failures.length === 0 ? 0 : 1);
+})();`
+
+// TestWebUITaskInputWiring 钉住本轮新增输入面的**结构**（行为见下一条用例）：
+// 多行任务输入（仍是白名单里的 url 字段）、.txt 文件导入（type=file + FileReader + drag/drop）、
+// 短号校验、空行与 # 注释跳过、逐条结果列表。
+//
+// 变异验证：把 textarea 换回单行 input → 本用例红；去掉 FileReader 或 drop 监听 → 红。
+func TestWebUITaskInputWiring(t *testing.T) {
+	page := embeddedWebUIPage(t)
+	for _, want := range []string{
+		`<textarea id="f-url" data-field="url"`, // 多行输入仍是白名单里的 url 字段（字段名契约不变）
+		`id="f-urlfile"`, `type="file"`, `accept=".txt,text/plain"`,
+		"FileReader", "readAsText",
+		`addEventListener("drop"`, `"dragenter"`, `"dragover"`, "dataTransfer", "readTaskFile(files[0])",
+		"SHORT_ID_RE", "av[0-9]+", "ep[0-9]+", "ss[0-9]+",
+		"parseTaskLines", "isTaskInput", "submitTasks",
+		`charAt(0) === "#"`, // 注释行跳过：与 CLI --urls-file（readURLList）逐字同一语义
+		`id="form-results"`, "renderResults", "serverMessage",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("页面缺少本轮输入面要素 %q", want)
+		}
+	}
+	if strings.Contains(page, `<input id="f-url"`) {
+		t.Error("任务输入仍是单行 input：本轮要求改成多行 textarea")
+	}
+}
+
+// TestWebUITaskInputBehaviour 在 Node 里驱动真实页面脚本，逐条核对本轮的验收面：
+//   - 短号 BV/av/ep/ss 全部被接受并逐字进 POST /add-task 的请求体；
+//   - 多行输入里的空行与 # 注释行不提交，混合短号/完整链接且行内空白被 trim；
+//   - 认不出来的行不提交，但在结果列表里点名（含 <script> 载荷：只作为文本出现）；
+//   - 服务端 400 被逐条汇总（解析 JSON error 并显示，被拒项点名）；
+//   - .txt 文件经 FileReader 导入后走同一条解析路径；拖拽同理；
+//   - 整轮驱动没有任何 HTML 注入点调用（桩 DOM 里 innerHTML 会抛异常并计数）。
+//
+// 变异验证：把 setText 换成 innerHTML（或把校验改回强制 http://）→ 驱动报告里对应断言失败。
+func TestWebUITaskInputBehaviour(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skipf("本机没有 node（%v）：跳过「页面输入行为」驱动用例——页面脚本只能在真实 JS 引擎里跑（Go 侧没有 JS 运行时）。CI 三个平台的 runner 都自带 node。", err)
+	}
+	dir := t.TempDir()
+	pagePath := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(pagePath, []byte(embeddedWebUIPage(t)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	driverPath := filepath.Join(dir, "driver.js")
+	if err := os.WriteFile(driverPath, []byte(webuiTaskDriverJS), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, runErr := exec.CommandContext(ctx, node, driverPath, pagePath).CombinedOutput()
+
+	var report struct {
+		Checks []struct {
+			Name   string `json:"name"`
+			OK     bool   `json:"ok"`
+			Detail string `json:"detail"`
+		} `json:"checks"`
+		Failures []string `json:"failures"`
+		Total    int      `json:"total"`
+	}
+	if uerr := json.Unmarshal(out, &report); uerr != nil {
+		t.Fatalf("驱动没有输出可解析的 JSON（err=%v，node 退出=%v）：\n%s", uerr, runErr, out)
+	}
+	// 防「断言被删空」的假绿：驱动的检查项数量是契约的一部分（当前 20 条）。
+	const wantChecks = 21
+	if report.Total < wantChecks {
+		t.Errorf("驱动只跑了 %d 条检查，期望 >= %d（断言被删掉了？）", report.Total, wantChecks)
+	}
+	for _, c := range report.Checks {
+		if !c.OK {
+			t.Errorf("页面行为断言失败：%s（%s）", c.Name, c.Detail)
+		}
+	}
+	if len(report.Failures) == 0 && runErr != nil {
+		t.Fatalf("驱动退出码非 0（%v）但没有报告失败项：\n%s", runErr, out)
 	}
 }

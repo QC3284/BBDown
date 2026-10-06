@@ -60,9 +60,14 @@ type Workflow struct {
 	// 而字幕实际下载在后面——两处共用同一次接口调用，多打一行绝不多打一次请求。
 	subsCache map[string][]entity.Subtitle
 
-	// sidecar 是本次下载的侧车状态（字幕/弹幕/封面，见 internal/download/sidecar.go）：
-	// 每页开始时按 enabledSidecars 重建，产物落地时 MarkDone，最后打成一行。
+	// sidecar 是本次下载的侧车状态（弹幕/封面，见 internal/download/sidecar.go）：
+	// 每页开始时按 downloadSidecarLabels 重建，产物落地时 MarkDone，最后打成一行。
+	// 字幕不在这里——它由 subtitleSidecar 单独记（可能「没有可下」，不能报 ✔）。
 	sidecar *download.SidecarStatus
+
+	// subtitleSidecar 是字幕那一格的状态（四态见 infolines.go 的 subtitleSidecarState）：
+	// 由字幕阶段按「有没有可下 / 下成几条」写入，printSidecarLine 按它渲染 ✔ / ✗ / —。
+	subtitleSidecar subtitleSidecarState
 }
 
 // New creates a new Workflow.
@@ -335,7 +340,9 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 	dlCfg.ProgressCursor = progressCursorFor(page.Index, pagesCount)
 	// 侧车状态行（字幕/弹幕/封面，见 internal/download/sidecar.go）：本页开始时按配置重建，
 	// 各产物落地时 MarkDone，媒体下载前打成一行。
-	w.sidecar = download.NewSidecarStatus(enabledSidecars(w.Cfg)...)
+	// 字幕那一格由编排层渲染四态（✔ / ✗ / —，见 infolines.go 的 subtitleSidecarState）：
+	// 「没有可下字幕」绝不能报成 ✔。其余侧车（弹幕/封面）交给 download.SidecarStatus。
+	w.sidecar = download.NewSidecarStatus(downloadSidecarLabels(w.Cfg)...)
 	w.subsCache = make(map[string][]entity.Subtitle)
 
 	// The product lock is taken once for the whole page and released when this
@@ -789,9 +796,15 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					downloadedSubs = append(downloadedSubs, s)
 				}
 			}
-			// 侧车：没有字幕可下（阶段完成）或至少下到一条 → ✔；有字幕但一条都没下成 → 保持 …。
-			if len(subs) == 0 || len(downloadedSubs) > 0 {
-				w.markSidecar("字幕")
+			// 侧车字幕那一格（t36 ⑥）：状态必须与产物一致——没有可下 →「—」（绝不报 ✔），
+			// 有可下但一条都没落盘 →「✗」，至少下到一条 →「✔」。
+			switch {
+			case len(subs) == 0:
+				w.subtitleSidecar = subtitleSidecarNone
+			case len(downloadedSubs) > 0:
+				w.subtitleSidecar = subtitleSidecarDone
+			default:
+				w.subtitleSidecar = subtitleSidecarFailed
 			}
 			if w.Cfg.SubOnly {
 				for _, s := range subs {

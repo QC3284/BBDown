@@ -110,6 +110,17 @@ input:focus,select:focus{outline:1px solid var(--accent)}
 .form-msg.bad{color:var(--bad)}
 .form-msg.ok{color:var(--ok)}
 .hint{font-size:12px;color:var(--muted);margin:8px 0 0}
+textarea{resize:vertical;min-height:78px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+input[type=file]{padding:6px 0;border:0;background:none}
+#add-form.drop-active{outline:2px dashed var(--accent);outline-offset:4px;border-radius:8px}
+ul.results{list-style:none;margin:10px 0 0;padding:0;font-size:12px;max-height:180px;overflow-y:auto}
+ul.results li{display:flex;gap:8px;padding:3px 0;border-top:1px solid var(--line)}
+ul.results li:first-child{border-top:0}
+ul.results span:first-child{flex:0 0 auto;color:var(--muted)}
+ul.results span:last-child{flex:1 1 auto;min-width:0;word-break:break-all}
+ul.results li.ok span:first-child{color:var(--ok)}
+ul.results li.rejected span:first-child{color:var(--bad)}
+ul.results li.skipped span:first-child{color:var(--warn)}
 noscript{display:block;padding:12px;color:var(--warn)}
 
 /* ---- 响应式：窄屏降级为单列 ---- */
@@ -185,9 +196,15 @@ noscript{display:block;padding:12px;color:var(--warn)}
       <h2>新增任务</h2>
       <form id="add-form" autocomplete="off">
         <div class="field">
-          <label for="f-url">视频 / 番剧 / 课程 / 直播 URL</label>
-          <input id="f-url" type="text" data-field="url" placeholder="https://www.bilibili.com/video/BV1xx411c7mD">
+          <label for="f-url">任务输入（一行一个：完整链接，或 BV / av / ep / ss 短号）</label>
+          <textarea id="f-url" data-field="url" rows="4" spellcheck="false" placeholder="https://www.bilibili.com/video/BV1xx411c7mD&#10;BV1xx411c7mD&#10;av2    ep123    ss456&#10;# 以 # 开头的行是注释，会被跳过"></textarea>
         </div>
+        <div class="field">
+          <label for="f-urlfile">从 .txt 文件批量导入（也可以把文件拖到本表单上）</label>
+          <input id="f-urlfile" type="file" accept=".txt,text/plain">
+        </div>
+        <p class="hint">每行一个目标：空行与 <code>#</code> 注释行跳过（与 CLI <code>--urls-file</code> 同一语义）；
+          短号（BV/av/ep/ss）与完整链接可以混着写。提交是**逐个** POST <code>/add-task</code>，受服务端 <code>--max-concurrent</code> 约束。</p>
         <p class="hint">提交到 POST /add-task。字段名与 serve 的 /add-task 白名单逐字一致；
           与服务端默认值相同的开关**不发送**（未传 = 用服务端默认，后端用指针字段区分「未传」与 false）。</p>
 
@@ -269,6 +286,7 @@ noscript{display:block;padding:12px;color:var(--warn)}
           <button id="btn-reset-preset" type="button">重置默认</button>
         </div>
         <p id="form-msg" class="form-msg"></p>
+        <ul id="form-results" class="results"></ul>
       </form>
     </section>
   </main>
@@ -329,6 +347,9 @@ noscript{display:block;padding:12px;color:var(--warn)}
   var btnRemove = document.getElementById("btn-remove");
   var form = document.getElementById("add-form");
   var formMsg = document.getElementById("form-msg");
+  var tasksInput = document.getElementById("f-url");        // 任务输入（多行 textarea）
+  var fileInput = document.getElementById("f-urlfile");     // .txt 批量导入
+  var resultsList = document.getElementById("form-results"); // 逐条提交结果
 
   // 状态 → 文案 + 色点 class（排队灰 / 运行蓝 / 完成绿 / 失败红；取消归灰）。
   var STATUS = {
@@ -631,39 +652,144 @@ noscript{display:block;padding:12px;color:var(--warn)}
     if (el.tagName === "SELECT" && (v === "true" || v === "false")) { return v === "true"; }
     return v;
   }
-  function buildBody() {
+  // buildBody 组装一次提交的请求体：字段名直接取自 [data-field]（没有第二份手写映射）。
+  //
+  // url 是**参数**而不是从 textarea 里读：任务输入一行一个，调用方逐个把该行的目标传进来
+  // （传空串 = 不填 url，预设保存用这个形态，任务输入不进预设）。
+  function buildBody(url) {
     var body = {};
     var fields = form.querySelectorAll("[data-field]");
     for (var i = 0; i < fields.length; i++) {
       var el = fields[i];
       var key = el.getAttribute("data-field");
+      if (key === TASKS_FIELD) { continue; }   // 任务输入由调用方按行给
       var value = fieldValue(el);
       if (value === null) { continue; }
       body[key] = value;
     }
+    if (url) { body[TASKS_FIELD] = url; }
     return body;
   }
   function setFormMsg(text, kind) {
     formMsg.className = "form-msg" + (kind ? " " + kind : "");
     setText(formMsg, text);
   }
-  function submitBody(body, note) {
-    if (!body.url) { setFormMsg("请先填写 URL", "bad"); return Promise.resolve(); }
-    setFormMsg(note || "正在提交…");
+  // ---- 任务输入：一行一个（与 CLI --urls-file 同一语义）、支持短号 ----
+  // 短号：BV 号（BV + 10 位字母数字）、av/ep/ss + 数字。大小写不敏感（av / AV 都认）。
+  var SHORT_ID_RE = /^(?:BV[0-9A-Za-z]{10}|av[0-9]+|ep[0-9]+|ss[0-9]+)$/i;
+  // 任务输入对应的白名单字段（多行 textarea 也挂 data-field="url"：字段名契约不因改多行而变）。
+  var TASKS_FIELD = "url";
+
+  // parseTaskLines 把多行输入切成任务清单：每行 TrimSpace，空行与 # 注释行跳过——
+  // 与 CLI 的 readURLList（internal/cli/urlsfile.go）**逐字同一语义**，顺序与重复项都保留
+  // （同一稿件重复下单是用户的选择，前端不去重）。
+  function parseTaskLines(text) {
+    var out = [];
+    String(text === null || text === undefined ? "" : text).split(/\r?\n/).forEach(function (raw) {
+      var line = raw.trim();
+      if (line === "" || line.charAt(0) === "#") { return; }
+      out.push(line);
+    });
+    return out;
+  }
+
+  // isTaskInput 是**放宽后**的前端校验：完整链接（http(s)://、www.、//、b23.tv / bilibili）
+  // 或 BV/av/ep/ss 短号。原来强制 http:// 的那条校验已去掉——直接贴 BV 号是常态，后端
+  // ResolveURL 本来就认短号；认不出来的行不提交，但在结果里点名（不静默丢）。
+  function isTaskInput(line) {
+    var s = String(line === null || line === undefined ? "" : line).trim();
+    if (s === "") { return false; }
+    if (SHORT_ID_RE.test(s)) { return true; }
+    return /^https?:\/\//i.test(s) || /^\/\//.test(s) || /^www\./i.test(s) ||
+      /bilibili\.com|b23\.tv/i.test(s);
+  }
+
+  var RESULT_LABEL = { ok: "已提交", rejected: "被拒", skipped: "跳过" };
+
+  // renderResults 把逐条结果渲染到 #form-results：**全部经 setText**——目标、文件名与
+  // 服务端错误文本都是用户/外部可控数据（XSS 纪律见文件头）。
+  // state: ok=已入队、rejected=服务端拒绝（400）、skipped=前端跳过（认不出来）。
+  function renderResults(entries) {
+    resultsList.replaceChildren();
+    entries.forEach(function (it) {
+      var li = document.createElement("li");
+      li.className = it.state;
+      var mark = document.createElement("span");
+      setText(mark, RESULT_LABEL[it.state] || it.state);
+      var text = document.createElement("span");
+      setText(text, it.url + (it.detail ? " — " + it.detail : ""));
+      li.appendChild(mark);
+      li.appendChild(text);
+      resultsList.appendChild(li);
+    });
+  }
+
+  // serverMessage 从响应体里抽出可读原因：serve 的错误体是 JSON（{"error":"…"}，
+  // 未知字段会被点名），不是 JSON 时退回原文。两种都只当**文本**显示。
+  function serverMessage(text, status) {
+    var raw = String(text === null || text === undefined ? "" : text).trim();
+    try {
+      var obj = JSON.parse(raw);
+      if (obj && obj.error) { return String(obj.error); }
+    } catch (e) { /* 非 JSON：用原文 */ }
+    return raw || ("HTTP " + status);
+  }
+
+  // submitOne 提交单个任务，返回 {ok, url, id|detail}（不抛：批量要逐条汇总）。
+  function submitOne(body, url) {
     return fetch("/add-task", {
       method: "POST",
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body)
     }).then(function (r) {
       return r.text().then(function (text) {
-        if (!r.ok) { throw new Error(text || ("HTTP " + r.status)); }
+        if (!r.ok) { return { state: "rejected", url: url, detail: serverMessage(text, r.status) }; }
         var id = "";
         try { id = JSON.parse(text).TaskId || ""; } catch (e) { id = ""; }
         if (id) { submitted.set(id, body); }   // 重试 = 原样重发同一组参数
-        setFormMsg("已提交：" + (id || "任务已入队"), "ok");
-        return refreshTasks();
+        return { state: "ok", url: url, id: id };
       });
-    }).catch(function (err) { setFormMsg("提交失败：" + err.message, "bad"); });
+    }).catch(function (err) {
+      return { state: "rejected", url: url, detail: String((err && err.message) || err) };
+    });
+  }
+
+  // submitBody 提交单个请求体（重试按钮走它：原样重发同一组参数）。
+  function submitBody(body, note) {
+    if (!body.url) { setFormMsg("请先填写 URL", "bad"); return Promise.resolve(); }
+    setFormMsg(note || "正在提交…");
+    renderResults([]);
+    return submitOne(body, body.url).then(function (res) {
+      renderResults([res]);
+      if (res.state === "ok") {
+        setFormMsg("已提交：" + (res.id || "任务已入队"), "ok");
+        return refreshTasks();
+      }
+      setFormMsg("提交失败：" + res.detail, "bad");
+    });
+  }
+
+  // submitTasks **逐个**提交（顺序执行）：服务端的并发闸门是 --max-concurrent，一次性把队列
+  // 灌满只会让用户在「已提交多少」上看不清进度；逐个来还能让每个目标的成败即时可见。
+  function submitTasks(inputs, skipped) {
+    var results = (skipped || []).slice();
+    renderResults(results);
+    var chain = Promise.resolve();
+    inputs.forEach(function (url, idx) {
+      chain = chain.then(function () {
+        setFormMsg("正在提交 " + (idx + 1) + "/" + inputs.length + "：" + url, "");
+        return submitOne(buildBody(url), url).then(function (res) {
+          results.push(res);
+          renderResults(results);
+        });
+      });
+    });
+    return chain.then(function () {
+      var ok = results.filter(function (r) { return r.state === "ok"; }).length;
+      var bad = results.length - ok;
+      setFormMsg("提交 " + results.length + " 个：成功 " + ok + "，被拒/跳过 " + bad, bad ? "bad" : "ok");
+      return refreshTasks();
+    });
   }
 
   // ---- localStorage 预设：加载恢复 + 保存 + 重置默认 ----
@@ -694,7 +820,7 @@ noscript{display:block;padding:12px;color:var(--warn)}
     return true;
   }
   function savePreset() {
-    var body = buildBody();
+    var body = buildBody("");   // 预设只存下载选项：任务输入是这一轮要提交的内容，不该被恢复回来
     try { localStorage.setItem(PRESET_KEY, JSON.stringify(body)); } catch (e) { /* 隐私模式：忽略 */ }
   }
   function resetPreset() {
@@ -712,12 +838,78 @@ noscript{display:block;padding:12px;color:var(--warn)}
   });
   document.getElementById("btn-reset-preset").addEventListener("click", resetPreset);
 
+  // ---- 文件批量（.txt）：FileReader 读文本 → 与手输**同一条解析路径** ----
+  // appendTaskText 把文件内容**追加**到输入框（不是覆盖）：可以叠多个文件，也不会吃掉用户
+  // 已经敲进去的行。统一成 \n 分隔，末尾保证有换行。
+  //
+  // 用 .value 赋值（文本）而不是任何 HTML 接口：文件内容是完全不可信的输入。
+  function appendTaskText(text) {
+    var existing = tasksInput.value || "";
+    var add = String(text === null || text === undefined ? "" : text).replace(/\r\n?/g, "\n");
+    if (existing !== "" && !/\n$/.test(existing)) { existing += "\n"; }
+    tasksInput.value = existing + add;
+  }
+
+  // readTaskFile 用 FileReader 读一个文件：读到的文本走 appendTaskText，之后的解析/校验/提交
+  // 与手输完全同一条路径（parseTaskLines + isTaskInput + submitTasks）。
+  function readTaskFile(file) {
+    if (!file) { return; }
+    var reader = new FileReader();
+    reader.onload = function () {
+      appendTaskText(reader.result);
+      var n = parseTaskLines(String(reader.result === null || reader.result === undefined ? "" : reader.result)).length;
+      setFormMsg("已导入 " + (file.name || "文件") + "：可提交 " + n + " 行（空行与 # 注释行已跳过）", n > 0 ? "ok" : "bad");
+    };
+    reader.onerror = function () { setFormMsg("读取文件失败", "bad"); };
+    reader.readAsText(file);
+  }
+
+  if (fileInput) {
+    fileInput.addEventListener("change", function () {
+      if (fileInput.files && fileInput.files[0]) { readTaskFile(fileInput.files[0]); }
+    });
+  }
+  // 拖拽：dragover/dragenter 必须 preventDefault，否则浏览器不会触发 drop。
+  ["dragenter", "dragover"].forEach(function (ev) {
+    form.addEventListener(ev, function (e) {
+      if (e && e.preventDefault) { e.preventDefault(); }
+      form.className = "drop-active";
+    });
+  });
+  form.addEventListener("dragleave", function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    form.className = "";
+  });
+  // drop 只留**一个**监听器：既收尾高亮又导入文件。分成两个监听器时，「哪个先注册」
+  // 会决定 drop 到底做不做事——那是个只会在真实浏览器里踩到的顺序陷阱。
+  form.addEventListener("drop", function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    form.className = "";
+    var files = e && e.dataTransfer ? e.dataTransfer.files : null;
+    if (files && files.length > 0) { readTaskFile(files[0]); }
+  });
+
+  // 提交：解析多行 → 逐行校验（认不出来的点名跳过）→ 逐个 POST。
   form.addEventListener("submit", function (e) {
     e.preventDefault();
-    var body = buildBody();
-    if (!body.url) { setFormMsg("请先填写 URL", "bad"); return; }
-    savePreset();                        // 提交即保存预设：下次打开表单回到上次的参数
-    submitBody(body, "正在提交…");
+    var lines = parseTaskLines(tasksInput.value);
+    if (lines.length === 0) {
+      renderResults([]);
+      setFormMsg("请先填写任务：一行一个（空行与 # 注释行会跳过）", "bad");
+      return;
+    }
+    var accepted = [], skipped = [];
+    lines.forEach(function (line) {
+      if (isTaskInput(line)) { accepted.push(line); }
+      else { skipped.push({ state: "skipped", url: line, detail: "认不出来（需要完整链接或 BV/av/ep/ss 短号）" }); }
+    });
+    if (accepted.length === 0) {
+      renderResults(skipped);
+      setFormMsg("没有可提交的任务：" + skipped.length + " 行都认不出来", "bad");
+      return;
+    }
+    savePreset();   // 提交即保存预设：下次打开表单回到上次的**下载选项**（任务输入不存）
+    submitTasks(accepted, skipped);
   });
 
   // 初始化：恢复预设（默认值由 HTML 的 checked / value 承载）→ 先渲染空态 → 拉一次兜底。
