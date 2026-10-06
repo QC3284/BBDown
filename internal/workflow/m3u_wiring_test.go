@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/download"
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/parser"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/download"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/parser"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // TestWriteM3UWiringAtProductAndSkipPaths 端到端钉住 --write-m3u 的两处接线：

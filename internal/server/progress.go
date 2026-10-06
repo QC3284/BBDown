@@ -5,7 +5,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/download"
+	"github.com/QC3284/bbdown-go/internal/download"
 )
 
 // 任务 Q：把下载层的「逐字节进度观察者」（download.ProgressEvent，见

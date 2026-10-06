@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // ---- --per-sub-dir 的目录规划（t47 ①，吸收上游 1.6.21）----

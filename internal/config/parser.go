@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // SubCommandNames are the registered subcommands: their flags do not support

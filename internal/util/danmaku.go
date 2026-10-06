@@ -219,7 +219,7 @@ func SaveDanmakuAsASS(items DanmakuList, outputPath string) error {
 
 	var sb strings.Builder
 	sb.WriteString("[Script Info]\n")
-	sb.WriteString("Script Updated By: BBDown(https://github.com/QC3284/BBDown)\n")
+	sb.WriteString("Script Updated By: BBDown(https://github.com/QC3284/bbdown-go)\n")
 	sb.WriteString("ScriptType: v4.00+\n")
 	sb.WriteString(fmt.Sprintf("PlayResX: %d\n", monitorWidth))
 	sb.WriteString(fmt.Sprintf("PlayResY: %d\n", monitorHeight))

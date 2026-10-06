@@ -3,7 +3,7 @@ package util
 import (
 	"fmt"
 
-	"github.com/QC3284/BBDown/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/entity"
 )
 
 // BilibiliBvConverter converts between AV (aid) and BV strings.

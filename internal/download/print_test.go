@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/entity"
 )
 
 // TestPrintAllTracksMatchesUpstream 钉住清单的三段顺序与 --only-show-info 的取流地址：

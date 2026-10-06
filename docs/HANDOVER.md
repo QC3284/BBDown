@@ -112,7 +112,7 @@ gofmt -l internal/ cmd/ && go build ./... && go vet ./... && go test ./... -coun
 git add -A && git commit -F /tmp/msg.txt --no-verify && git push origin main && git tag vX.Y.Z && git push origin vX.Y.Z
 
 # 5) 发布后核对三件：tag CI 三平台绿、Release 产物 5 个、AUR 包名（失败就重跑一次）
-gh run view <id> -R QC3284/BBDown --json jobs,conclusion --jq '.conclusion + " | " + ([.jobs[] | .name + "=" + (.conclusion // "-")] | join("  "))'
+gh run view <id> -R QC3284/bbdown-go --json jobs,conclusion --jq '.conclusion + " | " + ([.jobs[] | .name + "=" + (.conclusion // "-")] | join("  "))'
 ```
 
 ---

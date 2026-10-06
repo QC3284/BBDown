@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/QC3284/BBDown/internal/cli"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/cli"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // banner 是终端开场横幅（版本号硬编码点之一，见 internal/cli/version_consistency_test.go）。
@@ -12,9 +12,9 @@ import (
 //
 // 打不打由 cli.Execute 决定：机读模式（--info-json / doctor --json）下不打，stdout 只留数据。
 // 判定必须放在 Execute 里——它要看合并 BBDown.config 之后的参数，main 这里只看得到命令行。
-var banner = util.AnsiBgDarkBlue + util.AnsiWhite + "BBDown version 2.16.0, Bilibili Downloader." + util.AnsiReset + "\r\n" +
+var banner = util.AnsiBgDarkBlue + util.AnsiWhite + "BBDown version 3.0.0, Bilibili Downloader." + util.AnsiReset + "\r\n" +
 	"遇到问题请首先到以下地址查阅有无相关信息：\r\n" +
-	"https://github.com/QC3284/BBDown/issues\r\n" +
+	"https://github.com/QC3284/bbdown-go/issues\r\n" +
 	"\n"
 
 func main() {

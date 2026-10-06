@@ -3,7 +3,7 @@ package fetcher
 import (
 	"strings"
 
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // Factory creates the appropriate Fetcher based on the aid prefix.

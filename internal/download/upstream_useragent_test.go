@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // 上游 HttpUtilUserAgentTests：UA 的优先级是 显式参数 → 流配置（--user-agent）→ 进程级随机默认。

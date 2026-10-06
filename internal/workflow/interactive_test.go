@@ -10,11 +10,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/download"
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/parser"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/download"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/parser"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // -i 的渐进式选择（v3 ①）：档位菜单 → 输入序号 → 只显示该档的流表 → 选流 → 确认行。

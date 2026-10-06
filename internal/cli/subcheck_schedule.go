@@ -9,12 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/fetcher"
-	"github.com/QC3284/BBDown/internal/substore"
-	"github.com/QC3284/BBDown/internal/util"
-	"github.com/QC3284/BBDown/internal/workflow"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/fetcher"
+	"github.com/QC3284/bbdown-go/internal/substore"
+	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/bbdown-go/internal/workflow"
 )
 
 // ---- sub check 的调度：--since 增量窗口 + --concurrency 并发检查（docs/ROADMAP.md「订阅调度」）----

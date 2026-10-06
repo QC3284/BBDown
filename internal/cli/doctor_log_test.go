@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // doctor 的输出统一：人类可读形态走 util 日志（终端与 --log-file 同时覆盖），JSON 形态保持机读。

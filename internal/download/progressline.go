@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // progressLine 是一条「原地重绘」的终端进度行，多线程聚合与单线程逐块读取两条路径共用。

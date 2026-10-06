@@ -10,6 +10,20 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [3.0.0] - 2026-10-06
+
+**更名 + README 重写**。
+
+### 变更
+
+- **仓库与 module 路径更名**：`QC3284/BBDown` → `QC3284/bbdown-go`（用户拍板；二进制仍为 `BBDown`，CLI/产物/配置契约不变，旧链接 GitHub 自动 301）。
+- **README 重写（244 行）**：功能清单对齐 2.13.0~2.16.0 全部能力；旗标逐一以 `--help` 白名单核实；「与上游的关系」更新到 1.7.3 / BBDownT 2.1.7；FAQ 补 v_voucher / AI 字幕匿名 / DRM 缺件 / linux-arm64 无内置 mp4decrypt；重试口径按代码实际行为（412 参与 HTTP 层重试 1s→2s→4s、页面级恒定 --retry-delay×3 次）；语言表 146 项。
+
+### 说明
+
+- 版本位：module 路径变更属于不兼容变更 → **MAJOR**（2.16.0 → 3.0.0），与更名同发。
+- 更名登记见 [docs/UPSTREAM_ALIGNMENT.md §4.70](docs/UPSTREAM_ALIGNMENT.md)。
+
 ## [2.16.0] - 2026-10-06
 
 **功能周期**（上游同步批次：吸收 AliverAnme 1.6.21~1.7.3 + BBDownT 2.1.7 的六项，四源对照后全部落证据门槛）。
@@ -222,7 +236,7 @@
 ```
 BBDown version 2.12.7, Bilibili Downloader.
 遇到问题请首先到以下地址查阅有无相关信息：
-https://github.com/QC3284/BBDown/issues
+https://github.com/QC3284/bbdown-go/issues
 
 [2026-09-26 23:21:22.492] - 视频标题: 字幕君交流场所
 ```

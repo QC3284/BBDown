@@ -10,9 +10,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // Playurl 请求策略（本仓优化，见 docs/ROADMAP.md O2）：

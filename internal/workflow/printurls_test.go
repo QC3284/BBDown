@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/download"
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/parser"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/download"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/parser"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // --print-urls：只打印所选流的直链后退出，不下载（把本工具当解析器接进脚本/aria2c）。

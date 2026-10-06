@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // SpaceVideoFetcher fetches all videos from an uploader's space (upstream

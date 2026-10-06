@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QC3284/BBDown/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/entity"
 )
 
 // ---- map[string]interface{} JSON helpers for fetchers ----

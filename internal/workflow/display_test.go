@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // captureStdout 把 os.Stdout 换成管道，收集 fn 期间的全部终端输出。

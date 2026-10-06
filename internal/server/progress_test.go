@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/download"
+	"github.com/QC3284/bbdown-go/internal/download"
 )
 
 // 任务 Q 的回归网：逐字节进度观察者（download.ProgressEvent）→ 既有 SSE 事件。

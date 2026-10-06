@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // stripANSI 去掉日志上的颜色码：LogColorNoTime 给每行套了 AnsiCyan/AnsiReset。

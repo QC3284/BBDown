@@ -26,7 +26,7 @@ Go 侧自报版本硬编码于五处：`cmd/bbdown/main.go`（横幅）、`inter
 ```
 nilaoda/BBDown (C# 原版)
   └─ aliveranme/BBDown (fork：深度重构 + DRM + serve API + 4 个子命令 + 测试/CI)
-       └─ QC3284/BBDown (本仓库：main = Go 重写，master = C# 快照)
+       └─ QC3284/bbdown-go (本仓库：main = Go 重写，master = C# 快照)
 ```
 
 **对齐对象是 aliveranme fork，不是 nilaoda。** 含义：
@@ -1080,6 +1080,13 @@ SubtitleItem{lan=3,lanDoc=4,subtitleUrl=5}）。只手解三个字段（手写 v
 6. **DRM 开箱即用** ← 上游 1.7.1：内置 wvd/mp4decrypt、自动解密默认开、--no-decrypt-drm、解密前置检查。工程差异：SHA256 采用「仓库变量 + fail-closed」；wvd 取自上游公开提交的 BBDown.Core/device.wvd（sha256 b16fe9ca…，THIRD-PARTY-NOTICES 注明专有+来源）；linux-arm64 不内置 mp4decrypt（官方无预编译包，与上游一致）。
 
 上游情报（已核、未跟）：1.7.0 异常过滤器收敛/重构（用户不可见）、sha256sums 路径修复（我们的 Release 校验文件无此问题）；BBDownT 2.1.7 的断点续传/国际站修复（候选，未评估）。
+
+### 4.70 第六十五轮：更名 bbdown-go（3.0.0）
+
+- 仓库与 Go module 路径从 `QC3284/BBDown` 更名 `QC3284/bbdown-go`（用户拍板）：独立品牌落地；二进制名保持 `BBDown`（CLI/产物/配置契约零变化）；旧链接由 GitHub 301 承接。
+- 版本位：module 路径变更对库导入者是不兼容变更 → MAJOR（3.0.0），与更名同发。
+- README 重写（244 行）：功能清单对齐 2.13.0~2.16.0；旗标以 --help 白名单逐字核实（62 旗标 0 无法核实）；重试口径按代码实际行为订正（412 参与 HTTP 层重试 1s→2s→4s + 成功轮换 UA 后才重试；页面级恒定 --retry-delay×3 次；语言表 146 项）。
+
 
 - **CLI 信息行宽度治理第一步（2.15.2）**：v3 信息行与 --debug 长行按显示宽度夹取；实测三档超宽 26/26/17 → 0/0/0。第二步（标题行/事件行）已获用户批准，下一工作周期实现（属**有意偏离上游事件行契约**，实现时在此登记）。
 

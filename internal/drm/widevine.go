@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"context"
-	drmproto "github.com/QC3284/BBDown/internal/drm/proto"
-	"github.com/QC3284/BBDown/internal/util"
+	drmproto "github.com/QC3284/bbdown-go/internal/drm/proto"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // Widevine CDM endpoints.

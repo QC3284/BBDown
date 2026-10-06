@@ -3,7 +3,7 @@ package fetcher
 import (
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // 本文件搬上游 FetcherFactoryTests 的分发表：一组目标标识必须落到各自的 fetcher。

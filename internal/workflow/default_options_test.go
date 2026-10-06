@@ -3,8 +3,8 @@ package workflow
 import (
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // 默认配置必须通过参数校验——这条用例是补出来的漏网之鱼：

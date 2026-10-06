@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/article"
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/download"
-	"github.com/QC3284/BBDown/internal/fetcher"
-	"github.com/QC3284/BBDown/internal/live"
-	"github.com/QC3284/BBDown/internal/login"
-	"github.com/QC3284/BBDown/internal/muxer"
-	"github.com/QC3284/BBDown/internal/server"
-	"github.com/QC3284/BBDown/internal/substore"
-	"github.com/QC3284/BBDown/internal/util"
-	"github.com/QC3284/BBDown/internal/workflow"
+	"github.com/QC3284/bbdown-go/internal/article"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/download"
+	"github.com/QC3284/bbdown-go/internal/fetcher"
+	"github.com/QC3284/bbdown-go/internal/live"
+	"github.com/QC3284/bbdown-go/internal/login"
+	"github.com/QC3284/bbdown-go/internal/muxer"
+	"github.com/QC3284/bbdown-go/internal/server"
+	"github.com/QC3284/bbdown-go/internal/substore"
+	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/bbdown-go/internal/workflow"
 	"github.com/spf13/cobra"
 	"path/filepath"
 )
@@ -99,7 +99,7 @@ var serveCmd = &cobra.Command{
 		ctx := commandContext(cmd)
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.16.0")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v3.0.0")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {

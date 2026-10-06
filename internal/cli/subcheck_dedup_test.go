@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/muxer"
-	"github.com/QC3284/BBDown/internal/substore"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/muxer"
+	"github.com/QC3284/bbdown-go/internal/substore"
 )
 
 // ---- 清单重复 Target 去重（qa 探针：手改清单 + --concurrency≥2 会重复下载同一批新稿）----

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/entity"
 )
 
 // TestParsePageSelectionCumulativeCap: the cap used to apply per range, so

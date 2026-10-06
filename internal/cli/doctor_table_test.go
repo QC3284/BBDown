@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/config"
-	"github.com/QC3284/BBDown/internal/download"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/bbdown-go/internal/download"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // doctor 的表格化排版：状态符号（1 列）+ 名称列（按本次最长名称对齐）+ 详情列；详情超宽折行，

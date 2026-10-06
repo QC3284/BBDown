@@ -1,6 +1,6 @@
 package download
 
-import "github.com/QC3284/BBDown/internal/util"
+import "github.com/QC3284/bbdown-go/internal/util"
 
 // newTestClient builds an HTTP client for the download tests.
 func newTestClient() *util.HTTPClient {

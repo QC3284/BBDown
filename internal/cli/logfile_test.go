@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // --log-file：运行日志落文件（上游 AliverAnme 有、我们此前缺）。

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown/internal/entity"
-	"github.com/QC3284/BBDown/internal/substore"
-	"github.com/QC3284/BBDown/internal/util"
+	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/substore"
+	"github.com/QC3284/bbdown-go/internal/util"
 )
 
 // ---- t47：--per-sub-dir / 增量扫描（fetchResolved）/ --full-scan 的编排回归 ----

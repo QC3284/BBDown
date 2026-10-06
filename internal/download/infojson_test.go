@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown/internal/entity"
+	"github.com/QC3284/bbdown-go/internal/entity"
 )
 
 // --info-json：把解析结果交给程序。字段名与仓库其它 JSON 输出一致（snake_case），空列表写 [] 而不是 null。
