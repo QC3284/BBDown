@@ -87,6 +87,8 @@ func TestDisplayWidth(t *testing.T) {
 		{"\u200b", 0},     // 零宽空格
 		{"e\u0301", 1},    // e + 组合重音
 		{"🎬", 2},          // emoji
+		{"🚀", 2},          // 交通类 emoji（1F680-1F6FF，t65 指出旧表漏算；与 util 宽度表统一）
+		{"🩻", 2},          // emoji 扩展（1FA00-1FAFF）
 	}
 	for _, c := range cases {
 		if got := DisplayWidth(c.in); got != c.want {

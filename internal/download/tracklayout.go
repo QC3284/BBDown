@@ -659,8 +659,7 @@ func runeDisplayWidth(r rune) int {
 		r >= 0xFE30 && r <= 0xFE6F,   // CJK 兼容形式
 		r >= 0xFF00 && r <= 0xFF60,   // 全角 ASCII
 		r >= 0xFFE0 && r <= 0xFFE6,   // 全角符号
-		r >= 0x1F300 && r <= 0x1F64F, // emoji
-		r >= 0x1F900 && r <= 0x1F9FF, // emoji 补充
+		r >= 0x1F300 && r <= 0x1FAFF, // emoji（含 1F680-1F6FF 交通、1FA00-1FAFF 扩展；与 internal/util/logwidth 同口径——t65 指出两表不一致，统一为更全的区间）
 		r >= 0x20000 && r <= 0x3FFFD: // CJK 扩展 B 及以上
 		return 2
 	}

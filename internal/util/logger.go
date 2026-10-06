@@ -237,12 +237,40 @@ func timestamp() string {
 	return time.Now().Format("[2006-01-02 15:04:05.000]")
 }
 
+// ---- t64 ②：常规事件行的屏幕宽度治理（截断 +「…」）----
+//
+// 有意偏离上游：上游的事件行不折行也不截断，超宽时由终端自己折行——续行没有缩进，
+// 时间戳与正文错位（登记 UPSTREAM_ALIGNMENT §4.71，登记动作由队长收尾做）。
+//
+// 只治理「常规事件行」（带时间戳的 Log / LogWarn / LogError / LogColor）：
+//   - 流表 / 侧车 / 清单走 LogColorNoTime*（无时间戳）——它们各自已有宽度契约（t42/t39），这里不动；
+//   - --debug 行有自己的 120 列常量（t42），本步**不动**（t64 明确列为「候选，另议」）。
+//
+// 日志文件仍写**全文**：屏幕是给人看的、文件是给排查用的，两者取舍不同（与 t42 的 --debug 同一原则）。
+func eventLineBudget() int {
+	if budget := TerminalWidth() - LogIndentWidth; budget > 16 {
+		return budget
+	}
+	return 16
+}
+
+func shortForConsole(msg string) string {
+	// **只在交互终端**截断：管道 / 重定向（脚本、CI 日志、把输出写进文件）保留全文——它们没有
+	// 「终端列宽」这个约束，截断只会丢信息（TerminalWidth 本身也是这么区分 TTY 的：
+	// 非 TTY 不读 COLUMNS，直接按默认宽度排版）。
+	if !stdoutIsTerminal() {
+		return msg
+	}
+	return TruncateDisplay(msg, eventLineBudget())
+}
+
 // Log prints a normal log line.
 func (l *Logger) Log(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, sanitizeLogArgs(args)...)
 	line := timestamp() + " - " + msg
-	consoleWrite(func(w io.Writer) { fmt.Fprintln(w, line) })
-	l.appendToFile(line)
+	short := timestamp() + " - " + shortForConsole(msg)
+	consoleWrite(func(w io.Writer) { fmt.Fprintln(w, short) })
+	l.appendToFile(line) // 文件写全文
 }
 
 // LogError prints an error line in red.
@@ -251,9 +279,9 @@ func (l *Logger) LogError(format string, args ...interface{}) {
 	line := timestamp() + " - " + msg
 	consoleWrite(func(w io.Writer) {
 		fmt.Fprint(w, timestamp()+" - ")
-		fmt.Fprint(w, AnsiRed+msg+AnsiReset+"\n")
+		fmt.Fprint(w, AnsiRed+shortForConsole(msg)+AnsiReset+"\n")
 	})
-	l.appendToFile(line)
+	l.appendToFile(line) // 文件写全文
 }
 
 // LogWarn prints a warning line in yellow.
@@ -262,9 +290,9 @@ func (l *Logger) LogWarn(format string, args ...interface{}) {
 	line := timestamp() + " - " + msg
 	consoleWrite(func(w io.Writer) {
 		fmt.Fprint(w, timestamp()+" - ")
-		fmt.Fprint(w, AnsiDarkYellow+msg+AnsiReset+"\n")
+		fmt.Fprint(w, AnsiDarkYellow+shortForConsole(msg)+AnsiReset+"\n")
 	})
-	l.appendToFile(line)
+	l.appendToFile(line) // 文件写全文
 }
 
 // LogColorNoTime prints a colored line in cyan without timestamp, indented to align.
@@ -294,9 +322,9 @@ func (l *Logger) LogColor(format string, args ...interface{}) {
 	line := timestamp() + " - " + msg
 	consoleWrite(func(w io.Writer) {
 		fmt.Fprint(w, timestamp()+" - ")
-		fmt.Fprint(w, AnsiCyan+msg+AnsiReset+"\n")
+		fmt.Fprint(w, AnsiCyan+shortForConsole(msg)+AnsiReset+"\n")
 	})
-	l.appendToFile(line)
+	l.appendToFile(line) // 文件写全文
 }
 
 // LogDebug prints a debug line in grey (only when debug mode is on).

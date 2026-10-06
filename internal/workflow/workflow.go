@@ -1774,7 +1774,50 @@ func (w *Workflow) validateNumericOptions() error {
 // （元信息行只用 BV/av，不带站点 URL），调用点不必再分叉。
 func printVideoHeader(vInfo *entity.VInfo, useIntlAPI bool) {
 	_ = useIntlAPI
-	util.LogColor("视频标题: %s", vInfo.Title)
+
+	// t64 ①：标题行超宽时**折行**——断点按显示宽度（CJK 2 列），续行缩进 28 列与
+	// 「时间戳 + ' - '」对齐（util.LogIndentWidth），**不丢字**（折行片段拼回去等于原标题）。
+	//
+	// 有意偏离上游：上游的标题行不折行，超宽时由终端自己折行——续行没有缩进，
+	// 标题会与时间戳列错位（登记 UPSTREAM_ALIGNMENT §4.71，登记动作由队长收尾做）。
+	// 放得下时仍走原来那一条 util.LogColor，输出与改前逐字一致。
+	const prefix = "视频标题: "
+	width := util.TerminalWidth()
+	prefixWidth := util.DisplayWidth(prefix)
+	budget := width - util.LogIndentWidth - prefixWidth
+	// 极窄终端（连「时间戳 + 前缀 + 8 列正文」都放不下，例如 40 列：28+10=38 只剩 2 列）：
+	// 这一行放掉时间戳、把 28 列让给标题——与流表「窄终端里缩进让给数据」同一取舍，
+	// 否则整行必然超宽（标题只剩一个省略号）。
+	withTimestamp := true
+	if budget < 8 {
+		withTimestamp = false
+		budget = width - prefixWidth
+	}
+	// 续行按 28 列缩进对齐时间戳列；放掉时间戳时续行也不再缩进（保持同一列视觉）。
+	contIndent := util.LogIndentWidth
+	if !withTimestamp {
+		contIndent = 0
+	}
+	if max := width - contIndent; budget > max {
+		budget = max
+	}
+	if budget < 8 {
+		budget = 8
+	}
+
+	parts := util.WrapDisplay(vInfo.Title, budget)
+	if len(parts) <= 1 && withTimestamp {
+		util.LogColor("视频标题: %s", vInfo.Title)
+		return
+	}
+	if !withTimestamp {
+		util.LogColorNoTimeIndent(0, "%s%s", prefix, parts[0])
+	} else {
+		util.LogColor("视频标题: %s", parts[0])
+	}
+	for _, cont := range parts[1:] {
+		util.LogColorNoTimeIndent(contIndent, "%s", cont)
+	}
 }
 
 // applySteinGateFallback 处理「互动视频不支持 TV 端下载」（上游 Workflow.cs:156-160）：

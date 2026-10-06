@@ -149,59 +149,13 @@ const debugScreenMaxCols = 120
 // 宽度口径与 internal/download.DisplayWidth 一致（ASCII 1 列、CJK/全角/emoji 2 列、
 // 控制字符与组合记号 0 列）——**不能复用那个函数**：util 是 download 的下游依赖
 // （download import util），反向引用会成环，所以这里按同一套区间表实现一份。
+// screenClamp 按显示宽度夹取一行纯文本：放不下时保留前 cols-1 列 + 「…」。
+//
+// 宽度口径与 internal/download.DisplayWidth 一致——**不能复用那个函数**：util 是 download
+// 的下游依赖（download import util），反向引用会成环。t64 起这份宽度表统一放在 logwidth.go
+// 的 runeDisplayWidth 里（折行/截断/夹取共用一张表），这里只保留「夹取」这一层语义。
 func screenClamp(s string, cols int) string {
-	if cols <= 0 || s == "" {
-		return ""
-	}
-	width := func(r rune) int {
-		switch {
-		case r < 0x20 || (r >= 0x7F && r < 0xA0):
-			return 0
-		case r == 0x200B || r == 0x200C || r == 0x200D || r == 0xFEFF:
-			return 0
-		case r >= 0x0300 && r <= 0x036F:
-			return 0
-		case r >= 0x1100 && r <= 0x115F,
-			r >= 0x2E80 && r <= 0x303E,
-			r >= 0x3041 && r <= 0x33FF,
-			r >= 0x3400 && r <= 0x4DBF,
-			r >= 0x4E00 && r <= 0x9FFF,
-			r >= 0xA000 && r <= 0xA4CF,
-			r >= 0xAC00 && r <= 0xD7A3,
-			r >= 0xF900 && r <= 0xFAFF,
-			r >= 0xFE10 && r <= 0xFE19,
-			r >= 0xFE30 && r <= 0xFE6F,
-			r >= 0xFF00 && r <= 0xFF60,
-			r >= 0xFFE0 && r <= 0xFFE6,
-			r >= 0x1F300 && r <= 0x1F64F,
-			r >= 0x1F680 && r <= 0x1F6FF,
-			r >= 0x1F900 && r <= 0x1F9FF,
-			r >= 0x20000 && r <= 0x3FFFD:
-			return 2
-		}
-		return 1
-	}
-	total := 0
-	for _, r := range s {
-		total += width(r)
-	}
-	if total <= cols {
-		return s
-	}
-	if cols == 1 {
-		return "…"
-	}
-	var b strings.Builder
-	used := 0
-	for _, r := range s {
-		rw := width(r)
-		if used+rw > cols-1 {
-			break
-		}
-		b.WriteRune(r)
-		used += rw
-	}
-	return b.String() + "…"
+	return TruncateDisplay(s, cols)
 }
 
 // debugLine 记录一行诊断信息：**屏幕**按宽度夹取，**日志文件**里始终是全文。
