@@ -49,7 +49,8 @@ func fakeMp4decryptCmd(t *testing.T, dir, argsFile, outContent, stderrText strin
 	body := "@echo off\r\n" +
 		"(for %%a in (%*) do @echo %%a) > \"" + argsFile + "\"\r\n"
 	if outContent != "" {
-		body += "> \"%4\" echo " + outContent + "\r\n"
+		// batch 的 echo 会追加 CRLF（断言是逐字节相等），set /p 可写出无换行内容。
+		body += "> \"%4\" set /p \"=" + outContent + "\" <nul\r\n"
 	}
 	if stderrText != "" {
 		body += ">&2 echo " + stderrText + "\r\n"
