@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +69,30 @@ func subCheckDeduped(subs []substore.Subscription) []substore.Subscription {
 	util.LogWarn("订阅清单里有 %d 条重复 Target（保留先出现的一条，重复项已跳过）: %s",
 		len(dups), strings.Join(targets, ", "))
 	return kept
+}
+
+// subCheckRunOptions 是 sub check 的两个「订阅增强」开关（t47，吸收上游 1.6.21/1.6.22）：
+// 都为零值时行为与 2.15.2 逐字一致。
+type subCheckRunOptions struct {
+	// PerSubDir 打开时，每条订阅下到 <work-dir>/<订阅名>/（见 subCheckWorkDir）。
+	PerSubDir bool
+	// FullScan 打开时，mid: 订阅不做「整页都已下载就停止翻页」的提前结束。
+	FullScan bool
+	// SubDirs 是 PerSubDir 时预先规划好的 target → 目录名（substore.PlanSubDirs）。
+	SubDirs map[string]string
+}
+
+// subCheckWorkDir 给出下载某条订阅时该用的工作目录：--per-sub-dir 关闭（plan 为空）时就是
+// work-dir 原样；打开时是 <work-dir>/<规划出来的订阅名>。纯函数，离线可逐字断言目录布局。
+func subCheckWorkDir(workDir string, plan map[string]string, sub substore.Subscription) string {
+	if len(plan) == 0 {
+		return workDir
+	}
+	name, ok := plan[sub.Target]
+	if !ok || name == "" {
+		return workDir
+	}
+	return filepath.Join(workDir, name)
 }
 
 // subCheckMaxConcurrency 是 --concurrency 的上限：检查阶段是若干次 B 站 API 调用，
@@ -166,6 +192,29 @@ type subCheckDeps struct {
 	resolve  func(ctx context.Context, target string) (string, error)
 	fetch    func(ctx context.Context, resolved string) (*entity.VInfo, error)
 	download func(ctx context.Context, aid string) error
+
+	// fetchResolved / downloadInto 是 t47 新增的**可选**依赖：非 nil 时优先于 fetch / download。
+	// 之所以加字段而不是改旧字段的签名，是为了让既有离线用例（只填旧三样）逐字不用改——
+	// 默认路径（不开 --per-sub-dir）仍然走 download，行为与 2.15.2 一致。
+	//
+	// fetchResolved 需要知道是哪条订阅：mid: 订阅的增量扫描要用该订阅自己的历史判「整页都已下载」。
+	fetchResolved func(ctx context.Context, sub substore.Subscription, resolved string) (*entity.VInfo, error)
+	downloadInto  func(ctx context.Context, sub substore.Subscription, aid string) error
+}
+
+// subCheckFetcher/fetchOne 选依赖：优先新字段，回落到旧字段。
+func (d subCheckDeps) fetchOne(ctx context.Context, sub substore.Subscription, resolved string) (*entity.VInfo, error) {
+	if d.fetchResolved != nil {
+		return d.fetchResolved(ctx, sub, resolved)
+	}
+	return d.fetch(ctx, resolved)
+}
+
+func (d subCheckDeps) downloadOne(ctx context.Context, sub substore.Subscription, aid string) error {
+	if d.downloadInto != nil {
+		return d.downloadInto(ctx, sub, aid)
+	}
+	return d.download(ctx, aid)
 }
 
 // defaultSubCheckDeps 装配真实依赖。
@@ -183,7 +232,15 @@ type subCheckDeps struct {
 // 因此并发调用同一份 client/factory/wbi 是安全的；TestSubCheckSharedClientIsConcurrencySafe
 // 在 -race 下并发打同一个 client 钉住这条依据（含并发轮换 UA）。
 func defaultSubCheckDeps(cfg config.MyOption, client *util.HTTPClient, factory *fetcher.Factory, wbi string) subCheckDeps {
-	return subCheckDeps{
+	// 旧签名保留（既有用例与其它调用点不用改）：零选项 = 与 2.15.2 一致的行为。
+	// 注意增量扫描是**默认**行为（只有 --full-scan 能关掉提前结束），所以真实链路请走
+	// defaultSubCheckDepsWith（runSubCheck 就是这么调的）。
+	return defaultSubCheckDepsWith(cfg, client, factory, wbi, subCheckRunOptions{})
+}
+
+// defaultSubCheckDepsWith 装配带订阅增强选项的依赖。
+func defaultSubCheckDepsWith(cfg config.MyOption, client *util.HTTPClient, factory *fetcher.Factory, wbi string, opts subCheckRunOptions) subCheckDeps {
+	deps := subCheckDeps{
 		resolve: func(ctx context.Context, target string) (string, error) {
 			return workflow.ResolveURL(ctx, client, target)
 		},
@@ -205,6 +262,48 @@ func defaultSubCheckDeps(cfg config.MyOption, client *util.HTTPClient, factory *
 			return workflow.New(opt, client).Run(ctx)
 		},
 	}
+
+	// 增量扫描（默认）：mid: 订阅改成「轻量列举（只取 aid/标题/封面/发布时间）+ 整页都已下载
+	// 就停止翻页」，不再逐投稿发详情请求展开分P——每个新 aid 的下载本来就会各自解析。
+	// 非 mid: 目标原样走旧的 fetch（byte 级不变）。
+	deps.fetchResolved = func(ctx context.Context, sub substore.Subscription, resolved string) (*entity.VInfo, error) {
+		if !strings.HasPrefix(resolved, "mid:") {
+			return deps.fetch(ctx, resolved)
+		}
+		history, err := substore.LoadHistory(sub.Target)
+		if err != nil {
+			return nil, err
+		}
+		downloaded := make(map[string]bool, len(history))
+		for _, aid := range history {
+			downloaded[aid] = true
+		}
+		space := fetcher.NewSpaceVideoFetcher(client, wbi, cfg.Cookie, fetcher.SpaceScanOptions{
+			Incremental: true,
+			FullScan:    opts.FullScan,
+			Downloaded:  func(aid string) bool { return downloaded[aid] },
+		})
+		return space.Fetch(ctx, resolved)
+	}
+
+	// --per-sub-dir：每条订阅换一个工作目录。关闭时不填这个字段，下载路径与改前逐字一致。
+	if opts.PerSubDir {
+		deps.downloadInto = func(ctx context.Context, sub substore.Subscription, aid string) error {
+			opt := config.DefaultMyOption()
+			opt.URL = "av" + aid
+			opt.Cookie = cfg.Cookie
+			opt.AccessToken = cfg.AccessToken
+			opt.EncodingPriority = optEncodingPriority
+			opt.DfnPriority = optDfnPriority
+			opt.UseAppAPI = cfg.UseAppAPI
+			opt.UseTvAPI = cfg.UseTvAPI
+			opt.UseIntlAPI = cfg.UseIntlAPI
+			opt.WorkDir = subCheckWorkDir(cfg.WorkDir, opts.SubDirs, sub)
+			opt.Wbi = wbi
+			return workflow.New(opt, client).Run(ctx)
+		}
+	}
+	return deps
 }
 
 // subCheckOutcomeKind 是检查阶段对单个订阅的结论。
@@ -254,9 +353,16 @@ func subCheckOne(ctx context.Context, deps subCheckDeps, sub substore.Subscripti
 		oc.kind = subCheckResolvedEmpty
 		return oc
 	}
-	vInfo, err := deps.fetch(ctx, resolved)
+	vInfo, err := deps.fetchOne(ctx, sub, resolved)
 	if err != nil {
 		oc.kind, oc.err = subCheckFetchFailed, err
+		// 增量扫描要在翻页前读历史（用它判断「整页都已下载」），历史损坏时这个错误从
+		// fetch 路径冒出来——必须还原成 history-failed 语义（中止整个命令，而不是把这条
+		// 订阅当作「拉取失败」跳过：历史不可信时继续下会重复下载）。
+		var corrupt *substore.CorruptError
+		if errors.As(err, &corrupt) {
+			oc.kind = subCheckHistoryFailed
+		}
 		return oc
 	}
 	oc.title = vInfo.Title
@@ -367,7 +473,7 @@ func subCheckReportOne(ctx context.Context, deps subCheckDeps, oc subCheckOutcom
 	}
 	util.Log("  发现 %d 个新内容: %s", len(oc.newAids), joinAids(oc.newAids))
 	for _, aid := range oc.newAids {
-		if err := deps.download(ctx, aid); err != nil {
+		if err := deps.downloadOne(ctx, oc.sub, aid); err != nil {
 			util.LogWarn("av%s 下载失败: %v", aid, err)
 			*failures = *failures + 1
 			continue

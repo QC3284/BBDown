@@ -152,7 +152,7 @@ func DefaultMyOption() MyOption {
 	return MyOption{
 		MultiThread:       true,
 		ForceHTTP:         false,
-		SkipAi:            true,
+		SkipAi:            false, // 2.16.0：默认下载 AI 字幕（与 BBDownT 默认一致），--skip-ai 显式跳过
 		ForceReplaceHost:  true,
 		Host:              "api.bilibili.com",
 		EpHost:            "api.bilibili.com",

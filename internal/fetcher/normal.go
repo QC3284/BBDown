@@ -12,6 +12,10 @@ import (
 	"github.com/QC3284/BBDown/internal/util"
 )
 
+// normalViewAPI 是「稿件详情」端点；变量而非常量，离线用例注入假服务器以**数请求次数**
+// （t47 的增量扫描断言：mid: 订阅检查不该发逐投稿详情请求）。生产路径就是这个常量。
+var normalViewAPI = "https://api.bilibili.com/x/web-interface/view"
+
 // NormalInfoFetcher fetches info for regular videos.
 type NormalInfoFetcher struct {
 	client *util.HTTPClient
@@ -20,7 +24,7 @@ type NormalInfoFetcher struct {
 var epIDRegex = regexp.MustCompile(`ep(\d+)`)
 
 func (f *NormalInfoFetcher) Fetch(ctx context.Context, id string) (*entity.VInfo, error) {
-	api := "https://api.bilibili.com/x/web-interface/view?aid=" + id
+	api := normalViewAPI + "?aid=" + id
 	resp, err := f.client.GetWebSource(ctx, api)
 	if err != nil {
 		return nil, err

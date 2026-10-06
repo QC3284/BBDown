@@ -99,7 +99,7 @@ var serveCmd = &cobra.Command{
 		ctx := commandContext(cmd)
 
 		// Fire-and-forget update check (upstream ServeCommand).
-		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.15.2")
+		util.CheckUpdateAsync(ctx, buildHTTPClient(config.MyOption{}), "v2.16.0")
 
 		err := srv.Run(ctx)
 		if errors.Is(err, http.ErrServerClosed) {
@@ -470,7 +470,13 @@ func runSubCheck(cmd *cobra.Command, args []string) error {
 	subCheckWbi = wbi
 
 	factory := fetcher.NewFactory(client, cfg.UseIntlAPI, wbi, cfg.Cookie, cfg.Host, cfg.EpHost, cfg.AccessToken)
-	deps := defaultSubCheckDeps(cfg, client, factory, subCheckWbi)
+	// --per-sub-dir 的目录规划在这里做一次（订阅集合此时已去重，规划结果整轮复用）：
+	// 净化后重名的订阅按顺序拿 -2/-3，规划是纯函数，离线可逐字断言。
+	runOpts := subCheckRunOptions{PerSubDir: optSubCheckPerSubDir, FullScan: optSubCheckFullScan}
+	if runOpts.PerSubDir {
+		runOpts.SubDirs = substore.PlanSubDirs(subs)
+	}
+	deps := defaultSubCheckDepsWith(cfg, client, factory, subCheckWbi, runOpts)
 
 	// 窗口边界只取一次：同一次运行里所有订阅共用同一个 now，长跑时各订阅的窗口不会互相漂移。
 	now := time.Now()
@@ -536,6 +542,19 @@ func joinAids(aids []string) string {
 }
 
 // buildMyOption constructs a MyOption from CLI flags.
+// decryptDrmEnabled 把 --decrypt-drm / --no-decrypt-drm 两个开关折成一个布尔值（矩阵：负向优先）。
+//
+// 为什么要有这个函数：DRM 自动解密默认开启（t49/上游 1.7.1），而「关闭」是一个独立的负向开关——
+// 只看 optDecryptDrm 的话，默认 true 会让 --no-decrypt-drm 失去意义；只看负向开关又会丢掉
+// 旧脚本显式 --decrypt-drm=false 的语义。折成纯函数后，四种组合能在离线用例里逐格断言，
+// 不必真跑一次命令。
+func decryptDrmEnabled(decryptDrm, noDecryptDrm bool) bool {
+	if noDecryptDrm {
+		return false
+	}
+	return decryptDrm
+}
+
 func buildMyOption() config.MyOption {
 	return config.MyOption{
 		URL:                    optURL,
@@ -560,7 +579,7 @@ func buildMyOption() config.MyOption {
 		Debug:                  debug,
 		SkipMux:                optSkipMux,
 		Insecure:               optInsecure,
-		DecryptDrm:             optDecryptDrm,
+		DecryptDrm:             decryptDrmEnabled(optDecryptDrm, optNoDecryptDrm),
 		AllowPreview:           optAllowPreview,
 		DrmKeyHex:              optDrmKeyHex,
 		DrmKidHex:              optDrmKidHex,

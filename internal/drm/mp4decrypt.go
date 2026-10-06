@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -21,20 +22,9 @@ func FindMp4decrypt(explicitPath string) string {
 	return ""
 }
 
-// DecryptStream decrypts an encrypted media file in place.
-// The kid:key pair is written to a temp key-file (never exposed on the command
-// line), mp4decrypt is run with "mp4decrypt --key-file <keyfile> <input> <output>",
-// and the input is atomically replaced by the decrypted output. Timeout caps the
-// external process (upstream reuses the muxer timeout for this).
-// overwriteFile zero-fills size bytes of path. It is kept separate from the
-// caller's remove so the overwrite itself is testable.
-func overwriteFile(path string, size int) error {
-	if size <= 0 {
-		return nil
-	}
-	return os.WriteFile(path, make([]byte, size), 0o600)
-}
-
+// DecryptStream decrypts an encrypted media file in place, replacing the input
+// atomically with the decrypted output. Timeout caps the external process
+// (upstream reuses the muxer timeout for this).
 func DecryptStream(ctx context.Context, mp4decryptPath, kidHex, keyHex, input string, timeout time.Duration) error {
 	if input == "" {
 		return nil
@@ -48,38 +38,22 @@ func DecryptStream(ctx context.Context, mp4decryptPath, kidHex, keyHex, input st
 	output := input + ".dec"
 	_ = os.Remove(output)
 
-	// Write key-file in "kid:key" format (lowercase hex).
-	keyFile, err := os.CreateTemp("", "bbdown-key-*.tmp")
-	if err != nil {
-		return fmt.Errorf("decrypt: create key file: %w", err)
-	}
-	keyPath := keyFile.Name()
-	keyPayload := kidHex + ":" + keyHex
-	defer func() {
-		// Overwrite exactly what was written (best effort). A fixed 64-byte pass
-		// over a 65-byte "kid:key" line left the final character on disk.
-		_ = overwriteFile(keyPath, len(keyPayload))
-		_ = os.Remove(keyPath)
-	}()
-	if _, err := keyFile.WriteString(keyPayload); err != nil {
-		_ = keyFile.Close()
-		return fmt.Errorf("decrypt: write key file: %w", err)
-	}
-	if err := keyFile.Sync(); err != nil {
-		_ = keyFile.Close()
-		return fmt.Errorf("decrypt: sync key file: %w", err)
-	}
-	if err := keyFile.Close(); err != nil {
-		return fmt.Errorf("decrypt: close key file: %w", err)
-	}
-
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, mp4decryptPath, "--key-file", keyPath, input, output)
+	// Bento4 的 mp4decrypt **只有** --key <id>:<key> 一个传密钥的选项（上游 1.7.2 的修法）。
+	//
+	// 这里曾经写成 --key-file <keyfile>（先写临时文件、再把路径传进去）：那个选项
+	// mp4decrypt 根本不认，会直接以 「ERROR: unexpected argument」 退出（退出码 1）——
+	// 也就是说 DRM 解密路径**必然失败**；而且那份临时文件会把 kid:key 明文留在磁盘上。
+	// 现在密钥直接作参数传（hex 统一小写，与 Bento4 输出/上游一致），不再产生任何临时文件。
+	// 权衡（与上游一致）：密钥会短暂出现在本机进程命令行（/proc/<pid>/cmdline）里，仍优于旧实现
+	// 的「明文落盘」；将来若在意，可评估 stdin 或环境变量传密钥（上游也未做）。
+	keyArg := strings.ToLower(kidHex) + ":" + strings.ToLower(keyHex)
+	cmd := exec.CommandContext(runCtx, mp4decryptPath, "--key", keyArg, input, output)
 	stderr, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = os.Remove(output)

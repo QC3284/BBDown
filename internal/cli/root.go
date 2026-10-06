@@ -38,27 +38,29 @@ var (
 	optInsecure   bool
 
 	// Download options
-	optURL                string
-	optUseTvAPI           bool
-	optUseAppAPI          bool
-	optUseIntlAPI         bool
-	optUseMP4box          bool
-	optEncodingPriority   string
-	optDfnPriority        string
-	optOnlyShowInfo       bool
-	optShowAll            bool
-	optUseAria2c          bool
-	optInteractive        bool
-	optHideStreams        bool
-	optMultiThread        bool
-	optSimplyMux          bool
-	optVideoOnly          bool
-	optAudioOnly          bool
-	optDanmakuOnly        bool
-	optCoverOnly          bool
-	optSubOnly            bool
-	optSkipMux            bool
-	optDecryptDrm         bool
+	optURL              string
+	optUseTvAPI         bool
+	optUseAppAPI        bool
+	optUseIntlAPI       bool
+	optUseMP4box        bool
+	optEncodingPriority string
+	optDfnPriority      string
+	optOnlyShowInfo     bool
+	optShowAll          bool
+	optUseAria2c        bool
+	optInteractive      bool
+	optHideStreams      bool
+	optMultiThread      bool
+	optSimplyMux        bool
+	optVideoOnly        bool
+	optAudioOnly        bool
+	optDanmakuOnly      bool
+	optCoverOnly        bool
+	optSubOnly          bool
+	optSkipMux          bool
+	optDecryptDrm       bool
+	// t56：DRM 自动解密默认开启，--no-decrypt-drm 显式关闭（负向开关优先，见 decryptDrmEnabled）。
+	optNoDecryptDrm       bool
 	optAllowPreview       bool
 	optDrmKeyHex          string
 	optDrmKidHex          string
@@ -123,6 +125,10 @@ var (
 	// sub check 的调度参数（本期新增）：--since 增量窗口 + --concurrency 并发检查。
 	optSubCheckSince       string
 	optSubCheckConcurrency int
+	// 订阅增强（t47，吸收上游 1.6.21/1.6.22）：--per-sub-dir 按订阅分目录 + --full-scan 关掉
+	// 「整页都已下载就停止翻页」的提前结束。
+	optSubCheckPerSubDir bool
+	optSubCheckFullScan  bool
 )
 
 // rootCmd represents the base command.
@@ -148,7 +154,7 @@ var rootCmd = &cobra.Command{
   BBDown login                            扫码登录（高清与字幕需要）
 
 完整选项见 BBDown --help；与上游的行为差异见仓库 docs/UPSTREAM_ALIGNMENT.md。`,
-	Version: "2.15.2",
+	Version: "2.16.0",
 	Args:    cobra.ArbitraryArgs,
 	RunE:    runDownload,
 
@@ -188,14 +194,7 @@ func Execute(banner string) {
 
 	// Normalize legacy single-dash aliases (upstream NormalizeCliArgs), then
 	// merge BBDown.config (line-based args) as option defaults.
-	aliasMap, boolFlags := buildFlagMaps()
-	args := foldBoolFlagValues(normalizeCliArgs(os.Args[1:]), aliasMap, boolFlags)
-	merged, configLoaded, mergeErr := mergeConfigArgs(args)
-	effective := args
-	if mergeErr == nil {
-		// 配置文件里的 "--flag false" 同样是上游写法，折行后一并交给 cobra。
-		effective = foldBoolFlagValues(merged, aliasMap, boolFlags)
-	}
+	effective, configLoaded, mergeErr := preprocessArgs(os.Args[1:])
 
 	// 机读模式（--info-json / doctor --json）的判定必须在**任何输出之前**完成，所以看的是
 	// 「本次真正会跑的」参数（含 BBDown.config 带进来的开关），而不是等 cobra 解析完。
@@ -351,19 +350,91 @@ func silenceOnCancel(cmd *cobra.Command, err error) error {
 	return err
 }
 
-// normalizeCliArgs maps "-help"/"-?" to "--help" and "-version" to "--version"
-// (upstream NormalizeCliArgs).
+// 上游 1.6.22 对齐核查（t48，实测结论）：上游那版是 C# 的 tokenizer 把 `-` 开头的 token 一律
+// 当选项，于是 `--name -尾野` 直接报错。我们用 cobra/pflag，**实测是对的**：需要取值的标志
+// 按 GNU getopt 语义取下一个 token（哪怕它以 `-` 开头）。实测矩阵（真实 CLI 子进程，
+// 见 internal/cli/argv_dashvalue_test.go）：
+//
+//	--work-dir -x          → work-dir = -x    （与 --work-dir=-x 逐字相同）
+//	--user-agent -尾野      → user-agent = -尾野（与 --user-agent=-尾野 相同）
+//	--danmaku-filter -abc  → danmaku-filter = -abc
+//	--skip-mux --skip-subtitle → 两个开关都置真（bool 后跟选项不误合并）
+//	--multi-thread false   → false（上游 arity 0..1 的折行写法仍然有效）
+//	--work-dir --cookie    → work-dir = "--cookie"（GNU 语义：已知选项名也能当值；不特殊处理）
+//
+// 所以 **pflag 这条链路无需改动**，本文件的改动只有一处：下面这条别名重写此前是「无脑逐
+// token 替换」，值恰好等于 -help/-?/-version 时会把值改掉（如 `--user-agent -version` 变成
+// `--user-agent --version`，UA 被静默写成 "--version"）。这是与上游同源的历史写法，
+// 但既然本轮就在核查「`-` 开头的值」，一并按「值位置不重写」修掉——修复点与用例见
+// normalizeCliArgsSkippingValues。
+//
+// normalizeCliArgs 是上游 NormalizeCliArgs 的直译：**全量**逐 token 重写，不看位置。
+// 生产路径已改用下面的 normalizeCliArgsSkippingValues（值位置不能重写）；这个函数保留为
+// 「别名规则本身」的直译与既有用例（normalize_test.go）的锚点，两者共用 normalizeToken。
 func normalizeCliArgs(args []string) []string {
 	out := append([]string(nil), args...)
-	for i, a := range out {
-		switch a {
-		case "-help", "-?":
-			out[i] = "--help"
-		case "-version":
-			out[i] = "--version"
-		}
+	for i := range out {
+		out[i] = normalizeToken(out[i])
 	}
 	return out
+}
+
+// normalizeToken 是别名重写的**单 token 规则**（上游 NormalizeCliArgs 的三条映射）。
+// 抽出来是为了让「全量重写」与「跳过值位置的重写」共用同一份规则，不会各写一套而漂移。
+func normalizeToken(tok string) string {
+	switch tok {
+	case "-help", "-?":
+		return "--help"
+	case "-version":
+		return "--version"
+	}
+	return tok
+}
+
+// normalizeCliArgsSkippingValues 是**生产路径**用的版本：在 normalizeCliArgs 之上跳过「值位置」，
+// 只重写真正站在选项位置上的 token。
+//
+// 为什么需要（t48 实测发现）：`--user-agent -version` 这类argv 里，-version 是**值**而不是选项，
+// 无脑重写会把它变成 `--version`——UA 被静默写成 "--version"（不报错，只是错），与上游 1.6.22
+// 想修的那类问题同源（「`-` 开头的值被当成选项」）。
+//
+// 判据只看前一个 token：它是**已知且需要取值**的选项（非 bool）时，当前 token 就是它的值。
+// 不追踪更复杂的形态（`--flag=value` 里没有独立的值 token；`--` 之后是位置参数，本来就不该重写，
+// 这里也不特殊处理——上游 NormalizeCliArgs 同样逐 token 全量替换，行为一致）。
+func normalizeCliArgsSkippingValues(args []string, aliasMap map[string]string, boolFlags map[string]bool) []string {
+	out := append([]string(nil), args...)
+	for i, a := range out {
+		if i > 0 && takesValue(out[i-1], aliasMap, boolFlags) {
+			continue // 前一个是需要取值的选项：这一项是它的值，别动
+		}
+		out[i] = normalizeToken(a)
+	}
+	return out
+}
+
+// takesValue 判断 token 是不是「已知且需要取值」的选项（别名表命中且不是 bool 开关）。
+// 带 = 的写法自带值，不算；未知 token 不算（不能凭猜保护）。
+func takesValue(token string, aliasMap map[string]string, boolFlags map[string]bool) bool {
+	if token == "" || token[0] != '-' || strings.Contains(token, "=") {
+		return false
+	}
+	name, ok := aliasMap[token]
+	return ok && !boolFlags[name]
+}
+
+// preprocessArgs 把进程 argv 走完整条预处理链：别名重写（跳过值位置）→ bool 值折行 →
+// 合并 BBDown.config → 再折一次（配置文件里的 "--flag false" 同样是上游写法）。
+//
+// 抽成函数不只为了 Execute 可读：t48 的「真实 CLI 子进程」用例（argv_dashvalue_test.go）驱动
+// 的必须是**同一份实现**——用例里再抄一条链，生产代码改了用例也不会红。
+func preprocessArgs(argv []string) (effective []string, configLoaded bool, err error) {
+	aliasMap, boolFlags := buildFlagMaps()
+	args := foldBoolFlagValues(normalizeCliArgsSkippingValues(argv, aliasMap, boolFlags), aliasMap, boolFlags)
+	merged, configLoaded, err := mergeConfigArgs(args)
+	if err != nil {
+		return args, false, err
+	}
+	return foldBoolFlagValues(merged, aliasMap, boolFlags), configLoaded, nil
 }
 
 // prepareConsoleOutput 按「是不是机读模式」准备本次运行的控制台输出，返回还原函数：
@@ -547,7 +618,11 @@ func init() {
 	rootCmd.Flags().BoolVar(&optCoverOnly, "cover-only", false, "仅下载封面")
 	rootCmd.Flags().BoolVar(&optSubOnly, "sub-only", false, "仅下载字幕")
 	rootCmd.Flags().BoolVar(&optSkipMux, "skip-mux", false, "跳过混流步骤")
-	rootCmd.Flags().BoolVar(&optDecryptDrm, "decrypt-drm", false, "尝试解密DRM视频")
+	// DRM 自动检测 + 自动解密默认开启（吸收上游 1.7.1）：解析阶段会带 drm_tech_type=2，
+	// 响应标记 DRM 时自动取钥解密。旧脚本显式写的 --decrypt-drm 仍然有效（默认值就是 true），
+	// 需要回到旧形态（不解密、产物保持加密格式）用 --no-decrypt-drm。
+	rootCmd.Flags().BoolVar(&optDecryptDrm, "decrypt-drm", true, "尝试解密DRM视频（默认开启）")
+	rootCmd.Flags().BoolVar(&optNoDecryptDrm, "no-decrypt-drm", false, "关闭DRM自动检测与解密：解析不带 drm_tech_type=2，产物保持加密格式")
 	rootCmd.Flags().BoolVar(&optAllowPreview, "allow-preview", false, "允许下载充电试看片段")
 	rootCmd.Flags().StringVar(&optDrmKeyHex, "key", "", "DRM解密密钥(hex)")
 	rootCmd.Flags().StringVar(&optDrmKidHex, "kid", "", "DRM密钥ID(hex)")
@@ -577,7 +652,7 @@ func init() {
 	rootCmd.Flags().StringVar(&optDanmakuFilterUser, "danmaku-filter-user", "", "弹幕用户过滤")
 	rootCmd.Flags().BoolVar(&optDownloadComments, "comments", false, "下载评论区")
 	rootCmd.Flags().StringVar(&optNotifyWebhook, "notify-webhook", "", "下载完成通知URL")
-	rootCmd.Flags().BoolVar(&optSkipAi, "skip-ai", true, "跳过AI字幕")
+	rootCmd.Flags().BoolVar(&optSkipAi, "skip-ai", false, "跳过AI字幕（默认下载AI字幕，与 BBDownT 默认一致）")
 	rootCmd.Flags().BoolVar(&optVideoAscending, "video-ascending", false, "视频升序")
 	rootCmd.Flags().BoolVar(&optAudioAscending, "audio-ascending", false, "音频升序")
 	rootCmd.Flags().BoolVar(&optAllowPcdn, "allow-pcdn", false, "不替换PCDN域名")
@@ -621,6 +696,10 @@ func init() {
 	// 不做窗口过滤——cron 用户显式给参数才启用增量。
 	subCheckCmd.Flags().StringVar(&optSubCheckSince, "since", "", "只下载最近这段时间内发布的新内容，Go duration 语法(如 24h/30m；不支持 d，一天写 24h)")
 	subCheckCmd.Flags().IntVar(&optSubCheckConcurrency, "concurrency", 1, "检查阶段的并发订阅数(1-8)，下载仍按订阅顺序串行")
+	// 订阅增强（默认都关闭）：不开 --per-sub-dir 时产物布局与改前逐字一致；
+	// 不开 --full-scan 时 mid: 订阅默认走增量扫描（空间列举只取 aid，且整页都已下载就停止翻页）。
+	subCheckCmd.Flags().BoolVar(&optSubCheckPerSubDir, "per-sub-dir", false, "每条订阅各自下到 <work-dir>/<订阅名>/ 子目录（默认关闭：全部平铺在 work-dir）")
+	subCheckCmd.Flags().BoolVar(&optSubCheckFullScan, "full-scan", false, "mid: 订阅翻完所有页（默认增量扫描：整页都已下载就停止翻页，首次部署/历史重建/怀疑漏下时用）")
 	doctorCmd.Flags().Bool("json", false, "以 JSON 输出自检结果（便于脚本/监控）")
 
 	// watchlater / sub check inherit the download option semantics (upstream).
@@ -679,7 +758,7 @@ func runDownload(cmd *cobra.Command, args []string) error {
 	client := buildHTTPClient(cfg)
 
 	// Fire-and-forget update check (upstream DefaultCommand)：批量也只查一次。
-	updateCheck(context.Background(), client, "v2.15.2")
+	updateCheck(context.Background(), client, "v2.16.0")
 
 	// 中断 ctx 来自 Execute 的统一安装（见 interrupt.go）：runDownload 与 resume 走同一条
 	// downloadTargets，不会出现两套取消语义。

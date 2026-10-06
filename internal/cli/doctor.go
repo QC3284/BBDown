@@ -15,6 +15,7 @@ import (
 
 	"github.com/QC3284/BBDown/internal/config"
 	"github.com/QC3284/BBDown/internal/download"
+	"github.com/QC3284/BBDown/internal/drm"
 	"github.com/QC3284/BBDown/internal/muxer"
 	"github.com/QC3284/BBDown/internal/util"
 )
@@ -64,6 +65,7 @@ type doctorResult struct {
 // doctorChecks 是自检项，抽成变量以便用例替换（避免测试真的去碰环境）。
 var doctorChecks = []func(context.Context, config.MyOption, *util.HTTPClient) doctorResult{
 	checkMuxTools,
+	checkDrmAssets,
 	checkWorkDir,
 	checkAPIAndLogin,
 }
@@ -251,6 +253,28 @@ func checkMuxTools(ctx context.Context, cfg config.MyOption, _ *util.HTTPClient)
 		}
 	}
 	return doctorResult{"ffmpeg/mp4box", "ok", detail}
+}
+
+// checkDrmAssets 检查 DRM 解密所需的运行时组件（t49 的内置件解析 + t56 的展示）。
+//
+// 三态与「下载前前置检查」同一口径（文案直接复用 drm.CheckDecryptPrerequisites 的错误文本，
+// 用户不至于在 doctor 与下载失败两处看到两种说法）：
+//   - 齐备（内置件在程序目录 / 显式路径 / PATH）→ ok，详情列出各自来源；
+//   - 缺件且没有手动密钥 → warn（不是 fail：不下 DRM 内容就不需要它们），详情给可操作指引；
+//   - 已提供手动 --key/--kid → ok（不需要 device.wvd，但 mp4decrypt 仍然必需）。
+func checkDrmAssets(_ context.Context, cfg config.MyOption, _ *util.HTTPClient) doctorResult {
+	assets := drm.ResolveAssets(util.ExecutableDir(), cfg.Mp4decryptPath, cfg.WvdPath)
+	manual := strings.TrimSpace(cfg.DrmKeyHex) != "" && strings.TrimSpace(cfg.DrmKidHex) != ""
+	if err := drm.CheckDecryptPrerequisites(assets, cfg.DrmKeyHex, cfg.DrmKidHex); err != nil {
+		// 两段都给：前半是**可操作指引**（与下载前失败同一句话），后半是当前解析结果
+		// （哪个件在哪、哪个缺失），用户不必再猜「到底找没找过 PATH」。
+		return doctorResult{"DRM 解密", "warn", err.Error() + "；当前：" + drm.DescribeAssets(assets)}
+	}
+	detail := drm.DescribeAssets(assets)
+	if manual {
+		detail += "；已提供手动 --key/--kid（不需要 " + drm.BundledFileName + "）"
+	}
+	return doctorResult{"DRM 解密", "ok", detail}
 }
 
 // checkWorkDir 检查输出目录可写与磁盘余量。

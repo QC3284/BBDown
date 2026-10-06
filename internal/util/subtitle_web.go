@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/QC3284/BBDown/internal/entity"
@@ -52,6 +54,10 @@ import (
 //     「字幕地址疑似失效」的根因（零产物 + 侧车误报 ✔，见 workflow 的 subtitleSidecarState）。
 const subtitleWebAPI = "https://api.bilibili.com/x/v2/subtitle/web/view"
 
+// subtitleWebEndpoint 是请求用的端点；变量而非常量：离线用例注入假服务器（同 internal/download
+// 里那些「给测试留的接缝」的做法），生产路径就是 subtitleWebAPI。
+var subtitleWebEndpoint = subtitleWebAPI
+
 // subtitleWebObfuscatedHost 是新版接口那把**混淆令牌**的宿主：它不存在于公网 DNS（见上），
 // 出现它就意味着这条地址不可用。判据只针对这个已知宿主，不做「猜哪些 CDN 可用」的启发式。
 const subtitleWebObfuscatedHost = "subtitle.bilibili.com"
@@ -60,14 +66,29 @@ const subtitleWebObfuscatedHost = "subtitle.bilibili.com"
 func getSubWebAPI(ctx context.Context, client *HTTPClient, aid, cid string) []entity.Subtitle {
 	contextExt, _ := json.Marshal(map[string]int{"video_type": 1})
 	api := fmt.Sprintf("%s?oid=%s&pid=%s&context_ext=%s&type=1&cur_production_type=0&preferred_language=ai-zh&playlist_switch=0",
-		subtitleWebAPI, url.QueryEscape(cid), url.QueryEscape(aid), url.QueryEscape(string(contextExt)))
+		subtitleWebEndpoint, url.QueryEscape(cid), url.QueryEscape(aid), url.QueryEscape(string(contextExt)))
 
 	body, err := client.GetWebSource(ctx, api)
 	if err != nil {
 		LogDebug("新版字幕接口失败: %v", err)
 		return nil
 	}
-	return parseSubtitleWebReply([]byte(body))
+	subs := parseSubtitleWebReply([]byte(body))
+	// 新版接口的条目只带 lan/URL，**没有落盘路径**：这里按老三条接口的同一格式补上
+	// （<aid>/<aid>.<cid>.<lan>.srt）——下载层按 s.Path 落盘，缺了它会拿空路径去 open
+	// （真机实测：字幕下载失败: open : no such file or directory）。
+	for i := range subs {
+		if subs[i].Path == "" {
+			subs[i].Path = fmt.Sprintf("%s/%s.%s.%s.srt", aid, aid, cid, SanitizePathSegment(subs[i].Lan))
+		}
+		// 下载层按 s.Path 直接 open，不会建目录：老三条接口时代的 <aid>/ 目录是**媒体/封面阶段**
+		// 顺手建出来的，而 --sub-only 没有那一步（真机实测：字幕下载失败: open <aid>/…: no such
+		// file or directory）。这里补上目录，让「仅字幕」也能落盘；失败不致命——保存时会报真实错误。
+		if dir := filepath.Dir(subs[i].Path); dir != "" && dir != "." {
+			_ = os.MkdirAll(dir, 0o755)
+		}
+	}
+	return subs
 }
 
 // parseSubtitleWebReply 从 protobuf 响应里解出字幕列表。
@@ -83,17 +104,146 @@ func parseSubtitleWebReply(data []byte) []entity.Subtitle {
 		if lan == "" || subURL == "" {
 			continue
 		}
-		// 服务端混淆令牌（宿主不存在于公网 DNS）不是可下载地址：**丢弃它**而不是原样返回。
-		// 返回 nil 会让 GetSubtitles 继续走老三条接口（登录态下 player/wbi/v2 给的是可用的
-		// aisubtitle.hdslb.com 地址）——否则一条不可用地址会挡住全部回退，用户看到的就是
-		// 「零产物 + 任务完成」。
+		// t44：这个 path 是「百分号编码后的 XOR 密文」——先按 BBDownT 的算法解成真实地址
+		// （见 decodeSubtitleObfuscatedURL）。解出来就是可下载的 aisubtitle.hdslb.com 地址。
+		if decoded, ok := decodeSubtitleObfuscatedURL(subURL); ok {
+			subs = append(subs, entity.Subtitle{Lan: lan, URL: decoded})
+			continue
+		}
+		// 解不开（形态不符/未知编码）：退回 t36 的可用性过滤——不可用就**丢弃它**而不是原样
+		// 返回（返回 nil 会让 GetSubtitles 继续走老三条接口，登录态下 player/wbi/v2 给的是
+		// 可用的 aisubtitle.hdslb.com 地址），否则一条不可用地址会挡住全部回退。
 		if !usableSubtitleURL(subURL) {
-			LogDebug("新版字幕接口返回了不可用的混淆地址（宿主 %s），跳过该条并按无字幕回退", subtitleWebObfuscatedHost)
+			LogDebug("新版字幕接口返回了无法解码的地址（宿主 %s），跳过该条并按无字幕回退", subtitleWebObfuscatedHost)
 			continue
 		}
 		subs = append(subs, entity.Subtitle{Lan: lan, URL: normalizeSubtitleURL(subURL)})
 	}
 	return subs
+}
+
+// ---- t44：新版接口 subtitle_url 的双重混淆解码（吸收 BBDownT commit 7408653）----
+//
+// 真相：新版接口那条「乱码」URL 的 path 是**百分号编码后的 XOR 密文**：
+//  1. 百分号解码（Uri.UnescapeDataString / url.PathUnescape）拿到密文字节；
+//  2. 逐字节与重复 key 做 XOR（key[i % len(key)]）；
+//  3. 明文以固定 prefix 开头，剥掉 prefix 得到真实路径（/bfs/ai_subtitle/prod/… 或 /bfs/subtitle/…）；
+//  4. 宿主重写成 https://aisubtitle.hdslb.com，query（auth_key）原样保留。
+//
+// 解出来的路径还会**拒绝 '%'** 等字符：否则后续 URI 解析会把它再解一次（这正是 BBDownT
+// 那个 commit 标题里的「阻止二次解码」）。
+//
+// 出处（逐字移植，勿凭记忆重打）：/tmp/BBDownT/BBDownT.Core/Util/SubtitleUrlResolver.cs
+//   - 两对 (Prefix, Key) 常量：该文件 9-13 行（Encodings，第 9 行起）
+//   - 算法 Normalize：该文件 15-56 行；其中百分号合法性校验 26-31 行、
+//     Uri.UnescapeDataString 33 行、逐字节 XOR 38 行、明文 prefix 判定 41 行、
+//     路径白名单（含拒绝 '%'）43-51 行、宿主重写 + 保留 query 54 行
+//
+// 常量本身的具体值与两对顺序由 TestSubtitleObfuscationConstantsProvenance 与
+// TestSubtitleWebFixtureDecodesObfuscatedURL 钉住（前者长度/尾串，后者逐字 URL）。
+//
+// 常量本身是 B 站播放器公开常量（注释里给出播放器 JS 出处，非账号凭据）；
+// 两对 prefix/key 至今都由 web 接口返回，所以两对都要试。
+var subtitleObfuscationEncodings = []struct{ Prefix, Key string }{
+	{"nP](wOFRvU.+<fjS{jn-!$D|Dz&\",zT`", "=CFxYRn{.y|uVyO$uh&sikph?N.ilF/`bilibili"},
+	{"Bn\"q~|albg@]Go~ACgyDvKnd+)_D}^&J?", "Cu~L!xs~f^&r@'vh=q]q{eeng*sEg^kp#Jbilibili"},
+}
+
+// subtitleDecodedHost 是解码后真实字幕 CDN 的宿主（与 BBDownT 一致）。
+const subtitleDecodedHost = "https://aisubtitle.hdslb.com"
+
+// decodeSubtitleObfuscatedURL 把新版接口的混淆 subtitle_url 解成可下载的真实地址。
+// 形态不符（宿主不是占位宿主 / 百分号编码非法 / 两对常量都匹配不上 / 解出的路径不合法）时返回 ok=false——
+// 调用方按「解不开」处理（回退老接口），绝不 panic。
+func decodeSubtitleObfuscatedURL(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	u, err := url.Parse(normalizeSubtitleURL(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	// 只处理占位宿主：别的宿主（真实 CDN 地址）不是密文，交给调用方按可用性判断处理。
+	if !strings.EqualFold(u.Hostname(), subtitleWebObfuscatedHost) {
+		return "", false
+	}
+	// 用 EscapedPath 拿**未解码**的 path（u.Path 已经解码过一次了），并去掉前导 '/'：
+	// 密文从占位宿主后面第一个字符开始（C# 的 uri.AbsolutePath[1..] 同义）。
+	encodedPath := strings.TrimPrefix(u.EscapedPath(), "/")
+	for i := 0; i < len(encodedPath); i++ {
+		if encodedPath[i] != '%' {
+			continue
+		}
+		if i+2 >= len(encodedPath) || !isHexDigit(encodedPath[i+1]) || !isHexDigit(encodedPath[i+2]) {
+			return "", false
+		}
+		i += 2
+	}
+	cipher, err := url.PathUnescape(encodedPath)
+	if err != nil {
+		return "", false
+	}
+	query := ""
+	if u.RawQuery != "" {
+		query = "?" + u.RawQuery
+	}
+	for _, enc := range subtitleObfuscationEncodings {
+		if len(enc.Key) == 0 {
+			continue
+		}
+		plain := make([]byte, len(cipher))
+		for i := range cipher {
+			plain[i] = cipher[i] ^ enc.Key[i%len(enc.Key)]
+		}
+		text := string(plain)
+		if !strings.HasPrefix(text, enc.Prefix) {
+			continue
+		}
+		path := text[len(enc.Prefix):]
+		if !validDecodedSubtitlePath(path) {
+			return "", false
+		}
+		return subtitleDecodedHost + path + query, true
+	}
+	return "", false
+}
+
+// validDecodedSubtitlePath 校验解出来的路径（与 BBDownT 的白名单逐条对应）：
+//   - 必须是 /bfs/subtitle/<非空> 或 /bfs/ai_subtitle/prod/<非空>；
+//   - 不含控制字符，也不含 '%'、'?'、'#'、'\'——'%' 尤其重要：留着它，后面的 URI 解析会
+//     把路径**再解一次**（BBDownT 7408653 的「阻止二次解码」就是这条）；
+//   - 不含 '.' / '..' 段（与 2.12.x 的占位符/路径穿越防护一致）。
+func validDecodedSubtitlePath(path string) bool {
+	const (
+		subPrefix   = "/bfs/subtitle/"
+		aiSubPrefix = "/bfs/ai_subtitle/prod/"
+	)
+	okPrefix := (strings.HasPrefix(path, subPrefix) && len(path) > len(subPrefix)) ||
+		(strings.HasPrefix(path, aiSubPrefix) && len(path) > len(aiSubPrefix))
+	if !okPrefix {
+		return false
+	}
+	for _, r := range path {
+		if r < 0x20 || r == 0x7F {
+			return false
+		}
+		switch r {
+		case '%', '?', '#', '\\':
+			return false
+		}
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// isHexDigit 与 C# 的 Uri.IsHexDigit 同义（只认 0-9A-Fa-f）。
+func isHexDigit(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
 }
 
 // usableSubtitleURL 判断接口给的字幕地址是不是**真的能下**。

@@ -23,12 +23,10 @@ func GetSubtitles(ctx context.Context, client *HTTPClient, aid, cid, epid string
 		}
 	} else {
 		// 新版接口（protobuf）优先：它是当前 web 端在用的那个（BBDownT 的 2.1.3 也换到了它）。
-		// **只在有 cookie 时试**：字幕本身要登录，匿名流程多打一次请求既拿不到东西，又会在
-		// 夹具环境里多一次可能挂住的调用（CI 上真挂过一次：TestDownloadOnePageRetryDoesNotDeadlock
-		// 30s 后包级 10 分钟超时）。老三条保留为回退——不同账号/地区/稿件命中的接口不同。
-		if cookie != "" {
-			subtitles = getSubWebAPI(ctx, client, aid, cid)
-		}
+		// 2.15.3 起**不再要求 cookie**：t36 时代的门控理由「匿名拿不到」已被 t44 证伪——
+		// 匿名也能拿到新接口条目（混淆 URL 经 XOR 解码后，CDN 匿名可下；qa 匿名实测
+		// 405B 响应 → 解码 → curl 200/7578B）。失败（nil）时自然落老三条回退。
+		subtitles = getSubWebAPI(ctx, client, aid, cid)
 		if subtitles == nil && cookie == "" {
 			subtitles = getSubAPI3(ctx, client, aid, cid)
 		}

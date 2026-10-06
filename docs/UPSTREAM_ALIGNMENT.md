@@ -1068,6 +1068,19 @@ SubtitleItem{lan=3,lanDoc=4,subtitleUrl=5}）。只手解三个字段（手写 v
   本仓行为为三线最优（诚实回退），登记为**观察项**（若 B 站调整或出现公开解码方案则跟进）。
 - **可吸收候选（BBDownT）**：--ai-subtitle-policy（exclude/include/prefer-human/only + SkipAi，SubtitleSelection.cs）——记 ROADMAP，未实现。
 - **Web 输入简化（2.15.2）**：短号/多行批量/文件导入（与 CLI --urls-file 同语义），后端零改动（BV 短号本就可解析）。
+
+### 4.69 第六十四轮：上游同步批次（1.6.21~1.7.3 + BBDownT 2.1.7）——六项吸收与真实偏离
+
+吸收（来源逐条可查）：
+1. **字幕 URL 双重混淆解码** ← BBDownT 7408653（SubtitleUrlResolver.cs：%-解码 → XOR → prefix 剥离 → 宿主重写；常量逐字移植并比对）。**本仓超出 BBDownT 的一步**：移除「新版接口仅 cookie 才试」门控——t50 审查实证匿名链路全通（405B 响应 → 解码 → CDN 匿名 200/7578B），BBDownT 未做此步。另：--skip-ai 默认改 false（与 BBDownT 默认 include 一致，用户拍板）。
+2. **mp4decrypt `--key` 参数** ← 上游 1.7.2（Decrypt.cs:212），形态逐位同形；小写化位置不同（上游源头、本仓构造时），结果一致。
+3. **v_voucher 风控识别** ← 上游 1.7.3。**真实偏离两条**（t52 审查权威结论，此前「上游只认 data 且静默」的叙述不成立）：(a) INTL 第一轮命中时上游立即抛错、本仓记录后继续试第二轮（更耐风控，TestIntlVoucherFirstPassSecondPassWorks 钉住）；(b) 识别面多一档（data.result 叠加形态上游不查）+ Go 哨兵 errors.Is + 文案点出 --retry-count/--retry-delay。
+4. **订阅增强三件** ← 上游 1.6.21/1.6.22：--per-sub-dir、mid: 增量扫描（默认）、--full-scan。本仓兼容策略：deps 只加可选字段、旧签名保留、默认 byte 级不变；分目录+增量下多P 命名不带空间 fetcher 前缀（与上游增量语义一致，固有取舍）。
+5. **argv `-` 开头值** ← 上游 1.6.22 的对齐核查：pflag 本就 GNU 正确（**无需移植**，防回归用例钉住）；反抓到同族本仓 bug（值位置别名重写）并修。
+6. **DRM 开箱即用** ← 上游 1.7.1：内置 wvd/mp4decrypt、自动解密默认开、--no-decrypt-drm、解密前置检查。工程差异：SHA256 采用「仓库变量 + fail-closed」；wvd 取自上游公开提交的 BBDown.Core/device.wvd（sha256 b16fe9ca…，THIRD-PARTY-NOTICES 注明专有+来源）；linux-arm64 不内置 mp4decrypt（官方无预编译包，与上游一致）。
+
+上游情报（已核、未跟）：1.7.0 异常过滤器收敛/重构（用户不可见）、sha256sums 路径修复（我们的 Release 校验文件无此问题）；BBDownT 2.1.7 的断点续传/国际站修复（候选，未评估）。
+
 - **CLI 信息行宽度治理第一步（2.15.2）**：v3 信息行与 --debug 长行按显示宽度夹取；实测三档超宽 26/26/17 → 0/0/0。第二步（标题行/事件行）已获用户批准，下一工作周期实现（属**有意偏离上游事件行契约**，实现时在此登记）。
 
 

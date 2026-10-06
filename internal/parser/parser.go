@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"regexp"
@@ -76,6 +77,55 @@ func throwIfBizError(root map[string]interface{}) error {
 		msg = fmt.Sprintf("接口返回错误码 %d", int64(code))
 	}
 	return fmt.Errorf("接口返回错误: %s (code=%d)", msg, int64(code))
+}
+
+// ErrRiskControlVoucher 是「播放接口回的是风控人机验证凭证」的哨兵错误。
+//
+// 上游 1.7.3（BBDownT）在 fetch 层识别 data.v_voucher 并自己转 3 次 User-Agent 后**照样把
+// 响应交给解析**（于是静默零轨道）；本仓把它扩到三种落点并**抛错**，让既有的页面级重试
+// （workflow 的 pageRetryLimit=3，退避由 --retry-delay/--retry-count 控制）接手，
+// 同时在文案里给出可执行的处置建议。
+var ErrRiskControlVoucher = errors.New("触发风控人机验证（v_voucher）")
+
+// voucherErrorMessage 是给用户看的完整文案：现象 + 三类处置建议（缺任一条都会让用户只剩
+// 「任务完成但没有产物」这一种反馈）。
+const voucherErrorMessage = "播放接口返回的是人机验证凭证(v_voucher)而不是播放地址" +
+	"（HTTP 200 / code=0，但既无 dash 也无 durl，属于被风控判定为机器人）。" +
+	"处置建议：等几分钟再试；更换出口 IP（换网络或代理）；或换账号/设备后再试" +
+	"（本页会自动重试，重试次数与退避由 --retry-count/--retry-delay 控制；UA 轮换仅对 HTTP 412 生效）"
+
+// voucherError 每次返回一个新的错误实例（保留 errors.Is 语义，文案带处置建议）。
+func voucherError() error {
+	return fmt.Errorf("%w：%s", ErrRiskControlVoucher, voucherErrorMessage)
+}
+
+// hasVoucherField 报告节点里有没有**非空字符串**的 v_voucher（空串/非字符串不算——
+// 与上游 IsRiskControlVoucherResponse 的判定一致）。
+func hasVoucherField(node map[string]interface{}) bool {
+	v, ok := node["v_voucher"].(string)
+	return ok && strings.TrimSpace(v) != ""
+}
+
+// throwIfVoucher 统一识别 v_voucher 风控响应，三种落点都认：
+//   - 顶层（UGC 的 playurl 有时把凭证放根上）；
+//   - data.v_voucher（上游 1.7.3 只认这一处）；
+//   - result.v_voucher（番剧 pgc 走 result），以及叠加形态 data.result.v_voucher。
+func throwIfVoucher(root map[string]interface{}) error {
+	if hasVoucherField(root) {
+		return voucherError()
+	}
+	if data, ok := root["data"].(map[string]interface{}); ok {
+		if hasVoucherField(data) {
+			return voucherError()
+		}
+		if nested, ok := data["result"].(map[string]interface{}); ok && hasVoucherField(nested) {
+			return voucherError()
+		}
+	}
+	if result, ok := root["result"].(map[string]interface{}); ok && hasVoucherField(result) {
+		return voucherError()
+	}
+	return nil
 }
 
 // shouldExtractDubbing 是上游对 dubbing_info 的门控：只有 APP API + 番剧（ep/cheese）
@@ -497,6 +547,11 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 	if err := throwIfBizError(root); err != nil {
 		return nil, err
 	}
+	// 风控新形态：HTTP 200 + code=0 + 只有 v_voucher（无 dash/durl）。必须在「零轨道」
+	// 之前拦住，否则用户只看到「任务完成却没有产物」，也进不了页面级重试。
+	if err := throwIfVoucher(root); err != nil {
+		return nil, err
+	}
 
 	// Navigate to data node
 	var data map[string]interface{}
@@ -726,6 +781,10 @@ func (p *Parser) parseDomesticStreams(ctx context.Context, result *entity.Parsed
 }
 
 func (p *Parser) parseIntlStreams(ctx context.Context, result *entity.ParsedResult, aid, cid, epid, qn string) (*entity.ParsedResult, error) {
+	// 风控凭证：INTL 是两轮请求（prefer_code_type=0 再 1），两轮都可能被风控。
+	// 策略与免二压 qn=127 同款——后一轮被风控而前一轮已有可用轨道时降级跳过该轮（打 Warn），
+	// 两轮都没轨道才抛错（让页面级重试接手）。
+	var voucherErr error
 	for _, code := range []string{"0", "1"} {
 		if code == "1" {
 			var err error
@@ -737,6 +796,15 @@ func (p *Parser) parseIntlStreams(ctx context.Context, result *entity.ParsedResu
 
 		var root map[string]interface{}
 		if err := util.UnmarshalJSON(result.WebJSONString, &root); err != nil {
+			continue
+		}
+
+		if err := throwIfVoucher(root); err != nil {
+			voucherErr = err
+			if code == "1" && len(result.VideoTracks) > 0 {
+				util.LogWarn("INTL 第二遍(prefer_code_type=1)触发风控人机验证：保留第一遍已解析出的 %d 条视频轨道继续（要完整轨道请稍后重试）", len(result.VideoTracks))
+				break
+			}
 			continue
 		}
 
@@ -821,6 +889,9 @@ func (p *Parser) parseIntlStreams(ctx context.Context, result *entity.ParsedResu
 		}
 	}
 
+	if len(result.VideoTracks) == 0 && voucherErr != nil {
+		return nil, voucherErr
+	}
 	return result, nil
 }
 

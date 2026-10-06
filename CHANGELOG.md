@@ -10,6 +10,32 @@
 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) 的差异表逐条登记，
 候选清单与优先级见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
+## [2.16.0] - 2026-10-06
+
+**功能周期**（上游同步批次：吸收 AliverAnme 1.6.21~1.7.3 + BBDownT 2.1.7 的六项，四源对照后全部落证据门槛）。
+
+### 新增
+
+- **AI 字幕起死回生（字幕 URL 双重混淆解码）**：B 站字幕地址实为「百分号编码 + XOR」混淆（吸收 BBDownT 7408653，常量是播放器公开常量）；解码后还原真实 CDN 地址。
+  同时移除「新版字幕接口只在有 cookie 时试」的旧门控（t50 审查证伪了 t36 时代的理由）——**匿名用户也能下载 AI 字幕**（真机验证）；**--skip-ai 默认改 false（默认下载 AI 字幕）**，与 BBDownT 默认一致，显式 --skip-ai 跳过。
+- **DRM 开箱即用（吸收上游 1.7.1）**：发布包内置 device.wvd 与 mp4decrypt（Bento4 版本/SHA256 构建时固定校验，来源与许可见 THIRD-PARTY-NOTICES.md）；
+  DRM 自动检测与自动解密**默认开启**（--no-decrypt-drm 关闭、--decrypt-drm 保留兼容）；下载流**之前**检查外部件齐备（缺件立即给可操作指引，不再下完才失败）；doctor 新增三态检查。
+- **订阅增强三件（吸收上游 1.6.21/1.6.22）**：`sub check --per-sub-dir` 按订阅分目录；mid: 订阅**增量扫描默认开启**（空间列举不再逐投稿发详情请求，上游实测 11.75s→1.00s）；
+  `--full-scan` 禁用「整页已下载即停止翻页」。默认行为与 2.15.2 一致（既有用例一字未改）。
+
+### 修复
+
+- **mp4decrypt 参数（吸收上游 1.7.2）**：旧实现用 `--key-file`（Bento4 不认该选项，DRM 解密**必然失败**）→ 改 `--key <kid>:<key>`，不再写临时密钥文件；死代码清理。
+- **v_voucher 风控新形态（吸收上游 1.7.3）**：playurl 返回「HTTP 200 + code=0 + 无轨道」的人机验证凭证 → 可读错误 + 处置建议 + 纳入页面级重试（此前静默零轨道、sub check 风控窗口内整批瞬间失败无原因）。
+- **argv 以 `-` 开头的值**：核查确认 pflag 本就 GNU 正确（上游 1.6.22 的 bug 是 C# tokenizer 特有）；顺手修掉同族真 bug——值位置的 `-version`/`-help` 被别名重写（`--user-agent -version` 静默变成 `--version`）。
+- **字幕侧车语义**：「未找到可用字幕」的 warn 移到 SkipAi 过滤之后并提示 `--skip-ai=false`；侧车四态不再谎报。
+
+### 说明
+
+- 版本位：一批新功能 → **minor**（2.15.2 → 2.16.0）。
+- 吸收与偏离逐条登记见 [docs/UPSTREAM_ALIGNMENT.md §4.69](docs/UPSTREAM_ALIGNMENT.md)。
+- 已知限制：linux-arm64 发布包不内置 mp4decrypt（官方无预编译包，下载时给指引）。
+
 ## [2.15.2] - 2026-10-06
 
 **修复批次**（字幕诚实回退 + Web 输入简化 + CLI 信息行宽度治理第一步）。

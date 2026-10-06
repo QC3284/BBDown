@@ -1,7 +1,12 @@
 package util
 
 import (
+	"context"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -101,19 +106,121 @@ func TestSubtitleWebFixtureFieldNumbers(t *testing.T) {
 	}
 }
 
-// TestSubtitleWebFixtureObfuscatedURLRejected 是本次修复的核心断言（t36 ③）：
-// 真机响应里唯一那条字幕的地址是**服务端混淆令牌**（宿主公网 NXDOMAIN、路径是 7bit 密文），
-// 解析必须丢弃它并返回 nil——让调用方回退到老三条接口，而不是把不可用地址交给下载器。
+// TestSubtitleWebFixtureDecodesObfuscatedURL 是 t44 的核心断言：真机响应里那条「乱码」
+// subtitle_url 是**百分号编码后的 XOR 密文**，按 BBDownT 7408653 的算法解出来就是真实的
+// aisubtitle.hdslb.com 地址（逐字，含 auth_key）。
 //
-// 变异验证：撤掉 usableSubtitleURL 的判断 → 本用例红（会返回 1 条不可用地址）。
-func TestSubtitleWebFixtureObfuscatedURLRejected(t *testing.T) {
+// 真机夹具的期望值 = 先手工跑一遍解码得到的（见 t44 报告），与接口当日返回的 auth_key 绑定。
+// 变异验证：
+//   - 撤掉 XOR（直接用密文当路径）→ 本用例红（不会得到 /bfs/ai_subtitle/prod/…）；
+//   - 撤掉宿主重写（仍然返回占位宿主）→ 本用例红。
+func TestSubtitleWebFixtureDecodesObfuscatedURL(t *testing.T) {
+	const wantURL = "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/117161691712819412918093111bade14ecbdad26d698352bd58f9c70e?auth_key=1791295684-afb444f5d06549f1a5e436ed7f236319-0-18bee78ace65fe1757005bdd61676c27"
+
 	subs := parseSubtitleWebReply(subtitleWebFixture(t))
-	if subs != nil {
-		t.Fatalf("混淆令牌不该通过解析，实际 %+v", subs)
+	if len(subs) != 1 {
+		t.Fatalf("真机夹具应当解出 1 条字幕，实际 %+v", subs)
 	}
+	if subs[0].Lan != "ai-zh" {
+		t.Errorf("lan = %q, want ai-zh", subs[0].Lan)
+	}
+	if subs[0].URL != wantURL {
+		t.Errorf("解码后的字幕地址 = %q\n                    want %q", subs[0].URL, wantURL)
+	}
+	if !strings.HasPrefix(subs[0].URL, "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/") {
+		t.Errorf("解出来的应当是真实 AI 字幕路径：%q", subs[0].URL)
+	}
+	if strings.Contains(subs[0].URL, subtitleWebObfuscatedHost) {
+		t.Errorf("占位宿主必须被重写掉：%q", subs[0].URL)
+	}
+	// auth_key 原样保留（逐字比对 query 段）。
+	if got, want := subs[0].URL[strings.Index(subs[0].URL, "?"):], wantURL[strings.Index(wantURL, "?"):]; got != want {
+		t.Errorf("query 段被改动了：got %q, want %q", got, want)
+	}
+
+	// 解不开的形态（两对常量都匹配不上）仍然判为不可用 → 调用方按无字幕回退。
 	rawURL := "//subtitle.bilibili.com/S%13%1BP.%1D%28%29X?auth_key=1-2-0-3"
+	if _, ok := decodeSubtitleObfuscatedURL(rawURL); ok {
+		t.Errorf("这对常量匹配不上，不该解码成功：%q", rawURL)
+	}
 	if usableSubtitleURL(rawURL) {
-		t.Errorf("占位宿主 %s 的地址必须判为不可用：%q", subtitleWebObfuscatedHost, rawURL)
+		t.Errorf("占位宿主 %s 的地址必须判为不可用（回退路径）：%q", subtitleWebObfuscatedHost, rawURL)
+	}
+}
+
+// TestDecodeSubtitleObfuscatedURLDegrades 钉住「形态不符就静默降级」：一律 ok=false、绝不 panic，
+// 让调用方走老接口回退，而不是把一条假地址交给下载器。
+func TestDecodeSubtitleObfuscatedURLDegrades(t *testing.T) {
+	cases := map[string]string{
+		"空串":             "",
+		"只有空白":           "   ",
+		"不是 URL":         "not-a-url",
+		"别的宿主（真 CDN 地址）": "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/x.srt?auth_key=1",
+		"占位宿主但编码非法":      "//subtitle.bilibili.com/S%1%2?auth_key=1",
+		"占位宿主但密文匹配不上":    "//subtitle.bilibili.com/plaintext?auth_key=1",
+		"占位宿主但解出的路径不含白名单前缀": "//subtitle.bilibili.com/%01%02%03?auth_key=1",
+	}
+	for name, in := range cases {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s：解码不该 panic，实际 panic=%v", name, r)
+				}
+			}()
+			if got, ok := decodeSubtitleObfuscatedURL(in); ok {
+				t.Errorf("%s：应当解码失败，实际 (%q, true)", name, got)
+			}
+		}()
+	}
+}
+
+// TestValidDecodedSubtitlePath 钉住路径白名单（BBDownT 的「阻止二次解码」那几条）：
+// 前缀白名单 + 拒绝 '%' / '?' / '#' / '\\' / 控制字符 / '.' '..' 段。
+func TestValidDecodedSubtitlePath(t *testing.T) {
+	ok := []string{
+		"/bfs/ai_subtitle/prod/1234567890",
+		"/bfs/ai_subtitle/prod/a/b/c",
+		"/bfs/subtitle/2026/whatever.json",
+	}
+	bad := []string{
+		"",
+		"/bfs/ai_subtitle/prod/",
+		"/bfs/subtitle/",
+		"/bfs/other/x",
+		"/bfs/ai_subtitle/prod/a%2Fb", // '%' 会让后续解析二次解码
+		"/bfs/ai_subtitle/prod/a?b",
+		"/bfs/ai_subtitle/prod/a#b",
+		"/bfs/ai_subtitle/prod/a\\b",
+		"/bfs/ai_subtitle/prod/../etc",
+		"/bfs/ai_subtitle/prod/./a",
+		"/bfs/ai_subtitle/prod/a\nb",
+	}
+	for _, p := range ok {
+		if !validDecodedSubtitlePath(p) {
+			t.Errorf("应当合法：%q", p)
+		}
+	}
+	for _, p := range bad {
+		if validDecodedSubtitlePath(p) {
+			t.Errorf("应当拒绝：%q", p)
+		}
+	}
+}
+
+// TestSubtitleObfuscationConstantsProvenance 钉住两对常量的长度与首字符，防止以后误改：
+// 出处 = /tmp/BBDownT/BBDownT.Core/Util/SubtitleUrlResolver.cs:8-14（Encodings）。
+func TestSubtitleObfuscationConstantsProvenance(t *testing.T) {
+	if len(subtitleObfuscationEncodings) != 2 {
+		t.Fatalf("应当有两对 prefix/key，实际 %d", len(subtitleObfuscationEncodings))
+	}
+	wantLen := [][2]int{{32, 40}, {33, 42}}
+	for i, enc := range subtitleObfuscationEncodings {
+		if len(enc.Prefix) != wantLen[i][0] || len(enc.Key) != wantLen[i][1] {
+			t.Errorf("第 %d 对常量长度变了：prefix=%d key=%d，want %v", i+1, len(enc.Prefix), len(enc.Key), wantLen[i])
+		}
+		if !strings.HasSuffix(enc.Key, "bilibili") {
+			t.Errorf("第 %d 对的 key 应当以 bilibili 收尾：%q", i+1, enc.Key)
+		}
 	}
 }
 
@@ -183,5 +290,74 @@ func TestParseSubtitleWebReplyDegradesSilently(t *testing.T) {
 				t.Errorf("%s：应当返回空，实际 %+v", name, subs)
 			}
 		}()
+	}
+}
+
+// TestGetSubWebAPIDecodesAndPreparesPath 是端到端的离线用例（假端点 + 真夹具）：
+// 解码出真实地址之外，还要**补上落盘路径与目录**——真机实测过两个坑：
+//
+//	① 路径为空 → 「open : no such file or directory」；
+//	② 目录不存在（--sub-only 时没有媒体/封面阶段去建 <aid>/）→ open <aid>/… 失败。
+//
+// 变异验证：把 URL 换成占位宿主（撤宿主重写）或撤掉 XOR → 断言红。
+func TestGetSubWebAPIDecodesAndPreparesPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	fixture := subtitleWebFixture(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	restore := subtitleWebEndpoint
+	subtitleWebEndpoint = srv.URL
+	defer func() { subtitleWebEndpoint = restore }()
+
+	client := NewHTTPClient(func() bool { return true }, func() string { return "" }, nil)
+	subs := getSubWebAPI(context.Background(), client, "117161691712819", "41291809311")
+	if len(subs) != 1 {
+		t.Fatalf("应当解出 1 条字幕，实际 %+v", subs)
+	}
+	const wantPath = "117161691712819/117161691712819.41291809311.ai-zh.srt"
+	if subs[0].Path != wantPath {
+		t.Errorf("字幕落盘路径 = %q, want %q", subs[0].Path, wantPath)
+	}
+	if _, err := os.Stat(filepath.Dir(subs[0].Path)); err != nil {
+		t.Errorf("字幕目录应当被建出来（--sub-only 时没有别的阶段建它）：%v", err)
+	}
+	if !strings.HasPrefix(subs[0].URL, "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/") {
+		t.Errorf("URL 应当是解码后的真实地址：%q", subs[0].URL)
+	}
+}
+
+// TestGetSubtitlesTriesWebAPIWithoutCookie 钉住 2.15.3 的门控放宽：新版字幕接口**不再要求 cookie**
+// （t44 证明匿名也能拿 AI 字幕；t50 审查证伪了 t36 时代「匿名拿不到」的门控理由）。
+//
+// 变异验证：把 subtitle.go 里 getSubWebAPI 的调用恢复成 cookie != "" 门控 → 本用例红
+// （web 端点调用数 = 0 且 subs 为空；门控下匿名会走 API3——该路径对 AI 字幕视频返回空列表）。
+func TestGetSubtitlesTriesWebAPIWithoutCookie(t *testing.T) {
+	t.Chdir(t.TempDir())
+	fixture := subtitleWebFixture(t)
+	calls := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	restore := subtitleWebEndpoint
+	subtitleWebEndpoint = srv.URL
+	defer func() { subtitleWebEndpoint = restore }()
+
+	client := NewHTTPClient(func() bool { return true }, func() string { return "" }, nil)
+	// cookie 传空串：门控放宽后仍应命中新版接口。
+	subs, err := GetSubtitles(context.Background(), client, "117161691712819", "41291809311", "", 0, false, "")
+	if err != nil {
+		t.Fatalf("GetSubtitles 出错：%v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("空 cookie 也应调用新版字幕接口一次（实际 %d 次）", calls)
+	}
+	if len(subs) != 1 || !strings.HasPrefix(subs[0].URL, "https://aisubtitle.hdslb.com/bfs/ai_subtitle/prod/") {
+		t.Fatalf("匿名应解出 AI 字幕真实地址：%+v", subs)
 	}
 }

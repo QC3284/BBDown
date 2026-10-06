@@ -771,11 +771,6 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			// 字幕清单在显示阶段（v3 的「字幕: …」行）已经取过一次：这里复用同一份缓存，
 			// 多打一行绝不多打一次接口。
 			subs := w.subtitlesFor(ctx, page)
-			// 显式要字幕却一个字幕都没有时，必须说清楚——否则用户只看到「任务完成」却没有任何产物，
-			// 分不清「该视频没有字幕」「没登录」和「下载失败」（真机实测踩到，见 §4.43）。
-			if len(subs) == 0 && w.Cfg.SubOnly {
-				util.LogWarn("未找到可用字幕：可能需要登录（bbdown login）、选择别的语言，或该视频没有字幕")
-			}
 			if w.Cfg.SkipAi && len(subs) > 0 {
 				var filtered []entity.Subtitle
 				for _, s := range subs {
@@ -784,6 +779,13 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 					}
 				}
 				subs = filtered
+			}
+			// 显式要字幕却一个字幕都没有时，必须说清楚——否则用户只看到「任务完成」却没有任何产物，
+			// 分不清「该视频没有字幕」「没登录」「被 SkipAi 过滤」和「下载失败」（真机实测踩到，见 §4.43）。
+			// 注意：必须在 SkipAi 过滤**之后**判断——AI 字幕可下（2.15.3）之后，默认 skip-ai
+			// 会把「只有 AI 字幕的视频」过滤成空，warn 要能看到这个结果。
+			if len(subs) == 0 && w.Cfg.SubOnly {
+				util.LogWarn("未找到可用字幕：可能需要登录（bbdown login）、选择别的语言（AI 字幕请加 --skip-ai=false），或该视频没有字幕")
 			}
 			for _, s := range subs {
 				util.Log("下载字幕 %s => %s...", s.Lan, strings.ReplaceAll(util.SubCode2(s.Lan), "_", ""))
@@ -928,6 +930,20 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 			selectedAudio = nil
 		}
 
+		// t49 ③：DRM 前置检查必须在**下载流之前**。旧行为是整段视频下完、进到解密阶段才发现
+		// 缺 device.wvd / mp4decrypt：用户白等一次下载，失败点还落在流程末尾。这里提前失败，
+		// 并把「缺什么、怎么办」直接打给用户（--wvd-path / 放程序目录 / --key --kid）。
+		drmPlanNow, planErr := planDrmDecryption(w.Cfg, result, appDirFunc())
+		if planErr != nil {
+			util.LogError("%v", planErr)
+			util.LogError("当前 DRM 外部件：%s", drm.DescribeAssets(drmPlanNow.Assets))
+			util.LogError("也可以先用 --no-decrypt-drm 关闭自动解密（产物保持加密格式）")
+			return false
+		}
+		if drmPlanNow.Decrypt {
+			util.LogDebug("DRM 前置检查通过：%s", drm.DescribeAssets(drmPlanNow.Assets))
+		}
+
 		// Video
 		if selectedVideo != nil {
 			videoPath = filepath.Join(page.Aid, fmt.Sprintf("%s.P%d.%s.mp4", page.Aid, page.Index, page.Cid))
@@ -1031,7 +1047,10 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 
 		// DRM decryption (before mux; failure fails the page like upstream)
 		if result.IsDrm && w.Cfg.DecryptDrm && (result.KidHex != "" || result.PsshBase64 != "") {
-			if err := w.decryptDrm(ctx, result, videoPath, audioPath); err != nil {
+			// 把**前置检查那一份**解析结果带进解密期（t58）：前置检查认「显式 → 程序目录（发布包
+			// 内置）→ PATH」，而 drm.FindMp4decrypt 只有「显式 + PATH」——只带内置件的发布包里，
+			// 前置检查会通过、解密期却报「未找到 mp4decrypt」。
+			if err := w.decryptDrm(ctx, result, videoPath, audioPath, drmPlanNow.Assets.Mp4decrypt.Path); err != nil {
 				util.LogError("P%d DRM解密失败: %v", page.Index, err)
 				return false
 			}
@@ -1140,11 +1159,31 @@ func (w *Workflow) downloadOnePage(ctx context.Context, p *parser.Parser, page e
 	return false
 }
 
+// resolveDecryptMp4decrypt 决定解密期实际用哪个 mp4decrypt 可执行文件（t58）。
+//
+// 优先用调用方带进来的 prechecked——那正是前置检查（drm.CheckDecryptPrerequisites）解析出的
+// 同一个路径，两处因此不可能给出不同答案。调用方没有带时，退回**同一套** drm.ResolveAssets
+// 语义（显式 → 程序目录/发布包内置 → PATH），最后才用旧的窄口径 drm.FindMp4decrypt（显式 + PATH）
+// 兜底，保证外部调用点与历史行为都还在。
+//
+// 为什么要有这个函数（t58 的缺陷）：前置检查用 ResolveAssets（含「程序目录」这一档），
+// 而解密期原来直接用 FindMp4decrypt（没有这一档）。发布包里 mp4decrypt 就躺在二进制旁边、
+// 不在 PATH 上——于是前置检查通过、真正解密时报「未找到 mp4decrypt」。
+func resolveDecryptMp4decrypt(cfg config.MyOption, exeDir, prechecked string) string {
+	if strings.TrimSpace(prechecked) != "" {
+		return prechecked
+	}
+	if resolved := drm.ResolveAssets(exeDir, cfg.Mp4decryptPath, cfg.WvdPath).Mp4decrypt; resolved.Found() {
+		return resolved.Path
+	}
+	return drm.FindMp4decrypt(cfg.Mp4decryptPath)
+}
+
 // decryptDrm acquires DRM content keys and decrypts the downloaded streams in
 // place, mirroring upstream DecryptDrmAsync semantics: any failure (missing key,
 // missing mp4decrypt, decrypt error) is returned as an error so the task fails
 // instead of silently delivering still-encrypted media.
-func (w *Workflow) decryptDrm(ctx context.Context, result *entity.ParsedResult, videoPath, audioPath string) error {
+func (w *Workflow) decryptDrm(ctx context.Context, result *entity.ParsedResult, videoPath, audioPath, mp4decryptPath string) error {
 	util.Log("检测到DRM加密，正在获取解密密钥...")
 
 	if w.Cfg.DrmKeyHex != "" {
@@ -1185,15 +1224,16 @@ func (w *Workflow) decryptDrm(ctx context.Context, result *entity.ParsedResult, 
 		}
 	}
 
-	// mp4decrypt's key-file format is "kid:key"; both must be present, otherwise
-	// decrypting would produce an invalid ":key" line or silently wrong output.
+	// mp4decrypt 的 --key 取值格式是 "kid:key"；两者必须齐备，否则要么拼出无效的 ":key"、
+	// 要么产出静默错误的结果。
 	if result.KeyHex == "" || result.KidHex == "" {
 		return fmt.Errorf("DRM 解密密钥获取失败（Key 或 Kid 缺失），无法解密。请确保 device.wvd 位于程序目录，或使用 --key --kid 同时提供密钥")
 	}
 
-	mp4decrypt := drm.FindMp4decrypt(w.Cfg.Mp4decryptPath)
+	// t58：解密期必须用**与前置检查同一份**解析结果，否则两处对「有没有 mp4decrypt」的答案会不一致。
+	mp4decrypt := resolveDecryptMp4decrypt(w.Cfg, appDirFunc(), mp4decryptPath)
 	if mp4decrypt == "" {
-		return fmt.Errorf("未找到 mp4decrypt，无法解密 DRM 内容。请安装 Bento4 或通过 --mp4decrypt-path 指定路径")
+		return fmt.Errorf("未找到 mp4decrypt，无法解密 DRM 内容。%s", drm.Mp4decryptInstallHint())
 	}
 
 	timeout := time.Duration(w.Cfg.MuxerTimeout) * time.Minute
@@ -1503,9 +1543,10 @@ func handlePcdn(cfg *config.MyOption, video *entity.Video, audio *entity.Audio) 
 	}
 }
 
-func appDirFunc() string {
-	return util.ExecutableDir()
-}
+// appDirFunc 是「程序目录」的解析入口。做成**变量**而不是函数：DRM 内置件（mp4decrypt /
+// device.wvd）就在程序目录里，用例必须能在不装 Bento4 的前提下把程序目录指到临时目录——
+// 否则 t58 的回归只能测到解析函数，测不到解密调用点（而这正是缺陷所在）。
+var appDirFunc = func() string { return util.ExecutableDir() }
 
 // parseEncodingPriority parses the user encoding priority (upstream: index++
 // from 0 — earlier = higher priority, dedup, ToUpper, strip dashes).

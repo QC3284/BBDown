@@ -21,6 +21,84 @@ jobs:
           go-version: '1.26'
       - name: Test
         run: go test ./... -count=1
+      # ---- t49：发布包内置 DRM 运行组件（mp4decrypt / device.wvd）----
+      #
+      # 为什么在 workflow 里做而不是 go:embed：mp4decrypt 是外部可执行文件（Bento4），
+      # device.wvd 是 Widevine L3 设备文件——两者都不属于本项目源码，许可也不同（见
+      # THIRD_PARTY_NOTICES.md）。发行包里把它们与二进制放在同一目录，运行时按
+      # 「显式路径 → 程序目录 → PATH」解析（internal/drm/detect.go）。
+      #
+      # SHA256 一律**构建时固定校验**：值存在仓库变量里（BENTO4_SHA256_<PLATFORM>），
+      # 变量缺失就直接失败——宁可发布失败，也不要装进一个来路不明的二进制。
+      - name: Prepare bundled DRM assets (Bento4 + device.wvd)
+        env:
+          BENTO4_SHA256_LINUX_AMD64: ${{ vars.BENTO4_SHA256_LINUX_AMD64 }}
+          BENTO4_SHA256_WINDOWS_AMD64: ${{ vars.BENTO4_SHA256_WINDOWS_AMD64 }}
+          BENTO4_SHA256_DARWIN_AMD64: ${{ vars.BENTO4_SHA256_DARWIN_AMD64 }}
+          BENTO4_SHA256_DARWIN_ARM64: ${{ vars.BENTO4_SHA256_DARWIN_ARM64 }}
+          BENTO4_URL_LINUX_AMD64: ${{ vars.BENTO4_URL_LINUX_AMD64 }}
+          BENTO4_URL_WINDOWS_AMD64: ${{ vars.BENTO4_URL_WINDOWS_AMD64 }}
+          BENTO4_URL_DARWIN_AMD64: ${{ vars.BENTO4_URL_DARWIN_AMD64 }}
+          BENTO4_URL_DARWIN_ARM64: ${{ vars.BENTO4_URL_DARWIN_ARM64 }}
+          WVD_BASE64: ${{ secrets.BBDOWN_WVD_BASE64 }}
+          WVD_SHA256: ${{ vars.BBDOWN_WVD_SHA256 }}
+        run: |
+          set -eu
+          mkdir -p dist/assets
+          verify() { # verify <file> <expected-sha256> <what>
+            file="$1"; want="$2"; what="$3"
+            if [ -z "$want" ]; then
+              echo "::error::$what 的 SHA256 变量为空：请在仓库变量里固定它（见 THIRD_PARTY_NOTICES.md），拒绝装入未校验的二进制"
+              exit 1
+            fi
+            got=$(sha256sum "$file" | awk '{print $1}')
+            if [ "$got" != "$want" ]; then
+              echo "::error::$what 的 SHA256 不匹配：got=$got want=$want"
+              exit 1
+            fi
+            echo "$what SHA256 校验通过（$got）"
+          }
+          bundle_bento4() { # bundle_bento4 <os-arch> <url> <var-name> <sha256>
+            target="$1"; url="$2"; name="$3"; want="$4"
+            if [ -z "$url" ]; then
+              echo "::warning::$target 未配置 Bento4 归档地址（$name），该平台不内置 mp4decrypt（运行时可用 --mp4decrypt-path 或 PATH）"
+              return 0
+            fi
+            zip="dist/assets/bento4-$target.zip"
+            curl -fsSL "$url" -o "$zip"
+            verify "$zip" "$want" "Bento4($target) 归档"
+            rm -rf "dist/assets/x-$target"
+            mkdir -p "dist/assets/x-$target"
+            unzip -q "$zip" -d "dist/assets/x-$target"
+            mkdir -p "dist/assets/$target"
+            found=$(find "dist/assets/x-$target" -type f -name 'mp4decrypt*' | head -1)
+            if [ -z "$found" ]; then
+              echo "::error::$target 的 Bento4 归档里没找到 mp4decrypt"
+              exit 1
+            fi
+            cp "$found" "dist/assets/$target/"
+            chmod +x "dist/assets/$target/"mp4decrypt* || true
+          }
+          bundle_bento4 "linux-amd64"   "$BENTO4_URL_LINUX_AMD64"   BENTO4_SHA256_LINUX_AMD64   "$BENTO4_SHA256_LINUX_AMD64"
+          bundle_bento4 "windows-amd64" "$BENTO4_URL_WINDOWS_AMD64" BENTO4_SHA256_WINDOWS_AMD64 "$BENTO4_SHA256_WINDOWS_AMD64"
+          bundle_bento4 "darwin-amd64"  "$BENTO4_URL_DARWIN_AMD64"  BENTO4_SHA256_DARWIN_AMD64  "$BENTO4_SHA256_DARWIN_AMD64"
+          bundle_bento4 "darwin-arm64"  "$BENTO4_URL_DARWIN_ARM64"  BENTO4_SHA256_DARWIN_ARM64  "$BENTO4_SHA256_DARWIN_ARM64"
+          echo "::notice::linux-arm64 无 Bento4 官方二进制，发布包不内置 mp4decrypt（运行时会提示用发行版仓库或 --mp4decrypt-path）"
+
+          # device.wvd：Widevine L3 设备文件，不放进源码树，由仓库 secret 注入。
+          # secret 未配置时降级（发布包不含 wvd，用户可自带或 --key/--kid 手动解密）。
+          if [ -z "${WVD_BASE64:-}" ]; then
+            echo "::warning::未配置 secrets.BBDOWN_WVD_BASE64：本次发布不内置 device.wvd（用户可用 --wvd-path 或 --key/--kid）"
+          else
+            printf '%s' "$WVD_BASE64" | base64 -d > dist/assets/device.wvd
+            verify dist/assets/device.wvd "$WVD_SHA256" "device.wvd"
+            for target in linux-amd64 linux-arm64 windows-amd64 darwin-amd64 darwin-arm64; do
+              mkdir -p "dist/assets/$target"
+              cp dist/assets/device.wvd "dist/assets/$target/"
+            done
+          fi
+          ls -la dist/assets/* || true
+
       - name: Build
         run: |
           set -eu
@@ -30,13 +108,23 @@ jobs:
             arch=${target#*/}
             ext=""
             if [ "$os" = "windows" ]; then ext=".exe"; fi
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "dist/BBDown$ext" ./cmd/bbdown/
-            if [ "$os" = "windows" ]; then
-              (cd dist && zip -q "BBDown_${os}_${arch}.zip" "BBDown$ext" && rm "BBDown$ext")
-            else
-              (cd dist && tar czf "BBDown_${os}_${arch}.tar.gz" "BBDown$ext" && rm "BBDown$ext")
+            stage="dist/stage-${os}-${arch}"
+            rm -rf "$stage"; mkdir -p "$stage"
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o "$stage/BBDown$ext" ./cmd/bbdown/
+            # 内置 DRM 运行组件与二进制同目录（运行时按程序目录解析）。
+            if [ -d "dist/assets/${os}-${arch}" ]; then
+              cp -a "dist/assets/${os}-${arch}/." "$stage/"
             fi
+            if [ "$os" = "windows" ]; then
+              (cd "$stage" && zip -q "../BBDown_${os}_${arch}.zip" ./*)
+            else
+              (cd "$stage" && tar czf "../BBDown_${os}_${arch}.tar.gz" ./*)
+            fi
+            rm -rf "$stage"
           done
+          # 归档里必须真的带上内置件（否则发布包会静默退化成「本地构建无内置」那种形态）。
+          echo "== 归档内容抽查 =="
+          tar tzf dist/BBDown_linux_amd64.tar.gz | sort
           ls -la dist
       - name: Publish
         env:
