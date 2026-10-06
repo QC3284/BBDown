@@ -5,16 +5,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
-// fakeMp4decrypt 写一个假 mp4decrypt（shell 脚本）：把 argv 逐行落盘，并按「第 4 个参数是
-// 输出文件」写一点内容，让 DecryptStream 的产物检查通过。仓库纪律：外部工具一律用假可执行
-// 文件 dump argv，不真调用 Bento4（本机也装不出 Bento4）。
+// fakeMp4decrypt 写一个假 mp4decrypt：把 argv 逐行落盘，并按「第 4 个参数是输出文件」写一点
+// 内容，让 DecryptStream 的产物检查通过。仓库纪律：外部工具一律用假可执行文件 dump argv，
+// 不真调用 Bento4（本机也装不出 Bento4）。
+// 跨平台（CI windows 红过一次）：Windows 上用 .cmd 批处理（Go 的 exec 自动经 cmd.exe 运行），
+// 其余平台用 sh 脚本；两种实现的 argv 落盘口径一致，readArgs 断言不变。
 func fakeMp4decrypt(t *testing.T, dir, argsFile, outContent, stderrText string, exitCode int) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		return fakeMp4decryptCmd(t, dir, argsFile, outContent, stderrText, exitCode)
+	}
 	script := filepath.Join(dir, "fake-mp4decrypt")
 	body := "#!/bin/sh\n" +
 		"printf '%s\\n' \"$@\" > '" + argsFile + "'\n"
@@ -35,13 +41,42 @@ func fakeMp4decrypt(t *testing.T, dir, argsFile, outContent, stderrText string, 
 	return script
 }
 
+// fakeMp4decryptCmd 是 Windows 版假可执行文件（.cmd）：把参数逐行回显进 argsFile。
+// %* 展开不保空格边界，但本包用例的参数（--key kid:key 与路径）都不含空格，足够驱动断言。
+func fakeMp4decryptCmd(t *testing.T, dir, argsFile, outContent, stderrText string, exitCode int) string {
+	t.Helper()
+	script := filepath.Join(dir, "fake-mp4decrypt.cmd")
+	body := "@echo off\r\n" +
+		"(for %%a in (%*) do @echo %%a) > \"" + argsFile + "\"\r\n"
+	if outContent != "" {
+		body += "> \"%4\" echo " + outContent + "\r\n"
+	}
+	if stderrText != "" {
+		body += ">&2 echo " + stderrText + "\r\n"
+	}
+	if exitCode == 0 {
+		body += "exit /b 0\r\n"
+	} else {
+		body += "exit /b 1\r\n"
+	}
+	if err := os.WriteFile(script, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
 func readArgs(t *testing.T, argsFile string) []string {
 	t.Helper()
 	raw, err := os.ReadFile(argsFile)
 	if err != nil {
 		t.Fatalf("假可执行文件没被调用（找不到 argv 文件）: %v", err)
 	}
-	return strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	// .cmd 批处理的回显是 CRLF 行尾，逐行去掉 \r（linux 上无害）。
+	lines := strings.Split(strings.TrimRight(string(raw), "\r\n"), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], "\r")
+	}
+	return lines
 }
 
 // TestDecryptStreamUsesKeyArgument 钉住 t45 的修法（对齐上游 1.7.2）：
