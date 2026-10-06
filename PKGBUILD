@@ -1,5 +1,5 @@
 # Maintainer: QC3284 <qc3284@github>
-pkgname=BBDown-go-git
+pkgname=bbdown-go-git
 pkgver=3.0.0
 pkgrel=1
 pkgdesc="一款命令行式哔哩哔哩下载器. Bilibili Downloader. (Go 重写)"
@@ -15,7 +15,7 @@ source=("git+https://github.com/QC3284/BBDown-go.git#branch=main")
 sha256sums=('SKIP')
 
 pkgver() {
-    cd "$srcdir/BBDown"
+    cd "$srcdir/BBDown-go"
     # Track the release tag (v3.0.0 -> 3.0.0; "-" is not allowed in
     # an Arch version) and append the commit distance so VCS builds stay ordered.
     tag=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//; s/-/./g')
@@ -24,7 +24,7 @@ pkgver() {
 }
 
 build() {
-    cd "$srcdir/BBDown"
+    cd "$srcdir/BBDown-go"
     go build -trimpath -ldflags="-s -w" -o BBDown ./cmd/bbdown/
 }
 
