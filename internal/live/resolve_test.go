@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 const flvPayload = `{"code":0,"data":{"playurl_info":{"playurl":{"stream":[{"format":[{"format_name":"flv","codec":[{"base_url":"/live/stream.flv","url_info":[{"host":"https://cdn.example.com","extra":"?token=1"}]}]}]}]}}}}`

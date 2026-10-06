@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/config"
-	"github.com/QC3284/bbdown-go/internal/drm"
+	"github.com/QC3284/BBDown-go/internal/config"
+	"github.com/QC3284/BBDown-go/internal/drm"
 )
 
 // ---- t56：DRM 开关接线（--decrypt-drm 默认开 / --no-decrypt-drm 关闭）+ doctor 三态 ----

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/entity"
 )
 
 // 新版字幕接口（x/v2/subtitle/web/view）——返回 **protobuf** 而不是 JSON。

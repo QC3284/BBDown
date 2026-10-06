@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/entity"
 )
 
 // 本次改动的宽度契约：清单（表头 + 数据行 + -I 直链行）与进度帧都必须落在终端宽度之内，

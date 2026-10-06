@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/entity"
 )
 
 // GetSubtitles fetches subtitles with multi-API fallback matching C#.

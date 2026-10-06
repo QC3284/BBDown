@@ -18,8 +18,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // DownloadConfig holds download options (mirrors upstream MyOption semantics).

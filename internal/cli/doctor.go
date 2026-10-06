@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/QC3284/bbdown-go/internal/config"
-	"github.com/QC3284/bbdown-go/internal/download"
-	"github.com/QC3284/bbdown-go/internal/drm"
-	"github.com/QC3284/bbdown-go/internal/muxer"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/config"
+	"github.com/QC3284/BBDown-go/internal/download"
+	"github.com/QC3284/BBDown-go/internal/drm"
+	"github.com/QC3284/BBDown-go/internal/muxer"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // bbdown doctor —— 本仓特色功能：一条命令定位「为什么下不动」。

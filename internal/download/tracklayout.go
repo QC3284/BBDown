@@ -5,8 +5,8 @@ import (
 	"math"
 	"strings"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // 流清单的排版：把「清晰度/分辨率/编码/帧率/码率/体积」排成固定列，并按终端宽度自适应。

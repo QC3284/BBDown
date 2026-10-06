@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/entity"
 )
 
 // TestExtractDubbingInfo 钉住 dubbing_info 的解析（上游 Parser.cs 同一段）：

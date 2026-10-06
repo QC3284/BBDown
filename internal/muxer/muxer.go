@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // FFMPEG and MP4BOX are configurable external tool paths (set by findBinaries).

@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/bbdown-go/internal/config"
-	"github.com/QC3284/bbdown-go/internal/download"
-	"github.com/QC3284/bbdown-go/internal/entity"
-	"github.com/QC3284/bbdown-go/internal/parser"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/config"
+	"github.com/QC3284/BBDown-go/internal/download"
+	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/parser"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // TestPageDownloadUsesPlayurlBackupURLCandidates 钉住 F4 的端到端接线：候选链是数据驱动的

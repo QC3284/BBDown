@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/config"
+	"github.com/QC3284/BBDown-go/internal/config"
 )
 
 // 上游 NumericOptionValidationTests 的整张表：非法数值必须在进入下载/混流前报错，

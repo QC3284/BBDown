@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // normalViewAPI 是「稿件详情」端点；变量而非常量，离线用例注入假服务器以**数请求次数**

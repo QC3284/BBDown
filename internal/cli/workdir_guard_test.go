@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/util/testsupport"
+	"github.com/QC3284/BBDown-go/internal/util/testsupport"
 )
 
 // 本文件（任务 T ①/c 的薄接线）是「测试不把运行期状态写进工作目录」的包级守卫在 cli 侧的接线。

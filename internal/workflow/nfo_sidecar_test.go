@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/config"
-	"github.com/QC3284/bbdown-go/internal/entity"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/config"
+	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // --nfo：产物旁写同名 .nfo。判定与写入抽成 writeNFOSidecar，直接单测（不依赖真实下载/ffmpeg）。

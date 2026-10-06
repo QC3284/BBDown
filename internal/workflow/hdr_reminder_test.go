@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/bbdown-go/internal/config"
-	"github.com/QC3284/bbdown-go/internal/download"
-	"github.com/QC3284/bbdown-go/internal/entity"
-	"github.com/QC3284/bbdown-go/internal/parser"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/config"
+	"github.com/QC3284/BBDown-go/internal/download"
+	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/parser"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // HDR Vivid(129) 兼容提醒：档位最高不等于最稳，不支持的设备上会偏色/无法播放。

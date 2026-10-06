@@ -1,4 +1,4 @@
-module github.com/QC3284/bbdown-go
+module github.com/QC3284/BBDown-go
 
 go 1.26.5
 

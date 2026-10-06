@@ -1,17 +1,17 @@
 # Maintainer: QC3284 <qc3284@github>
-pkgname=bbdown-go-git
+pkgname=BBDown-go-git
 pkgver=3.0.0
 pkgrel=1
 pkgdesc="一款命令行式哔哩哔哩下载器. Bilibili Downloader. (Go 重写)"
 arch=("x86_64" "aarch64")
-url="https://github.com/QC3284/bbdown-go"
+url="https://github.com/QC3284/BBDown-go"
 license=('MIT')
 depends=("ffmpeg")
 makedepends=("git" "go")
 options=(!debug)
 provides=("bbdown")
 conflicts=("bbdown" "bbdown-bin" "bbdown-git" "bbdown-debug" "bbdown-bin-debug" "bbdown-git-debug")
-source=("git+https://github.com/QC3284/bbdown-go.git#branch=main")
+source=("git+https://github.com/QC3284/BBDown-go.git#branch=main")
 sha256sums=('SKIP')
 
 pkgver() {

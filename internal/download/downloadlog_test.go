@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // TestStartDownloadingDebugLineMatchesUpstream 钉住上游那条「每文件一次」的 Debug：

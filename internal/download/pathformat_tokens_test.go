@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/entity"
 )
 
 // F1 对账：上游 PathHelper 的占位符表在本仓**全部可用**。此前没有用例守整张表——

@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/muxer"
+	"github.com/QC3284/BBDown-go/internal/muxer"
 )
 
 // setMuxerFFmpeg 临时替换混流工具路径（doctor 用例用；CheckFFmpegDOVI 按路径缓存，互不干扰）。

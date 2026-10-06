@@ -3,7 +3,7 @@ package download
 import (
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/entity"
 )
 
 // 上游 TrackSortTests：id 是服务器可控字符串，缺失/畸形时排序必须降级为 0，

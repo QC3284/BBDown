@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/entity"
 )
 
 // InfoPayload 是 `--info-json` 的输出结构：把解析结果交给程序（脚本/GUI/调度器）而不是给人看。

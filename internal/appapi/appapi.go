@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // Bilibili APP playurl gRPC endpoint constants (upstream AppHelper).

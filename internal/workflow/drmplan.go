@@ -1,9 +1,9 @@
 package workflow
 
 import (
-	"github.com/QC3284/bbdown-go/internal/config"
-	"github.com/QC3284/bbdown-go/internal/drm"
-	"github.com/QC3284/bbdown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/config"
+	"github.com/QC3284/BBDown-go/internal/drm"
+	"github.com/QC3284/BBDown-go/internal/entity"
 )
 
 // ---- DRM 自动解密判定 + 下载前前置检查（t49，吸收上游 1.7.1）----

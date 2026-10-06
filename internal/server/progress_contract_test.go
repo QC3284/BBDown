@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/QC3284/bbdown-go/internal/download"
+	"github.com/QC3284/BBDown-go/internal/download"
 )
 
 // 任务 T ②：/get-tasks 的字节进度与 SSE **同口径**（口径分工声明见 progress.go 顶部

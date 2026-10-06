@@ -16,7 +16,7 @@
 
 ### 变更
 
-- **仓库与 module 路径更名**：`QC3284/BBDown` → `QC3284/bbdown-go`（用户拍板；二进制仍为 `BBDown`，CLI/产物/配置契约不变，旧链接 GitHub 自动 301）。
+- **仓库与 module 路径更名**：`QC3284/BBDown` → `QC3284/BBDown-go`（用户拍板；二进制仍为 `BBDown`，CLI/产物/配置契约不变，旧链接 GitHub 自动 301）。
 - **README 重写（244 行）**：功能清单对齐 2.13.0~2.16.0 全部能力；旗标逐一以 `--help` 白名单核实；「与上游的关系」更新到 1.7.3 / BBDownT 2.1.7；FAQ 补 v_voucher / AI 字幕匿名 / DRM 缺件 / linux-arm64 无内置 mp4decrypt；重试口径按代码实际行为（412 参与 HTTP 层重试 1s→2s→4s、页面级恒定 --retry-delay×3 次）；语言表 146 项。
 
 ### 说明
@@ -236,7 +236,7 @@
 ```
 BBDown version 2.12.7, Bilibili Downloader.
 遇到问题请首先到以下地址查阅有无相关信息：
-https://github.com/QC3284/bbdown-go/issues
+https://github.com/QC3284/BBDown-go/issues
 
 [2026-09-26 23:21:22.492] - 视频标题: 字幕君交流场所
 ```

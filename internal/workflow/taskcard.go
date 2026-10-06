@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QC3284/bbdown-go/internal/download"
-	"github.com/QC3284/bbdown-go/internal/entity"
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/download"
+	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // taskCard 是「解析完成、开始下载前」那块紧凑信息卡的纯数据输入。

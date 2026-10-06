@@ -4,7 +4,7 @@ import (
 	"embed"
 	"net/http"
 
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // 任务 N：serve 的极简 Web UI。页面用 go:embed 打进二进制——单文件 HTML（内联 CSS/JS）、

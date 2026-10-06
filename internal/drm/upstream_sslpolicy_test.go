@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/bbdown-go/internal/util"
+	"github.com/QC3284/BBDown-go/internal/util"
 )
 
 // 本文件搬上游 VerifiedNoRedirectClientTests / HttpUtilSslPolicyTests 的可移植部分：
