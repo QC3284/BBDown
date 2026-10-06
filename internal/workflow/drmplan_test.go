@@ -244,7 +244,11 @@ func TestDecryptDrmFindsBundledMp4decrypt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("内置 mp4decrypt 没被调用（找不到 argv dump）：%v", err)
 	}
-	args := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	// .cmd 批处理的回显是 CRLF 行尾，逐行去 \r（linux 上无害）。
+	args := strings.Split(strings.TrimRight(string(raw), "\r\n"), "\n")
+	for i := range args {
+		args[i] = strings.TrimRight(args[i], "\r")
+	}
 	if len(args) < 4 || args[0] != "--key" {
 		t.Errorf("argv 形态不对：%q", args)
 	}
