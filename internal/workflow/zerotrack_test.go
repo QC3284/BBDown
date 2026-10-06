@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/download"
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/parser"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/download"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/parser"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // audioOnlyPlayURL 只返回音频流的 playurl 响应：用来验证 --video-only 的零产物判定。

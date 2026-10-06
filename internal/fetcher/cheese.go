@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // CheeseInfoFetcher fetches cheese/course info.

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/entity"
 )
 
 // TestFFmpegArgsKeepOutputOptionsAfterAllInputs pins the v1.6.16 alignment fix:

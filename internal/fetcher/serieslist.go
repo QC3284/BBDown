@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // SeriesListFetcher fetches a series list (列表, upstream: medialist info

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown-go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/config"
 )
 
 func TestIsLoopbackHost(t *testing.T) {

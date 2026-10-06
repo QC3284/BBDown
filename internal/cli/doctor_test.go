@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // bbdown doctor（本仓特色功能）：自检项要能离线覆盖——接口用假 hosts，外部工具用假可执行文件。

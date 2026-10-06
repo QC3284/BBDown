@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // 播放列表（M3U）侧车：把同一个稿件已产出的文件（含之前运行下好的分P）串成一条可播放的

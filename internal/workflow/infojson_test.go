@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/download"
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/parser"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/download"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/parser"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // --info-json 接线：stdout 必须**只有** JSON（可直接管道解析），且不产生任何产物（只解析不下载）。

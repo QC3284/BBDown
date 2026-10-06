@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // 任务 M 的守卫用例：机读模式（--info-json / doctor --json）下 stdout 只留数据，

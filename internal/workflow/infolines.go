@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/download"
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/download"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // ---- BBDownT v3 口径的信息块 ----

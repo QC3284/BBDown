@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/entity"
 )
 
 func TestFormatSavePath(t *testing.T) {

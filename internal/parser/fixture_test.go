@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // Fixture replay harness, ported from upstream ParserFixtureTests: the fixtures

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // doctor --json：机读形态（脚本/监控用）。字段名小写、可被 json.Unmarshal 解析、退出码语义与文本模式一致。

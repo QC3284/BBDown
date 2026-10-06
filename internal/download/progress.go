@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 const (

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // 任务 F（C 代理遗留项 C-4）：下载层的 412 也要带可操作提示，且与 API 层同一份文案。

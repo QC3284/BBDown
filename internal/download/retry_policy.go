@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // 任务 C：按错误分类的重试策略（替换「一套阶梯打天下」）。

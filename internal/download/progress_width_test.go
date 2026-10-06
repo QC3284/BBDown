@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // 进度帧的宽度契约：整帧（缩进 + 进度条 + 动画字符 + 百分比 + 速率 + ETA + 总量）必须落在

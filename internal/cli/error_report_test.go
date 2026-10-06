@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // 上游（Spectre.Console.Cli）的两种失败输出泾渭分明：

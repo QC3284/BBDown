@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // ---- t47：mid: 订阅的增量扫描（默认）与 --full-scan ----

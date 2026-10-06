@@ -3,8 +3,8 @@ package workflow
 import (
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/entity"
 )
 
 // --compat：避开 HDR Vivid(129) / 杜比视界(126)，但绝不把候选清空。

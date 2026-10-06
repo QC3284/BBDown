@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // intlStateRegex extracts window.__INITIAL_STATE__ from a bangumi web page

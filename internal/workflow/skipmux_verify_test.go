@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/download"
-	"github.com/QC3284/BBDown-go/internal/entity"
-	"github.com/QC3284/BBDown-go/internal/parser"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/download"
+	"github.com/QC3284/BBDown-Go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/parser"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // TestSkipMuxRejectsEmptyRawTrack 钉住 --skip-mux 的产物校验：服务器回 200 + 空体时旧行为会

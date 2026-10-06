@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // 本文件把上游 BBDown.Tests/UrlResolverTests.cs 的输入表搬过来当差分测试。

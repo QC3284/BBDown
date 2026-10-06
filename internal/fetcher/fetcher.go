@@ -3,7 +3,7 @@ package fetcher
 import (
 	"context"
 
-	"github.com/QC3284/BBDown-go/internal/entity"
+	"github.com/QC3284/BBDown-Go/internal/entity"
 )
 
 // Fetcher parses video information from Bilibili.

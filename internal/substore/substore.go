@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/util"
 )
 
 // Subscription is a persisted subscription entry.

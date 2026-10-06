@@ -9,7 +9,7 @@
 ## 1. 一句话现状
 
 `/home/qc233/github-code/BBDown`（分支 `main`）是 **BBDown 生态的 Go 主线实现**：起步自 C# 版 `AliverAnme/BBDown` v1.6.20 的重写，
-此后独立演进。当前版本 **`2.16.0`**，已发布 tag / GitHub Release（5 产物，含内置 device.wvd+mp4decrypt）/ AUR 包 `BBDown-go-git`（VCS 包，随 tag 自动更新）。
+此后独立演进。当前版本 **`2.16.0`**，已发布 tag / GitHub Release（5 产物，含内置 device.wvd+mp4decrypt）/ AUR 包 `BBDown-Go-git`（VCS 包，随 tag 自动更新）。
 
 规格来源有四个，冲突时**以实测为准**：上游 C#（本地 git 对象库即可查）、`LOVAHE/BBDownT`（C# 2.x，风控情报价值最高）、
 `bilibili-API-collect`、探针实测。
@@ -87,7 +87,7 @@ go test ./... -count=1             # 判据是**退出码**，不是「数 ok �
 - **未登录**：匿名只能拿低清晰度、**拿不到字幕**——字幕路径（`x/v2/subtitle/web/view` protobuf）**真机未验证**，登录后请跑 `bbdown --sub-only <URL>` 或 `make smoke` 复核；
 - **mp4box 缺失**；ffmpeg 存在且带 DOVI 支持；`doctor` 会如实报这两条；
 - 测试视频：`BV1xx411c7mD`（av2，2055s，已用于多数真机验证）、`BV1ZH4y167mH`；
-- **AUR 构建偶发瞬时失败**（拉源超时，输出 `正在放弃...`）：**重跑一次即可**，不是代码问题；`PKGBUILD` 是 VCS 包 `BBDown-go-git`；
+- **AUR 构建偶发瞬时失败**（拉源超时，输出 `正在放弃...`）：**重跑一次即可**，不是代码问题；`PKGBUILD` 是 VCS 包 `BBDown-Go-git`；
 - **验证终端观感必须看 TTY**：管道/重定向下按设计无色（`NO_COLOR`/`TERM=dumb`/非 TTY → 零 ANSI），
   用 `| sed 去 ANSI` 复核等于没看——用 `script -qec "<cmd>" /dev/null` 抓伪终端，再对照「元素 × 色码」表；
   量显示宽度用 Python `unicodedata.east_asian_width`（中文按 2 列）；
@@ -112,7 +112,7 @@ gofmt -l internal/ cmd/ && go build ./... && go vet ./... && go test ./... -coun
 git add -A && git commit -F /tmp/msg.txt --no-verify && git push origin main && git tag vX.Y.Z && git push origin vX.Y.Z
 
 # 5) 发布后核对三件：tag CI 三平台绿、Release 产物 5 个、AUR 包名（失败就重跑一次）
-gh run view <id> -R QC3284/BBDown-go --json jobs,conclusion --jq '.conclusion + " | " + ([.jobs[] | .name + "=" + (.conclusion // "-")] | join("  "))'
+gh run view <id> -R QC3284/BBDown-Go --json jobs,conclusion --jq '.conclusion + " | " + ([.jobs[] | .name + "=" + (.conclusion // "-")] | join("  "))'
 ```
 
 ---

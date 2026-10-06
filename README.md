@@ -1,9 +1,9 @@
 # BBDown
 
-[![CI](https://github.com/QC3284/BBDown-go/actions/workflows/ci.yml/badge.svg)](https://github.com/QC3284/BBDown-go/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/QC3284/BBDown-go)](https://github.com/QC3284/BBDown-go/releases/latest)
-[![Go](https://img.shields.io/github/go-mod/go-version/QC3284/BBDown-go)](go.mod)
-[![License](https://img.shields.io/github/license/QC3284/BBDown-go)](LICENSE)
+[![CI](https://github.com/QC3284/BBDown-Go/actions/workflows/ci.yml/badge.svg)](https://github.com/QC3284/BBDown-Go/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/QC3284/BBDown-Go)](https://github.com/QC3284/BBDown-Go/releases/latest)
+[![Go](https://img.shields.io/github/go-mod/go-version/QC3284/BBDown-Go)](go.mod)
+[![License](https://img.shields.io/github/license/QC3284/BBDown-Go)](LICENSE)
 
 命令行式哔哩哔哩下载器。Bilibili Downloader. 当前版本 **3.0.0**。
 
@@ -16,8 +16,8 @@
 ### Arch Linux（AUR 未发布，用仓库自带 PKGBUILD）
 
 ```bash
-git clone https://github.com/QC3284/BBDown-go.git -b main && cd BBDown-go
-makepkg -si        # 包名 BBDown-go-git；pkgver() 取 git describe，本地构建会带 .r<提交数>.<短哈希>
+git clone https://github.com/QC3284/BBDown-Go.git -b main && cd BBDown-Go
+makepkg -si        # 包名 BBDown-Go-git；pkgver() 取 git describe，本地构建会带 .r<提交数>.<短哈希>
 ```
 
 ### 手动编译
@@ -25,7 +25,7 @@ makepkg -si        # 包名 BBDown-go-git；pkgver() 取 git describe，本地�
 依赖：Go 1.26+、ffmpeg（混流/直播合成；也可用 mp4box 混流）。DRM 解密所需的外部件**发布包已内置**（见「功能」）。
 
 ```bash
-git clone https://github.com/QC3284/BBDown-go.git -b main && cd BBDown-go
+git clone https://github.com/QC3284/BBDown-Go.git -b main && cd BBDown-Go
 make build                     # 产物在 bin/BBDown
 sudo cp bin/BBDown /usr/bin/
 ```
@@ -161,7 +161,7 @@ make test        # go test ./...；提交前另跑 gofmt -l internal/ cmd/ && go
 
 ## 与上游的关系
 
-基于 [AliverAnme/BBDown](https://github.com/aliveranme/BBDown)（C# v1.6.20）重写，此后**独立演进**：上游已到 **1.7.3**、BBDownT 已到 **2.1.7**，本仓为 **3.0.0**（3.0 起仓库与 module 路径更名为 BBDown-go，二进制仍为 BBDown），按「四源同步」机制跟进（并入评估 → 补用例与变异验证 → 登记差异 → 记 CHANGELOG），**版本号只随自己的发布前移**。
+基于 [AliverAnme/BBDown](https://github.com/aliveranme/BBDown)（C# v1.6.20）重写，此后**独立演进**：上游已到 **1.7.3**、BBDownT 已到 **2.1.7**，本仓为 **3.0.0**（3.0 起仓库与 module 路径更名为 BBDown-Go，二进制仍为 BBDown），按「四源同步」机制跟进（并入评估 → 补用例与变异验证 → 登记差异 → 记 CHANGELOG），**版本号只随自己的发布前移**。
 逐条差异（含「有意偏离」与「尚未对齐」）见 [docs/UPSTREAM_ALIGNMENT.md](docs/UPSTREAM_ALIGNMENT.md) §4；近期吸收：上游 1.6.21~1.7.3（订阅增量扫描 / `--per-sub-dir` / DRM 内置与参数修复 / v_voucher 风控）与 BBDownT 2.1.7（AI 字幕混淆解码）。
 
 - **进度条实时化**：重绘由数据到达驱动（16ms 节流 + 停滞 125ms 心跳），上游是 1/8 秒定时器（§4.31）。

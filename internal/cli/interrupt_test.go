@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QC3284/BBDown-go/internal/config"
-	"github.com/QC3284/BBDown-go/internal/util"
+	"github.com/QC3284/BBDown-Go/internal/config"
+	"github.com/QC3284/BBDown-Go/internal/util"
 	"github.com/spf13/cobra"
 )
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/QC3284/BBDown-go/internal/substore"
+	"github.com/QC3284/BBDown-Go/internal/substore"
 )
 
 // F6 订阅增强：sub add --filter 存一个稿件标题正则，sub check 时按标题应用。
