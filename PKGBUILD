@@ -30,6 +30,6 @@ build() {
 
 package() {
     mkdir -p "$pkgdir/usr/bin"
-    cp "$srcdir/BBDown/BBDown" "$pkgdir/usr/bin/BBDown"
+    cp "$srcdir/BBDown-go/BBDown" "$pkgdir/usr/bin/BBDown"
     chmod 755 "$pkgdir/usr/bin/BBDown"
 }
