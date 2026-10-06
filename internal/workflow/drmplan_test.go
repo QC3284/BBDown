@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -184,8 +185,19 @@ func TestDecryptDrmFindsBundledMp4decrypt(t *testing.T) {
 	dir := t.TempDir()
 	argsFile := filepath.Join(dir, "args.txt")
 	// 假 mp4decrypt：dump argv，并按第 4 个参数（输出文件）写内容——DecryptStream 用输出替换输入。
-	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\nprintf 'decrypted' > \"$4\"\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(dir, "mp4decrypt"), []byte(body), 0o755); err != nil {
+	// 跨平台假可执行文件（CI windows 红过两次）：Windows 用 .cmd（set /p 写无换行内容），
+	// 其余平台用 sh；argv 逐行落盘口径一致。
+	var body string
+	if runtime.GOOS == "windows" {
+		body = "@echo off\r\n(for %%a in (%*) do @echo %%a) > \"" + argsFile + "\"\r\n> \"%4\" set /p \"=decrypted\" <nul\r\nexit /b 0\r\n"
+	} else {
+		body = "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argsFile + "'\nprintf 'decrypted' > \"$4\"\nexit 0\n"
+	}
+	fake := "mp4decrypt"
+	if runtime.GOOS == "windows" {
+		fake = "mp4decrypt.cmd"
+	}
+	if err := os.WriteFile(filepath.Join(dir, fake), []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -195,7 +207,7 @@ func TestDecryptDrmFindsBundledMp4decrypt(t *testing.T) {
 	origAppDir := appDirFunc
 	appDirFunc = func() string { return emptyDir }
 	defer func() { appDirFunc = origAppDir }()
-	bundled := filepath.Join(dir, "mp4decrypt")
+	bundled := filepath.Join(dir, fake)
 
 	video := filepath.Join(dir, "v.mp4")
 	if err := os.WriteFile(video, []byte("still-encrypted"), 0o644); err != nil {
