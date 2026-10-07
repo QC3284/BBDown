@@ -1094,6 +1094,13 @@ SubtitleItem{lan=3,lanDoc=4,subtitleUrl=5}）。只手解三个字段（手写 v
 - **不动清单**：URL 行（-I/--print-urls 脚本契约）、流表/进度/侧车（2.12.8 契约）、时间戳压缩（t39 建议不做）、debug 行 120 列预算（候选另议）。
 - 顺带：**emoji 宽度表统一**——download.DisplayWidth 与 util 新宽度表同口径（0x1F300-0x1FAFF 计 2），修掉 t43 报过的 🚀 漏算（download 侧此前同病）。
 
+### 4.72 第六十七轮：分P选择前导零（吸收上游 master c39cae4）
+
+- **前导零规范化**：`-p 01` 匹配 P1（上游 master c39cae4，v1.7.3 之后的未发布修复；Pages.cs 单 token 分支 int.TryParse → ToString）。本仓 parsePageSelection 同病已修，语义逐字同上游。
+- **本仓额外收口（覆盖面比上游广）**：`?p=01`（URL 分P参数）与 `VInfo.Index` 两个原样字符串来源一并改为数值匹配（上游只修了 -p 一路）；非数字项退回字符串相等，行为不变。
+- **已免疫项**：int.MaxValue 计数回绕（本仓 maxExpandedPages 段长/累计两处检查都在展开循环之前，无回绕窗口）；展示截前 20 项+总数（maxShownPages=20，与上游 MaxReportedPages 同）。
+
+
 
 
 - **CLI 信息行宽度治理第一步（2.15.2）**：v3 信息行与 --debug 长行按显示宽度夹取；实测三档超宽 26/26/17 → 0/0/0。第二步（标题行/事件行）已获用户批准，下一工作周期实现（属**有意偏离上游事件行契约**，实现时在此登记）。

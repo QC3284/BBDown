@@ -184,28 +184,12 @@ func (w *Workflow) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	selLabel := "ALL"
-	if selectedPages != nil {
-		parts := make([]string, len(selectedPages))
-		for i, s := range selectedPages {
-			parts[i] = s
-		}
-		selLabel = strings.Join(parts, ",")
-	}
+	selLabel := formatSelectedPages(selectedPages)
 	util.Log("共计 %d 个分P, 已选择：%s", len(pagesInfo), selLabel)
 
 	// Filter pages if selection specified
 	if selectedPages != nil {
-		var filtered []entity.Page
-		for _, p := range pagesInfo {
-			idx := fmt.Sprintf("%d", p.Index)
-			for _, s := range selectedPages {
-				if s == idx {
-					filtered = append(filtered, p)
-					break
-				}
-			}
-		}
+		filtered := filterPagesBySelection(pagesInfo, selectedPages)
 		if len(filtered) == 0 {
 			return fmt.Errorf("所选分P不存在: %s，视频共有 %d 个分P", selLabel, len(pagesInfo))
 		}
@@ -1830,7 +1814,58 @@ func applySteinGateFallback(cfg *config.MyOption, vInfo *entity.VInfo) {
 	}
 }
 
+// maxShownPages 是选择清单在日志与错误消息里**展示**的上限（上游同修）：像 -p 1-60000
+// 那种表达式整段拼进消息会是一条几十 KB 的日志行（把终端与 issue 一起刷爆）。
+const maxShownPages = 20
+
+// formatSelectedPages 把选择列表排成一行给用户看：超过 maxShownPages 只展示前 N 项 + 总数。
+// selectedPages 为 nil（= ALL）时返回 "ALL"。
+func formatSelectedPages(selectedPages []string) string {
+	if selectedPages == nil {
+		return "ALL"
+	}
+	shown := selectedPages
+	suffix := ""
+	if len(selectedPages) > maxShownPages {
+		shown = selectedPages[:maxShownPages]
+		suffix = fmt.Sprintf("…（共 %d 项）", len(selectedPages))
+	}
+	return strings.Join(shown, ",") + suffix
+}
+
+// filterPagesBySelection 按选择列表过滤分P。
+//
+// 匹配用**数值**而不是字符串：选择项来自三处——-p（parsePageSelection 已规范成 "1"）、
+// URL 的 ?p= 参数、以及 VInfo 自带的 Index。后两处是原样字符串，?p=01 这种前导零以前会匹配
+// 不上而静默少下（上游 c39cae4 的同一类问题）。数值比对把三处一次性收口；不是数字的选择项
+// （理论上进不来）退回字符串相等，行为不变。
+func filterPagesBySelection(pagesInfo []entity.Page, selectedPages []string) []entity.Page {
+	wanted := make(map[int]bool, len(selectedPages))
+	raw := make(map[string]bool, len(selectedPages))
+	for _, s := range selectedPages {
+		raw[s] = true
+		if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+			wanted[n] = true
+		}
+	}
+	var filtered []entity.Page
+	for _, p := range pagesInfo {
+		if wanted[p.Index] || raw[strconv.Itoa(p.Index)] {
+			filtered = append(filtered, p)
+		}
+	}
+	if filtered == nil {
+		filtered = []entity.Page{}
+	}
+	return filtered
+}
+
 // maxExpandedPages caps -p range expansion (upstream MaxExpandedPages).
+//
+// 上游同一处还有 int.MaxValue 回绕（把超长范围的长度算成负数，于是上限检查被绕过）：本仓
+// 两处检查都在**累加之前**做——先判 e-s+1 是否超过上限、再判累计是否超过上限，所以第二处
+// 永远看不到巨值（e-s+1 最大到 MaxInt32 时第一处已经返回），不存在回绕窗口。
+// 也就是说这条上限不需要额外的防回绕处理，只需要保持「先算段长、再算累计」这个顺序。
 const maxExpandedPages = 100000
 
 // getSelectedPages returns selected page indices, or nil for all. Parse errors
@@ -1927,7 +1962,10 @@ func parsePageSelection(expr string) ([]string, error) {
 			if err != nil || n < 1 {
 				return nil, fmt.Errorf("无法识别的分P %q", part)
 			}
-			result = append(result, part)
+			// 前导零规范化（上游 c39cae4）：-p 01 曾经把 "01" 原样塞进选择列表，而真实分P 是
+			// "1"——字符串比对匹配不上，于是**静默少下**（既不报错也不提示）。范围分支本来就是
+			// strconv.Itoa 出来的规范形态，单 token 分支对齐它。
+			result = append(result, strconv.Itoa(n))
 			continue
 		}
 		// 连字符两侧允许空白：上游用 int.TryParse，它容忍两侧空白，
